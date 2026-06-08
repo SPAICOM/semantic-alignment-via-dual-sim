@@ -27,23 +27,23 @@ all: format check
 #   just run-disjoint
 #   just run-disjoint-snr
 
-run-multi *ARGS:
+run-multi *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_layers {{ARGS}}
 
-run-snr *ARGS:
+run-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_snr {{ARGS}}
 
-run-slayer *ARGS:
+run-slayer *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_slayer {{ARGS}}
 
-run-disjoint *ARGS:
+run-disjoint *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_layers {{ARGS}}
 
-run-disjoint-snr *ARGS:
+run-disjoint-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_snr {{ARGS}}
 
 # Single run without multirun (useful for quick tests)
-run *ARGS:
+run *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py {{ARGS}}
 
 # ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
@@ -52,7 +52,7 @@ run *ARGS:
 #   just run-mono alignment=linear
 #   just run-mono experiment.use_channel=true
 
-run-mono *ARGS:
+run-mono *ARGS: train-clf
     uv run python scripts/mono_sim.py --config-name config_mono_layers {{ARGS}}
 
 # ── Neural classifier ─────────────────────────────────────────────────────────
