@@ -1,4 +1,22 @@
-"""Single Stacked Intelligent Metasurface (Mono-SIM) optimizer — NumPy and PyTorch versions."""
+"""Single Stacked Intelligent Metasurface (Mono-SIM) optimizer — NumPy and PyTorch versions.
+
+A Mono-SIM uses a single metasurface stack (TX side only).  The RX side either
+relies on a conventional MMSE equalizer or has no processing at all.
+
+The cascade transfer matrix is:
+    G_T = ∏_{l=1}^{L} Υ_l W_l
+where Υ_l = diag(exp(j ξ_l)) are learnable phase shifts and W_l is the fixed
+free-space propagation matrix between adjacent layers.
+
+The optimizer minimises ‖β G_T − A‖²_F (``optimize_sim``) or
+‖β G_R H_eff − A‖²_F for RX-side training against an effective channel
+H_eff = H · G_T (``optimize_rx_sequential``).
+
+Classes
+-------
+MonoSIMoptimizer      — NumPy reference: builds propagation matrices W.
+MonoSIMoptimizerTorch — PyTorch wrapper with gradient-based phase optimisation.
+"""
 
 import numpy as np
 import torch
@@ -8,7 +26,33 @@ from tqdm.auto import tqdm
 
 
 class MonoSIMoptimizer:
-    """Mono-SIM Optimizer (NumPy). Can be instantiated as TX or RX."""
+    """Single-SIM optimizer — builds propagation matrices and holds phase shifts (NumPy).
+
+    Parameters
+    ----------
+    num_layers : int
+        Number of metasurface layers.
+    num_meta_atoms_in_x : int
+        Meta-atoms in the x-direction of the input aperture.
+    num_meta_atoms_in_y : int
+        Meta-atoms in the y-direction of the input aperture.
+    num_meta_atoms_out_x : int
+        Meta-atoms in the x-direction of the output aperture.
+    num_meta_atoms_out_y : int
+        Meta-atoms in the y-direction of the output aperture.
+    num_meta_atoms_int_x : int
+        Meta-atoms in the x-direction of intermediate layers.
+    num_meta_atoms_int_y : int
+        Meta-atoms in the y-direction of intermediate layers.
+    thickness : float
+        Total physical thickness of the SIM stack (metres).
+    wavelength : float
+        Operating wavelength λ (metres).
+    verbose : bool, optional
+        If ``True``, print construction details.
+    spacings : dict, optional
+        Meta-atom spacings for each aperture type.  Defaults to ``λ/2`` for all.
+    """
 
     def __init__(
         self,
@@ -72,6 +116,11 @@ class MonoSIMoptimizer:
         return np.sqrt(((x_from - x_to) * sx) ** 2 + ((y_from - y_to) * sy) ** 2 + slayer**2)
 
     def _calculate_W(self, from_type: str, to_type: str) -> np.ndarray:
+        """Compute the free-space propagation matrix between two adjacent meta-atom layers.
+
+        Entries follow the scalar Green's function approximation:
+            W[to, from] = (s_layer · A_cell / d²) · (1/(2πd) − j/λ) · exp(jκd)
+        """
         params = {
             "input": (self.N_in, int(np.sqrt(self.N_in)), self.spacings["in"]),
             "intermediate": (self.M_int, int(np.sqrt(self.M_int)), self.spacings["int"]),
@@ -79,7 +128,7 @@ class MonoSIMoptimizer:
         }
         from_total, from_nx, from_sx = params[from_type]
         to_total, to_nx, _ = params[to_type]
-        A_cell = from_sx * from_sx
+        A_cell = from_sx * from_sx  # unit-cell area
         W = np.zeros((to_total, from_total), dtype=complex)
         for to_idx in range(1, to_total + 1):
             for from_idx in range(1, from_total + 1):
@@ -96,7 +145,14 @@ class MonoSIMoptimizer:
 
 
 class MonoSIMoptimizerTorch(nn.Module):
-    """PyTorch version of MonoSIMoptimizer with trainable phase shifts."""
+    """PyTorch Mono-SIM with trainable phase shifts and gradient-based optimization.
+
+    Parameters
+    ----------
+    sim_cpu : MonoSIMoptimizer
+        Pre-built NumPy optimizer whose propagation matrices and initial phase
+        shifts are copied into this module as buffers and parameters.
+    """
 
     def __init__(self, sim_cpu: MonoSIMoptimizer):
         super().__init__()
@@ -112,16 +168,35 @@ class MonoSIMoptimizerTorch(nn.Module):
         )
 
     def get_cascade(self):
+        """Compute G_T = Υ_L W_L … Υ_1 W_1 from the current phase parameters."""
         device = self.xi[0].device
         G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
         for i in range(self.L):
             W_i = getattr(self, f"W_{i}")
+            # Υ_i = diag(exp(j ξ_i)) — diagonal phase matrix at layer i
             Y_i = torch.diag(torch.exp(1j * self.xi[i]))
             G = Y_i @ W_i @ G
         return G
 
     def optimize_sim(self, target_matrix, max_iters: int = 5000, lr: float = 0.01):
-        """Optimise TX phase shifts towards target_matrix (geometric, no regularisation)."""
+        """Optimize TX phase shifts to minimise ``‖β G_T − A‖²_F``.
+
+        Parameters
+        ----------
+        target_matrix : array-like or torch.Tensor
+            Target alignment matrix A, complex.
+        max_iters : int, optional
+            Number of Adam optimization steps.
+        lr : float, optional
+            Adam learning rate.
+
+        Returns
+        -------
+        loss_history : list of float
+            Per-step loss values.
+        beta_f : float
+            Optimal scalar β at the final iteration.
+        """
         if isinstance(target_matrix, torch.Tensor):
             Target = target_matrix.clone().detach().to(self.xi[0].device).to(torch.complex64)
         else:
@@ -134,6 +209,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         for k in bar:
             with torch.no_grad():
                 G_k = self.get_cascade()
+                # Closed-form optimal scalar: β = ⟨G, A⟩_F / ‖G‖²_F
                 beta_k = torch.sum(torch.conj(G_k) * Target) / (
                     torch.sum(torch.conj(G_k) * G_k) + 1e-12
                 )
@@ -145,6 +221,7 @@ class MonoSIMoptimizerTorch(nn.Module):
             opt.step()
 
             with torch.no_grad():
+                # Keep phase shifts in [0, 2π) — phase response is 2π-periodic
                 for p in self.xi:
                     p.copy_(p % (2 * torch.pi))
 
@@ -161,7 +238,30 @@ class MonoSIMoptimizerTorch(nn.Module):
         return loss_history, beta_f.item()
 
     def optimize_rx_sequential(self, H_eff, A_target, max_iters: int = 5000, lr: float = 0.1):
-        """Optimise RX phase shifts using the effective channel H_eff = H * G_T."""
+        """Optimize RX phase shifts given the effective channel ``H_eff = H · G_T``.
+
+        Minimises ``‖β G_R H_eff − A‖²_F`` with respect to the RX phase shifts.
+        Used in the disjoint Dual-SIM training pipeline after the TX-SIM has
+        been frozen.
+
+        Parameters
+        ----------
+        H_eff : array-like or torch.Tensor
+            Effective channel ``H · G_T``, complex.
+        A_target : array-like or torch.Tensor
+            Target alignment matrix A, complex.
+        max_iters : int, optional
+            Number of Adam optimization steps.
+        lr : float, optional
+            Adam learning rate.
+
+        Returns
+        -------
+        loss_history : list of float
+            Per-step loss values.
+        beta_f : float
+            Optimal scalar β at the final iteration.
+        """
         if isinstance(H_eff, torch.Tensor):
             H_eff_t = H_eff.clone().detach().to(self.xi[0].device).to(torch.complex64)
         else:

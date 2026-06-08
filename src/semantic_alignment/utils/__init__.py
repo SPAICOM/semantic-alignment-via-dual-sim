@@ -1,3 +1,16 @@
+"""Utils sub-package: signal-processing primitives and alignment strategies.
+
+Signal-processing utilities (``utils.py``)
+    Complex tensor helpers, AWGN noise injection (:func:`awgn`), SNR / sigma
+    conversion, pre-whitening (:func:`prewhiten`), MMSE-SVD equalization
+    (:func:`mmse_svd_equalizer`), and Cholesky-based linear solves
+    (:func:`a_inv_times_b`).
+
+Alignment strategies (``alignment_utils.py``)
+    :func:`ppfe`             — zero-shot Prototype-based Parseval Frame Equalization.
+    :func:`ridge_regression` — supervised linear alignment via weighted ridge regression.
+"""
+
 from semantic_alignment.utils.alignment_utils import ppfe, ridge_regression
 from semantic_alignment.utils.utils import (
     a_inv_times_b,

@@ -1,4 +1,24 @@
-"""Dual Stacked Intelligent Metasurface (Dual-SIM) optimizer — NumPy and PyTorch versions."""
+"""Dual Stacked Intelligent Metasurface (Dual-SIM) optimizer — NumPy and PyTorch versions.
+
+A Dual-SIM consists of two cascaded metasurface stacks:
+  - TX-SIM  (L_T layers) placed before the MIMO channel to pre-process the transmitted signal.
+  - RX-SIM  (L_R layers) placed after  the MIMO channel to post-process the received signal.
+
+Each layer applies a diagonal phase matrix Υ_l followed by a fixed free-space
+propagation matrix W_l computed from scalar-wave diffraction (Green's function).
+The trainable parameters are the phase shifts ξ at every layer.
+
+The effective end-to-end cascade is:
+    Z = G_R · H · G_T
+where G_T and G_R are the cascaded transfer matrices of the TX and RX metasurfaces
+and H is the MIMO channel matrix.  The optimizer minimises ‖β Z − A‖²_F, i.e. it
+finds phase profiles such that β Z best approximates the target alignment matrix A.
+
+Classes
+-------
+DualSIMoptimizer      — NumPy reference implementation (builds propagation matrices).
+DualSIMoptimizerTorch — PyTorch wrapper with gradient-based alternating optimisation.
+"""
 
 import math
 
@@ -10,11 +30,53 @@ from tqdm.auto import tqdm
 
 
 class DualSIMoptimizer:
-    """
-    Dual-SIM Optimizer (NumPy).
+    """Dual-SIM optimizer — builds propagation matrices and holds phase shifts (NumPy).
 
-    Builds the fixed propagation matrices W and initialises phase shifts
-    for both the TX-SIM (L_T layers) and the RX-SIM (L_R layers).
+    Constructs the fixed free-space propagation matrices W for both the TX-SIM
+    (``L_T`` layers) and the RX-SIM (``L_R`` layers) using scalar Green's function
+    diffraction.  Phase-shift vectors are randomly initialised and can be
+    optimised externally.
+
+    Parameters
+    ----------
+    num_layers_TX : int
+        Number of metasurface layers in the TX-SIM.
+    num_meta_atoms_TX_in_x : int
+        Number of meta-atoms in the x-direction of the TX input aperture.
+    num_meta_atoms_TX_in_y : int
+        Number of meta-atoms in the y-direction of the TX input aperture.
+    num_meta_atoms_TX_out_x : int
+        Number of meta-atoms in the x-direction of the TX output aperture.
+    num_meta_atoms_TX_out_y : int
+        Number of meta-atoms in the y-direction of the TX output aperture.
+    num_meta_atoms_TX_int_x : int
+        Number of meta-atoms in the x-direction of TX intermediate layers.
+    num_meta_atoms_TX_int_y : int
+        Number of meta-atoms in the y-direction of TX intermediate layers.
+    thickness_TX : float
+        Total physical thickness of the TX-SIM (metres).
+    num_layers_RX : int
+        Number of metasurface layers in the RX-SIM.
+    num_meta_atoms_RX_in_x : int
+        Number of meta-atoms in the x-direction of the RX input aperture.
+    num_meta_atoms_RX_in_y : int
+        Number of meta-atoms in the y-direction of the RX input aperture.
+    num_meta_atoms_RX_out_x : int
+        Number of meta-atoms in the x-direction of the RX output aperture.
+    num_meta_atoms_RX_out_y : int
+        Number of meta-atoms in the y-direction of the RX output aperture.
+    num_meta_atoms_RX_int_x : int
+        Number of meta-atoms in the x-direction of RX intermediate layers.
+    num_meta_atoms_RX_int_y : int
+        Number of meta-atoms in the y-direction of RX intermediate layers.
+    thickness_RX : float
+        Total physical thickness of the RX-SIM (metres).
+    wavelength : float
+        Operating wavelength λ (metres).
+    verbose : bool, optional
+        If ``True``, print construction details.
+    spacings : dict, optional
+        Meta-atom spacings for each aperture type.  Defaults to ``λ/2`` for all.
     """
 
     def __init__(
@@ -80,6 +142,11 @@ class DualSIMoptimizer:
         self.W_RX = self._build_W_list(self.L_R, "RX_input", "RX_intermediate", "RX_output")
 
     def _build_W_list(self, L: int, type_in: str, type_int: str, type_out: str) -> list:
+        """Build the list of L propagation matrices for one SIM stack.
+
+        Layer layout: input → [intermediate × (L-2)] → output.
+        For L=1 the single layer maps input directly to output.
+        """
         W_list = []
         if L == 1:
             W_list.append(self._calculate_W(type_in, type_out))
@@ -103,6 +170,13 @@ class DualSIMoptimizer:
         return np.sqrt(((fx - tx) * sx) ** 2 + ((fy - ty) * sy) ** 2 + slayer**2)
 
     def _calculate_W(self, from_layer_type: str, to_layer_type: str) -> np.ndarray:
+        """Compute the free-space propagation matrix between two adjacent meta-atom layers.
+
+        Uses the scalar Green's function approximation:
+            W[to, from] = (s_layer · A_cell / d²) · (1/(2πd) − j/λ) · exp(jκd)
+        where d is the 3-D Euclidean distance between meta-atom positions,
+        A_cell = s² is the unit-cell area, and κ = 2π/λ is the wavenumber.
+        """
         params = {
             "TX_input": (
                 self.N_in_T,
@@ -162,15 +236,16 @@ class DualSIMoptimizer:
         return W
 
     def _calculate_G_T(self) -> np.ndarray:
-        """G_T = prod_{l=1}^{L_T} Upsilon_l^(T) W_l^(T)"""
+        """G_T = ∏_{l=1}^{L_T} Υ_l^(T) W_l^(T)  — TX cascade transfer matrix."""
         G = np.eye(self.N_in_T, dtype=complex)
         for i in range(self.L_T):
+            # Υ_l = diag(exp(j ξ_l)) applies the learnable phase shifts at layer l
             Y_l = np.diag(np.exp(1j * self._phase_shifts_TX[i]))
             G = Y_l @ self.W_TX[i] @ G
         return G
 
     def _calculate_G_R(self) -> np.ndarray:
-        """G_R = prod_{l=1}^{L_R} Upsilon_l^(R) W_l^(R)"""
+        """G_R = ∏_{l=1}^{L_R} Υ_l^(R) W_l^(R)  — RX cascade transfer matrix."""
         G = np.eye(self.N_in_R, dtype=complex)
         for i in range(self.L_R):
             Y_l = np.diag(np.exp(1j * self._phase_shifts_RX[i]))
@@ -189,7 +264,18 @@ class DualSIMoptimizer:
 
 
 class DualSIMoptimizerTorch(nn.Module):
-    """PyTorch version of DualSIMoptimizer with trainable phase shifts."""
+    """PyTorch Dual-SIM with trainable phase shifts and gradient-based optimization.
+
+    Wraps a :class:`DualSIMoptimizer` by registering its propagation matrices as
+    non-trainable buffers and the phase-shift vectors as ``nn.Parameter`` lists.
+    Optimization uses an alternating Adam scheme with cosine-annealing LR.
+
+    Parameters
+    ----------
+    sim_cpu : DualSIMoptimizer
+        Pre-built NumPy optimizer whose propagation matrices and initial phase
+        shifts are copied into this module.
+    """
 
     def __init__(self, sim_cpu: DualSIMoptimizer):
         super().__init__()
@@ -216,12 +302,15 @@ class DualSIMoptimizerTorch(nn.Module):
         )
 
     def _get_W_list(self, prefix, L):
+        """Retrieve the registered propagation buffers W_0 … W_{L-1}."""
         return [getattr(self, f"{prefix}_{i}") for i in range(L)]
 
     def _calculate_G(self, W_list, phases, L, input_dim):
+        """Compute the cascade G = Υ_L W_L … Υ_1 W_1 for a single SIM stack."""
         device = phases[0].device
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
         for i in range(L):
+            # Phase matrix is diagonal: Υ_i = diag(exp(j ξ_i))
             Y_l = torch.diag(torch.exp(1j * phases[i]))
             G = Y_l @ W_list[i] @ G
         return G
@@ -266,13 +355,42 @@ class DualSIMoptimizerTorch(nn.Module):
         patience: int = 500,
         rel_tol: float = 1e-7,
     ):
-        """
-        Alternating gradient optimisation of TX and RX phase shifts.
+        """Alternating gradient optimization of TX and RX phase shifts.
 
-            Uses Adam with cosine-annealing + linear warm-up. Normalises the
-            cascade Z by its Frobenius norm before computing beta so that the
-            gradient scale is independent of SIM depth (avoids beta explosion
-            for deep cascades where ‖Z‖_F → 0).
+        Minimises ``‖β̂ Ẑ − A‖²_F`` where ``Ẑ = Z / ‖Z‖_F`` and
+        ``β̂ = ⟨Ẑ, A⟩_F``.  Normalising by the Frobenius norm keeps the
+        gradient scale depth-independent (avoids β explosion for deep cascades
+        where ``‖Z‖_F → 0``).
+
+        Uses Adam with a linear warm-up followed by cosine annealing.  RX
+        phases are updated ``rx_steps_per_tx`` times per TX step.  Best
+        phase profiles are restored at the end.
+
+        Parameters
+        ----------
+        A_target : array-like or torch.Tensor
+            Target alignment matrix, shape ``(D_rx/2, D_tx/2)``, complex.
+        H_mimo : array-like or torch.Tensor
+            MIMO channel matrix, same shape as required by the SIM.
+        max_iters : int, optional
+            Total number of optimization iterations.
+        lr : float, optional
+            Initial Adam learning rate for both TX and RX optimizers.
+        warmup_frac : float, optional
+            Fraction of ``max_iters`` used for the linear warm-up phase.
+        clip_value : float, optional
+            Gradient clipping norm.
+        rx_steps_per_tx : int, optional
+            Number of RX gradient steps taken per TX step.
+        patience : int, optional
+            Unused (kept for API compatibility with early-stopping callers).
+        rel_tol : float, optional
+            Unused (kept for API compatibility).
+
+        Returns
+        -------
+        list of float
+            Per-iteration loss values ``‖β̂ Ẑ − A‖²_F``.
         """
         # header printed by the calling experiment_runner after accuracy evaluation
 
@@ -305,14 +423,17 @@ class DualSIMoptimizerTorch(nn.Module):
         def _step_side(opt, params):
             opt.zero_grad()
             Z, _ = self.get_effective_cascade(H_torch)
+            # Normalise Z so the gradient scale is depth-independent (‖Z‖_F → 0 for deep SIMs)
             Z_norm = torch.norm(Z, p="fro") + 1e-12
             Z_hat = Z / Z_norm
+            # Optimal scalar alignment: β̂ = ⟨Z̃, A⟩ / ‖Z̃‖² (Frobenius inner product)
             beta_hat = torch.sum(torch.conj(Z_hat) * A_torch)
             loss_J = torch.norm(beta_hat * Z_hat - A_torch, p="fro") ** 2
             loss_J.backward()
             nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
             with torch.no_grad():
+                # Wrap phase shifts into [0, 2π) — phase is 2π-periodic
                 for p in params:
                     p.copy_(p % (2.0 * math.pi))
             return loss_J.item(), (beta_hat / Z_norm).detach(), Z_norm.detach()

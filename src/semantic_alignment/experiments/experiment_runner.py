@@ -1,20 +1,23 @@
-"""
-Single-configuration experiment runners for Dual-SIM and Mono-SIM.
+"""Single-configuration experiment runners for Dual-SIM and Mono-SIM.
 
 Each function handles ONE (seed, L, M_int, snr, …) combination and writes
 its result to a dedicated Parquet file inside a per-experiment subdirectory:
 
     results/
-        dual_layers/    {strategy}_seed{seed}_L{L}_M{M}x{M}.parquet
-        dual_snr/       {strategy}_seed{seed}_M{M}x{M}_snr{snr}.parquet
-        dual_slayer/    {strategy}_seed{seed}_stx{s_tx}_srx{s_rx}.parquet
-        mono/           {strategy}_seed{seed}_L{L}_M{M}x{M}.parquet
-        mono_channel/   {strategy}_seed{seed}_L{L}_M{M}x{M}_snr{snr}.parquet
-        disjoint_layers/{strategy}_seed{seed}_L{L}_M{M}x{M}.parquet
-        disjoint_snr/   {strategy}_seed{seed}_M{M}x{M}_snr{snr}.parquet
-        rx_depth/       seed{seed}_LTX{L_TX}_LRX{L_RX}_M{M}x{M}.parquet
+        dual_layers/    {strategy}_seed{seed}_L{L}_M{M}x{M}_{tx}_{rx}.parquet
+        dual_snr/       {strategy}_seed{seed}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
+        dual_slayer/    {strategy}_seed{seed}_stx{s_tx}_srx{s_rx}_{tx}_{rx}.parquet
+        mono/           {strategy}_seed{seed}_L{L}_M{M}x{M}_{tx}_{rx}.parquet
+        mono_channel/   {strategy}_seed{seed}_L{L}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
+        disjoint_layers/{strategy}_seed{seed}_L{L}_M{M}x{M}_{tx}_{rx}.parquet
+        disjoint_snr/   {strategy}_seed{seed}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
+        rx_depth/       seed{seed}_LTX{L_TX}_LRX{L_RX}_M{M}x{M}_{tx}_{rx}.parquet
 
-If the target file already exists the run is skipped (idempotent sweeps).
+If the target file already exists the run is skipped (idempotent Hydra sweeps).
+
+Every saved row contains both ``*_probe`` (linear probe) and ``*_neural`` (MLP
+classifier) accuracy columns so downstream plotting can compare both without
+re-running experiments.  Neural columns are ``None`` when no checkpoint is found.
 """
 
 import gc

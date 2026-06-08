@@ -1,16 +1,48 @@
+"""Alignment strategies: zero-shot PPFE and supervised ridge regression.
+
+Both functions operate on complex tensors with shape convention ``(D, N)`` —
+dimensions as rows, samples as columns — matching the SIM optimizer convention.
+"""
+
 import torch
 from sklearn.cluster import KMeans
 
 
 def ppfe(
-    X: torch.tensor,
-    Y: torch.tensor,
-    output_real: torch.tensor,
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    output_real: torch.Tensor,
     n_clusters: int,
     n_proto: int,
     seed: int = None,
-) -> torch.tensor:
-    """Prototype-based Parseval Frame Equalization (zero-shot alignment)."""
+) -> torch.Tensor:
+    """Prototype-based Parseval Frame Equalization (zero-shot alignment).
+
+    Clusters the RX embedding space, computes per-cluster prototypes for TX
+    and RX, then finds orthonormal maps via polar decomposition (SVD) and
+    returns A = G @ F.
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        Whitened TX embedding matrix, shape ``(D_tx, N)``.
+    Y : torch.Tensor
+        Whitened RX embedding matrix, shape ``(D_rx, N)``.
+    output_real : torch.Tensor
+        Real-valued RX embeddings used for KMeans clustering, shape ``(N, D_rx)``.
+    n_clusters : int
+        Number of semantic clusters (typically equal to the number of classes).
+    n_proto : int
+        Number of samples per cluster used to compute each prototype.
+    seed : int, optional
+        Random seed for KMeans and prototype subsampling.
+
+    Returns
+    -------
+    torch.Tensor
+        Alignment matrix A of shape ``(D_rx, D_tx)``.
+    """
+    # Work with samples as rows for cluster/prototype operations
     X = X.H
     Y = Y.H
 
@@ -25,6 +57,7 @@ def ppfe(
         mask = labels == label
         inps = X[mask]
         outs = Y[mask]
+        # Randomly sub-sample n_proto points per cluster to form the prototype
         iidx = torch.randperm(inps.size(0))[:n_proto]
         n_input.append(inps[iidx].mean(dim=0))
         n_output.append(outs[iidx].mean(dim=0))
@@ -32,13 +65,16 @@ def ppfe(
     X = torch.stack(n_input)
     Y = torch.stack(n_output)
 
+    # Shuffle so cluster ordering does not bias the alignment
     idx = torch.randperm(X.size(0))
     X = X[idx]
     Y = Y[idx]
 
+    # Polar decomposition of X_proto: F = U Vt (nearest orthonormal matrix)
     U, S, Vt = torch.linalg.svd(X, full_matrices=False)
     F = U @ Vt
 
+    # Polar decomposition of Y_proto: G = (U Vt)ᴴ maps to RX canonical frame
     U, S, Vt = torch.linalg.svd(Y, full_matrices=False)
     G = (U @ Vt).H
 
@@ -46,12 +82,33 @@ def ppfe(
 
 
 def ridge_regression(
-    X: torch.tensor,
-    Y: torch.tensor,
+    X: torch.Tensor,
+    Y: torch.Tensor,
     weights: torch.Tensor | None = None,
     lmb: float = 0.0,
-) -> torch.tensor:
-    """Solve ridge regression: A = Y X^H (X X^H + λI)^{-1}."""
+) -> torch.Tensor:
+    """Solve a (weighted) ridge regression for the alignment matrix A.
+
+    Closed-form solution of ``min_A ‖AX − Y‖²_F + λ‖A‖²_F``:
+
+        A = Y Xᴴ (X Xᴴ + λI)⁻¹
+
+    Parameters
+    ----------
+    X : torch.Tensor
+        TX pilot matrix, shape ``(D_tx, N)``.
+    Y : torch.Tensor
+        RX pilot matrix, shape ``(D_rx, N)``.
+    weights : torch.Tensor, optional
+        Non-negative sample weights of shape ``(N,)``.  Equal weights if ``None``.
+    lmb : float, optional
+        Ridge regularisation coefficient λ.  ``0`` gives ordinary least squares.
+
+    Returns
+    -------
+    torch.Tensor
+        Alignment matrix A of shape ``(D_rx, D_tx)``.
+    """
     d, n = X.shape
     reg = lmb * torch.eye(d, dtype=X.dtype, device=X.device)
 

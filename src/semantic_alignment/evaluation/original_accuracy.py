@@ -1,4 +1,12 @@
-"""Original alignment accuracy — A_target applied directly, no SIM, no channel."""
+"""Original alignment accuracy — A_target applied directly, no SIM, no channel.
+
+Implements the *Accuracy Original No MIMO* baseline from the reference repo:
+the estimated alignment matrix A_target is applied to TX embeddings in the
+complex whitened space, then the result is de-whitened and fed to the
+classifier.  No metasurface, no propagation channel, and no noise are
+involved, so this represents an upper bound on what the alignment strategy
+alone can achieve before any hardware or channel impairments are introduced.
+"""
 
 import numpy as np
 import torch
@@ -22,14 +30,35 @@ def run_original_accuracy(
     clf,
     device: torch.device,
 ) -> float:
-    """
-    Apply A_target to TX embeddings and evaluate with the linear probe.
+    """Apply A_target to TX embeddings and evaluate classification accuracy.
 
-    No SIM, no MIMO channel, no noise — represents the quality of the
-    alignment strategy (Linear or PPFE) in the ideal software case.
-    Equivalent to *Accuracy Original No Mimo* in the reference repo.
+    No SIM, no MIMO channel, no noise — the *Accuracy Original No MIMO* baseline.
+    Represents an upper bound on what the alignment strategy alone can achieve
+    before any hardware or channel impairments.
 
-    Returns top-1 accuracy in [0, 1].
+    Parameters
+    ----------
+    dataloader : DataLoader
+        Yields ``(z_tx_batch, labels)`` pairs from the test split.
+    A_target : torch.Tensor
+        Estimated alignment matrix, complex, shape ``(D_rx/2, D_tx/2)``.
+    L_in : torch.Tensor
+        Cholesky factor of the TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of the RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe weight matrix or :class:`NeuralClassifier`.
+    device : torch.device
+        Device on which to run inference.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
     """
     all_preds, all_labels = [], []
     with torch.no_grad():

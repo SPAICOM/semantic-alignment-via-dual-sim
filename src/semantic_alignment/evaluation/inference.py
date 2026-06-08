@@ -1,4 +1,20 @@
-"""Inference routines for evaluating semantic accuracy over-the-air."""
+"""Inference routines for evaluating semantic classification accuracy over-the-air.
+
+All functions share the same whitening convention:
+    x_white = L_in⁻¹ (x_complex − μ_in)
+    ŷ       = L_out · y_received + μ_out
+
+where L_in, μ_in come from prewhitening the TX pilots and L_out, μ_out from the
+RX pilots.  The received signal y_received is then fed to a classifier (linear
+probe or neural MLP) to obtain top-1 class predictions.
+
+Functions
+---------
+run_evaluation              — joint Dual-SIM (G_R · H · G_T), optional AWGN.
+run_evaluation_mmse         — digital MMSE/ZF baseline (no SIM).
+run_evaluation_mono_channel — TX-only SIM with MMSE equalizer at RX.
+run_evaluation_disjoint_fixed — disjoint Dual-SIM with frozen TX and RX cascades.
+"""
 
 import numpy as np
 import torch
@@ -28,10 +44,39 @@ def run_evaluation(
     clf,
     device: torch.device,
 ) -> float:
-    """Evaluate semantic accuracy for the Dual-SIM joint architecture.
+    """Evaluate semantic accuracy for the joint Dual-SIM architecture.
 
-    Signal model: y_received = beta_opt * Z * x + noise.
-    clf: linear probe weight matrix (tensor) or NeuralClassifier (nn.Module).
+    Signal model: ``y = β Z x_white + noise``,  ``Z = G_R · H · G_T``.
+
+    Parameters
+    ----------
+    model : DualSIMoptimizerTorch
+        Trained joint Dual-SIM model.
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    snr_db : float or None
+        If given, AWGN noise is added at this SNR level; ``None`` means noiseless.
+    beta_opt : torch.Tensor
+        Optimal scalar aligning ``Z`` to the target matrix ``A``.
+    L_in : torch.Tensor
+        Cholesky factor of the TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of the RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
     """
     model.eval()
     all_preds, all_labels = [], []
@@ -83,7 +128,39 @@ def run_evaluation_mmse(
     clf,
     device: torch.device,
 ) -> float:
-    """MMSE digital baseline — no SIM, standard SVD equaliser."""
+    """Evaluate the digital MMSE baseline (no SIM, SVD-based equalizer).
+
+    Signal model: ``y = H x_pad + n``,  ``x_recovered = G_mmse y``,
+    then ``A_target`` is applied digitally.
+
+    Parameters
+    ----------
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    snr_db : float
+        Operating SNR in dB for AWGN and MMSE regularization.
+    A_target : torch.Tensor
+        Alignment matrix applied after equalization.
+    L_in : torch.Tensor
+        Cholesky factor of the TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of the RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
+    """
     all_preds, all_labels = [], []
     G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
 
@@ -128,9 +205,39 @@ def run_evaluation_mono_channel(
     clf,
     device: torch.device,
 ) -> float:
-    """Evaluate Mono-SIM with MIMO channel and MMSE equalization.
+    """Evaluate a Mono-SIM (TX only) with MIMO channel and MMSE equalization.
 
-    Signal model: y = G_eq(H) · (H · beta · G_T · x_w + noise)
+    Signal model: ``y = G_mmse(H) · (H · β G_T · x_w + noise)``.
+
+    Parameters
+    ----------
+    G_T : torch.Tensor
+        TX cascade matrix from the trained Mono-SIM.
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    snr_db : float or None
+        AWGN SNR in dB; ``None`` means noiseless.
+    beta_opt : torch.Tensor
+        Optimal scalar aligning ``G_mmse H G_T`` to the target ``A``.
+    L_in : torch.Tensor
+        Cholesky factor of the TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of the RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
     """
     G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
     all_preds, all_labels = [], []
@@ -176,7 +283,43 @@ def run_evaluation_disjoint_fixed(
     clf,
     device: torch.device,
 ) -> float:
-    """Evaluate semantic accuracy for the Dual-SIM disjoint architecture."""
+    """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.
+
+    Signal model: ``y = β (G_R H G_T) x_w + noise``.  Both ``G_T`` and ``G_R``
+    are computed once before the loop and held fixed.
+
+    Parameters
+    ----------
+    tx_model : MonoSIMoptimizerTorch
+        Trained TX-side Mono-SIM.
+    rx_model : MonoSIMoptimizerTorch
+        Trained RX-side Mono-SIM.
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    snr_db : float or None
+        AWGN SNR in dB; ``None`` means noiseless.
+    beta_global : torch.Tensor
+        Global scalar aligning the cascade ``G_R H G_T`` to the target ``A``.
+    L_in : torch.Tensor
+        Cholesky factor of the TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of the RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
+    """
     tx_model.eval()
     rx_model.eval()
     all_preds, all_labels = [], []
