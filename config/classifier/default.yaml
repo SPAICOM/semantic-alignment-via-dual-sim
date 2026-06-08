@@ -1,0 +1,8 @@
+# Neural MLP classifier hyperparameters
+
+hidden_dim: 512
+lr: 1e-3
+max_epochs: 100
+patience: 10
+batch_size: 256
+val_fraction: 0.1

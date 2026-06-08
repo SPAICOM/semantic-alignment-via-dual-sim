@@ -1,0 +1,5 @@
+# Prototype-based Parseval Frame Equalization (zero-shot alignment)
+
+type: PPFE
+n_clusters: 20   # number of KMeans clusters
+n_proto: 1000    # prototypes sampled per cluster

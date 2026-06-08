@@ -1,0 +1,17 @@
+defaults:
+  - sim: default
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: default
+  - classifier: default
+  - experiment: snr
+  - _self_
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      experiment.M_int: 32,64
+      training.seed: 27,42,100,123,144,200
+      experiment.snr: -30,-20,-10,0,10,20,30,null

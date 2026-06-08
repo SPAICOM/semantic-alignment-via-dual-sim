@@ -1,0 +1,5 @@
+hf_name: tiny-imagenet
+label_col: label
+train_split: train
+test_split: train          # only train split available; use for both
+num_classes: 200

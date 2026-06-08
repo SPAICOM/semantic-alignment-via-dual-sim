@@ -1,0 +1,213 @@
+"""Inference routines for evaluating semantic accuracy over-the-air."""
+
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+from semantic_alignment.evaluation.linear_probe import clf_predict
+from semantic_alignment.utils.utils import (
+    a_inv_times_b,
+    awgn,
+    complex_compressed_tensor,
+    decompress_complex_tensor,
+    mmse_svd_equalizer,
+    sigma_given_snr,
+)
+
+
+def run_evaluation(
+    model,
+    dataloader: DataLoader,
+    H_mimo: torch.Tensor,
+    snr_db: float | None,
+    beta_opt: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf,
+    device: torch.device,
+) -> float:
+    """Evaluate semantic accuracy for the Dual-SIM joint architecture.
+
+    Signal model: y_received = beta_opt * Z * x + noise.
+    clf: linear probe weight matrix (tensor) or NeuralClassifier (nn.Module).
+    """
+    model.eval()
+    all_preds, all_labels = [], []
+
+    with torch.no_grad():
+        Z_cascade, _ = model.get_effective_cascade(H_mimo)
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
+        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(Z_cascade.dtype)
+
+        y_signal = Z_cascade @ x_white
+        y_scaled = beta_opt * y_signal
+
+        if snr_db is not None:
+            sigma_v = sigma_given_snr(snr_db, y_scaled)
+            noise = awgn(sigma_v, y_scaled.shape, device=device)
+            y_received = y_scaled + noise
+        else:
+            y_received = y_scaled
+
+        z_hat = (L_out @ y_received) + mu_out
+        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+
+        preds = clf_predict(clf, y_hat_real)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    if snr_db is not None:
+        p_signal = torch.mean(torch.abs(y_scaled) ** 2)
+        p_noise = torch.mean(torch.abs(noise) ** 2)
+        print(f"Target SNR: {snr_db} dB | Test SNR: {10 * torch.log10(p_signal / p_noise):.2f} dB")
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+def run_evaluation_mmse(
+    dataloader: DataLoader,
+    H_mimo: torch.Tensor,
+    snr_db: float,
+    A_target: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf,
+    device: torch.device,
+) -> float:
+    """MMSE digital baseline — no SIM, standard SVD equaliser."""
+    all_preds, all_labels = [], []
+    G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
+        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(H_mimo.dtype)
+
+        D_tx = x_white.shape[0]
+        D_ch = H_mimo.shape[1]
+        padding = torch.zeros((D_ch - D_tx, x_white.shape[1]), device=device, dtype=x_white.dtype)
+        x_padded = torch.cat([x_white, padding], dim=0)
+
+        y_signal = H_mimo @ x_padded
+        sigma_v = sigma_given_snr(snr_db, y_signal)
+        y_received = y_signal + awgn(sigma_v, y_signal.shape, device=device)
+
+        x_recovered = (G_mmse @ y_received)[:D_tx, :]
+        z_hat_complex = A_target @ x_recovered
+        z_hat = (L_out @ z_hat_complex) + mu_out
+        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+
+        preds = clf_predict(clf, y_hat_real)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+def run_evaluation_mono_channel(
+    G_T: torch.Tensor,
+    dataloader: DataLoader,
+    H_mimo: torch.Tensor,
+    snr_db: float | None,
+    beta_opt: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf,
+    device: torch.device,
+) -> float:
+    """Evaluate Mono-SIM with MIMO channel and MMSE equalization.
+
+    Signal model: y = G_eq(H) · (H · beta · G_T · x_w + noise)
+    """
+    G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
+    all_preds, all_labels = [], []
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_c = complex_compressed_tensor(x_real_batch.T, device=device)
+        x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
+
+        y_signal = H_mimo @ (beta_opt * (G_T @ x_w))
+
+        if snr_db is not None:
+            sigma_v = sigma_given_snr(snr_db, y_signal)
+            noise = awgn(sigma_v, y_signal.shape, device=device)
+            y_received = y_signal + noise
+        else:
+            y_received = y_signal
+
+        y_eq = G_mmse @ y_received
+        z = (L_out.to(G_T.dtype) @ y_eq) + mu_out.to(G_T.dtype)
+        y_hat = decompress_complex_tensor(z, device=device).T
+
+        preds = clf_predict(clf, y_hat)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+def run_evaluation_disjoint_fixed(
+    tx_model,
+    rx_model,
+    dataloader: DataLoader,
+    H_mimo: torch.Tensor,
+    snr_db: float | None,
+    beta_global: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf,
+    device: torch.device,
+) -> float:
+    """Evaluate semantic accuracy for the Dual-SIM disjoint architecture."""
+    tx_model.eval()
+    rx_model.eval()
+    all_preds, all_labels = [], []
+
+    with torch.no_grad():
+        G_T = tx_model.get_cascade()
+        G_R = rx_model.get_cascade()
+        Z_cascade = G_R @ H_mimo @ G_T
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
+        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(Z_cascade.dtype)
+
+        y_signal = Z_cascade @ x_white
+        y_scaled = beta_global * y_signal
+
+        if snr_db is not None:
+            sigma_v = sigma_given_snr(snr_db, y_scaled)
+            noise = awgn(sigma_v, y_scaled.shape, device=device)
+            y_received = y_scaled + noise
+        else:
+            y_received = y_scaled
+
+        z_hat = (L_out @ y_received) + mu_out
+        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+
+        preds = clf_predict(clf, y_hat_real)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()

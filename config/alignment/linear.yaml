@@ -1,0 +1,4 @@
+# Supervised Ridge Regression alignment strategy
+
+type: Linear
+lmb: 0.001       # L2 regularisation weight

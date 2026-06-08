@@ -1,0 +1,5 @@
+hf_name: oxford-flowers
+label_col: label
+train_split: train
+test_split: test
+num_classes: 102

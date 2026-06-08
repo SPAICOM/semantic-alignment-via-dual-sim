@@ -1,0 +1,14 @@
+# Optimiser and scheduler settings for the alternating SIM optimisation
+# clf_type: linear | neural
+clf_type: linear
+
+max_iters: 3000
+lr: 0.1
+lr_decay_exp: 1.3    # per-layer LR scaling: actual_lr = lr / (L ** lr_decay_exp)
+seed: 42
+
+# Adam hyperparameters
+warmup_frac: 0.05
+clip_value: 1.0
+rx_steps_per_tx: 2
+patience: 500

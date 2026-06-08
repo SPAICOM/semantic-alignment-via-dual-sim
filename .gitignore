@@ -221,6 +221,19 @@ tmp/
 data/*
 *.ipynb
 
+# Environment / secrets
+.env
+
+# Experiment results (large binary outputs)
+results/**/*.parquet
+results/**/*.csv
+results/**/*.json
+results/plots/
+!results/.gitkeep
+
+# Model checkpoints
+models/
+
 # Others
 img/
 

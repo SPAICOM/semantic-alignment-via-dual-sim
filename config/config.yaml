@@ -1,0 +1,9 @@
+defaults:
+  - sim: default
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: default
+  - classifier: default
+  - experiment: layers
+  - _self_

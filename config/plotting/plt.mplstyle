@@ -9,5 +9,6 @@ legend.title_fontsize: 22
 lines.markersize: 18
 lines.linewidth: 3
 text.usetex: True
+text.latex.preamble: \usepackage{mathptmx}
 font.family: serif
 font.serif: Times New Roman, Times

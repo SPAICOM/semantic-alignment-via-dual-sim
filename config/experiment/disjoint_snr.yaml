@@ -1,0 +1,4 @@
+name: disjoint_snr
+L: 10
+M_int: 32
+snr: 0

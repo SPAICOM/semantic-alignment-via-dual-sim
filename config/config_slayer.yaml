@@ -1,0 +1,17 @@
+defaults:
+  - sim: default
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: default
+  - classifier: default
+  - experiment: slayer
+  - _self_
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      training.seed: 27,42,100,123,144,200
+      experiment.s_tx: 4,5,6,7,8,9,10
+      experiment.s_rx: 4,7,10

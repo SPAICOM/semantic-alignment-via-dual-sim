@@ -1,0 +1,21 @@
+# Physical parameters of the Stacked Intelligent Metasurface (SIM)
+
+wavelength: 0.005          # lambda = 5 mm (60 GHz band)
+slayer_multiplier: 5       # inter-layer spacing = slayer_multiplier * wavelength
+spacing_divisor: 2         # meta-atom spacing dx = wavelength / spacing_divisor
+
+# Default symmetric configuration (L_TX = L_RX = num_layers)
+num_layers: 10
+M_int: 32                  # intermediate meta-atoms per dimension
+
+# TX grid:  in = 16x12 = 192 (semantic dim), out = 24x16 = 384 (antennas)
+tx_in_x: 16
+tx_in_y: 12
+tx_out_x: 24
+tx_out_y: 16
+
+# RX grid:  in = 24x16 = 384 (antennas), out = 24x16 = 384 (semantic dim)
+rx_in_x: 24
+rx_in_y: 16
+rx_out_x: 24
+rx_out_y: 16

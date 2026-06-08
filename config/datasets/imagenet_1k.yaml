@@ -1,0 +1,5 @@
+hf_name: imagenet-1k
+label_col: label
+train_split: validation    # no train split available on Hub
+test_split: test
+num_classes: 1000

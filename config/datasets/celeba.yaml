@@ -1,0 +1,5 @@
+hf_name: celeba
+label_col: label           # maps to celeb_id in the Hub parquet
+train_split: train
+test_split: test
+num_classes: 10177         # number of celebrity identities
