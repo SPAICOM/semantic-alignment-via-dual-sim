@@ -158,6 +158,20 @@ class DualSIMoptimizer:
         return W_list
 
     def _get_2d_coords(self, linear_idx: int, num_atoms_x: int) -> tuple[int, int]:
+        """Convert a 1-based linear meta-atom index to 2-D grid coordinates (mx, my).
+
+        Parameters
+        ----------
+        linear_idx : int
+            1-based flat index of the meta-atom.
+        num_atoms_x : int
+            Number of meta-atoms along the x-axis.
+
+        Returns
+        -------
+        tuple of int
+            ``(mx, my)`` grid coordinates, both 1-based.
+        """
         my = int(np.ceil(linear_idx / num_atoms_x))
         mx = linear_idx - (my - 1) * num_atoms_x
         return mx, my
@@ -165,6 +179,30 @@ class DualSIMoptimizer:
     def _calculate_propagation_distance(
         self, from_nx, from_idx, to_nx, to_idx, sx, sy, slayer
     ) -> float:
+        """Compute the 3-D Euclidean distance between two meta-atom centres.
+
+        Parameters
+        ----------
+        from_nx : int
+            Number of atoms along x in the source layer.
+        from_idx : int
+            1-based flat index of the source atom.
+        to_nx : int
+            Number of atoms along x in the destination layer.
+        to_idx : int
+            1-based flat index of the destination atom.
+        sx : float
+            Inter-atom spacing in x (metres).
+        sy : float
+            Inter-atom spacing in y (metres).
+        slayer : float
+            Layer-to-layer thickness (metres).
+
+        Returns
+        -------
+        float
+            Euclidean distance ``d`` (metres).
+        """
         fx, fy = self._get_2d_coords(from_idx, from_nx)
         tx, ty = self._get_2d_coords(to_idx, to_nx)
         return np.sqrt(((fx - tx) * sx) ** 2 + ((fy - ty) * sy) ** 2 + slayer**2)
@@ -253,11 +291,35 @@ class DualSIMoptimizer:
         return G
 
     def calculate_effective_cascade(self, H_mimo: np.ndarray) -> np.ndarray:
-        """Z = G_R * H * G_T"""
+        """Compute the end-to-end cascade Z = G_R · H · G_T.
+
+        Parameters
+        ----------
+        H_mimo : np.ndarray
+            Complex MIMO channel matrix.
+
+        Returns
+        -------
+        np.ndarray
+            Effective cascade matrix Z.
+        """
         return self._calculate_G_R() @ H_mimo @ self._calculate_G_T()
 
     def calculate_optimal_beta(self, Z: np.ndarray, A: np.ndarray) -> complex:
-        """beta = <Z, A> / <Z, Z>"""
+        """Compute the optimal scalar β = ⟨Z, A⟩_F / ⟨Z, Z⟩_F.
+
+        Parameters
+        ----------
+        Z : np.ndarray
+            Cascade matrix, shape ``(D_rx, D_tx)``.
+        A : np.ndarray
+            Target alignment matrix, same shape as Z.
+
+        Returns
+        -------
+        complex
+            Optimal scaling scalar β.
+        """
         z_vec = Z.flatten()
         a_vec = A.flatten()
         return np.vdot(z_vec, a_vec) / np.vdot(z_vec, z_vec)
@@ -316,27 +378,73 @@ class DualSIMoptimizerTorch(nn.Module):
         return G
 
     def _calculate_G_T(self):
+        """Compute the TX cascade G_T from the current phase parameters."""
         W_T = self._get_W_list("W_T", self.L_T)
         return self._calculate_G(W_T, self.xi_T, self.L_T, W_T[0].shape[1])
 
     def _calculate_G_R(self):
+        """Compute the RX cascade G_R from the current phase parameters."""
         W_R = self._get_W_list("W_R", self.L_R)
         return self._calculate_G(W_R, self.xi_R, self.L_R, W_R[0].shape[1])
 
     def get_effective_cascade(self, H):
-        """Returns (Z, G_R) where Z = G_R * H * G_T."""
+        """Compute the end-to-end cascade Z = G_R · H · G_T.
+
+        Parameters
+        ----------
+        H : torch.Tensor
+            Complex MIMO channel matrix.
+
+        Returns
+        -------
+        Z : torch.Tensor
+            Effective cascade matrix.
+        G_R : torch.Tensor
+            RX cascade matrix (returned for downstream beta computation).
+        """
         GT = self._calculate_G_T()
         GR = self._calculate_G_R()
         return GR @ H @ GT, GR
 
     def get_TX_cascade(self):
+        """Return the TX cascade matrix G_T from the current phase parameters.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 cascade matrix G_T.
+        """
         return self._calculate_G_T()
 
     def get_RX_cascade(self):
+        """Return the RX cascade matrix G_R from the current phase parameters.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 cascade matrix G_R.
+        """
         return self._calculate_G_R()
 
     def get_effective_cascade_functional(self, H, phases_T, phases_R):
-        """Compute Z = G_R * H * G_T using externally supplied phase lists."""
+        """Compute Z = G_R · H · G_T using externally supplied phase lists.
+
+        Useful for evaluation without modifying the module's own parameters.
+
+        Parameters
+        ----------
+        H : torch.Tensor
+            Complex MIMO channel matrix.
+        phases_T : list of torch.Tensor
+            TX phase-shift tensors, one per layer.
+        phases_R : list of torch.Tensor
+            RX phase-shift tensors, one per layer.
+
+        Returns
+        -------
+        torch.Tensor
+            Effective cascade matrix Z.
+        """
         W_T = self._get_W_list("W_T", self.L_T)
         W_R = self._get_W_list("W_R", self.L_R)
         GT = self._calculate_G(W_T, phases_T, self.L_T, W_T[0].shape[1])

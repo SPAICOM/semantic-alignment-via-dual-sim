@@ -47,6 +47,18 @@ class NeuralClassifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Run a forward pass through the MLP.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input embeddings of shape ``(N, input_dim)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits of shape ``(N, num_classes)``.
+        """
         return self.net(x.float())
 
 
@@ -65,25 +77,75 @@ class NeuralClassifierModule(L.LightningModule):
     """
 
     def __init__(self, input_dim: int, num_classes: int, hidden_dim: int = 512, lr: float = 1e-3):
+        """
+        Parameters
+        ----------
+        input_dim : int
+            Dimensionality of the input embeddings.
+        num_classes : int
+            Number of output classes.
+        hidden_dim : int, optional
+            Hidden layer width passed to :class:`NeuralClassifier`.
+        lr : float, optional
+            Adam learning rate.
+        """
         super().__init__()
         self.save_hyperparameters()
         self.model = NeuralClassifier(input_dim, num_classes, hidden_dim)
 
     def forward(self, x):
+        """Forward pass delegated to the wrapped :class:`NeuralClassifier`.
+
+        Parameters
+        ----------
+        x : torch.Tensor
+            Input embeddings of shape ``(N, input_dim)``.
+
+        Returns
+        -------
+        torch.Tensor
+            Logits of shape ``(N, num_classes)``.
+        """
         return self.model(x)
 
     def training_step(self, batch, _):
+        """Compute cross-entropy loss on a training mini-batch.
+
+        Parameters
+        ----------
+        batch : tuple of torch.Tensor
+            ``(x, y)`` pair from the training DataLoader.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar cross-entropy loss.
+        """
         x, y = batch
         loss = F.cross_entropy(self(x), y)
         self.log("train_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
         return loss
 
     def validation_step(self, batch, _):
+        """Compute and log cross-entropy loss on a validation mini-batch.
+
+        Parameters
+        ----------
+        batch : tuple of torch.Tensor
+            ``(x, y)`` pair from the validation DataLoader.
+        """
         x, y = batch
         loss = F.cross_entropy(self(x), y)
         self.log("val_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
 
     def configure_optimizers(self):
+        """Configure the Adam optimizer.
+
+        Returns
+        -------
+        torch.optim.Adam
+            Optimizer for all model parameters.
+        """
         return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
 
 
@@ -93,6 +155,22 @@ class NeuralClassifierModule(L.LightningModule):
 
 
 def _ckpt_path(dataset: str, rx_enc: str, seed: int) -> Path:
+    """Build the checkpoint path for a given (dataset, rx_enc, seed) triple.
+
+    Parameters
+    ----------
+    dataset : str
+        Dataset name.
+    rx_enc : str
+        RX encoder name; ``/`` and ``.`` are replaced with ``_``.
+    seed : int
+        Training seed.
+
+    Returns
+    -------
+    Path
+        ``models/classifiers/{dataset}/{safe_enc}/seed{seed}.pt``
+    """
     safe_enc = rx_enc.replace("/", "_").replace(".", "_")
     return MODELS_DIR / dataset / safe_enc / f"seed{seed}.pt"
 

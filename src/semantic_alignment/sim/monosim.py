@@ -95,6 +95,18 @@ class MonoSIMoptimizer:
         self.W = self._build_W_list(self.L)
 
     def _build_W_list(self, L: int) -> list:
+        """Build the list of L propagation matrices for the SIM stack.
+
+        Parameters
+        ----------
+        L : int
+            Number of layers.
+
+        Returns
+        -------
+        list of np.ndarray
+            Propagation matrices ``[W_1, …, W_L]``.
+        """
         if L == 1:
             return [self._calculate_W("input", "output")]
         W_list = [self._calculate_W("input", "intermediate")]
@@ -104,6 +116,20 @@ class MonoSIMoptimizer:
         return W_list
 
     def _get_2d_coords(self, linear_idx: int, num_atoms_x: int) -> tuple[int, int]:
+        """Convert a 1-based linear meta-atom index to 2-D grid coordinates.
+
+        Parameters
+        ----------
+        linear_idx : int
+            1-based flat index of the meta-atom.
+        num_atoms_x : int
+            Number of meta-atoms along the x-axis.
+
+        Returns
+        -------
+        tuple of int
+            ``(mx, my)`` grid coordinates, both 1-based.
+        """
         my = int(np.ceil(linear_idx / num_atoms_x))
         mx = linear_idx - (my - 1) * num_atoms_x
         return mx, my
@@ -111,6 +137,30 @@ class MonoSIMoptimizer:
     def _calculate_propagation_distance(
         self, nx_from, idx_from, nx_to, idx_to, sx, sy, slayer
     ) -> float:
+        """Compute the 3-D Euclidean distance between two meta-atom centres.
+
+        Parameters
+        ----------
+        nx_from : int
+            Number of atoms along x in the source layer.
+        idx_from : int
+            1-based flat index of the source atom.
+        nx_to : int
+            Number of atoms along x in the destination layer.
+        idx_to : int
+            1-based flat index of the destination atom.
+        sx : float
+            Inter-atom spacing in x (metres).
+        sy : float
+            Inter-atom spacing in y (metres).
+        slayer : float
+            Layer-to-layer thickness (metres).
+
+        Returns
+        -------
+        float
+            Euclidean distance d (metres).
+        """
         x_from, y_from = self._get_2d_coords(idx_from, nx_from)
         x_to, y_to = self._get_2d_coords(idx_to, nx_to)
         return np.sqrt(((x_from - x_to) * sx) ** 2 + ((y_from - y_to) * sy) ** 2 + slayer**2)

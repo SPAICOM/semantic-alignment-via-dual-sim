@@ -52,11 +52,32 @@ RESULTS_DIR = Path("results")
 
 
 def _save_result(path: Path, row: dict) -> None:
+    """Write a single-row result dict to a Parquet file, creating parent dirs.
+
+    Parameters
+    ----------
+    path : Path
+        Destination file path.
+    row : dict
+        Result columns for one experiment configuration.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([row]).write_parquet(path)
 
 
 def _snr_tag(snr: float | None) -> str:
+    """Return a filesystem-safe string for an SNR value.
+
+    Parameters
+    ----------
+    snr : float or None
+        SNR in dB, or ``None`` for the noiseless case.
+
+    Returns
+    -------
+    str
+        ``"inf"`` when ``snr`` is ``None``, otherwise ``str(snr)``.
+    """
     return "inf" if snr is None else str(snr)
 
 
@@ -66,6 +87,30 @@ def _snr_tag(snr: float | None) -> str:
 
 
 def _build_joint_sim(L, M_int, wavelength, slayer, dx, device):
+    """Instantiate a :class:`DualSIMoptimizerTorch` with fixed aperture sizes.
+
+    Aperture layout (meta-atoms): TX-in 16×12, TX/RX-out 24×16, intermediate M_int×M_int.
+
+    Parameters
+    ----------
+    L : int
+        Number of layers per SIM (same for TX and RX).
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    wavelength : float
+        Operating wavelength (metres).
+    slayer : float
+        Inter-layer spacing (metres).
+    dx : float
+        Meta-atom pitch (metres).
+    device : torch.device
+        Target device for the returned model.
+
+    Returns
+    -------
+    DualSIMoptimizerTorch
+        Initialized (untrained) joint Dual-SIM model on ``device``.
+    """
     sim_cpu = DualSIMoptimizer(
         num_layers_TX=L,
         num_meta_atoms_TX_in_x=16,
@@ -91,7 +136,36 @@ def _build_joint_sim(L, M_int, wavelength, slayer, dx, device):
 
 
 def _eval_mono(G_T, beta, test_loader, L_in, mu_in, L_out, mu_out, clf, device):
-    """Evaluate TX-only SIM (no channel, no noise) with a single classifier."""
+    """Evaluate a TX-only SIM cascade with no channel and no noise.
+
+    Signal model: ``ŷ = L_out · (β G_T x_white) + μ_out``.
+
+    Parameters
+    ----------
+    G_T : torch.Tensor
+        TX cascade matrix.
+    beta : torch.Tensor
+        Optimal scalar alignment coefficient.
+    test_loader : DataLoader
+        Yields ``(z_tx_batch, labels)`` pairs.
+    L_in : torch.Tensor
+        Cholesky factor of TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 accuracy in ``[0, 1]``.
+    """
     all_preds, all_labels = [], []
     with torch.no_grad():
         for x_real, labels in test_loader:
@@ -105,10 +179,36 @@ def _eval_mono(G_T, beta, test_loader, L_in, mu_in, L_out, mu_out, clf, device):
 
 
 def _pct(v: float | None) -> float | None:
+    """Multiply by 100 to convert a fraction to a percentage, passing ``None`` through.
+
+    Parameters
+    ----------
+    v : float or None
+        Value in ``[0, 1]``, or ``None``.
+
+    Returns
+    -------
+    float or None
+        ``v * 100`` or ``None``.
+    """
     return v * 100 if v is not None else None
 
 
 def _neural_str(label: str, acc_pct: float | None) -> str:
+    """Format an optional accuracy percentage as a log string.
+
+    Parameters
+    ----------
+    label : str
+        Metric label to display.
+    acc_pct : float or None
+        Accuracy already in percentage (0–100), or ``None`` to suppress output.
+
+    Returns
+    -------
+    str
+        ``" label=XX.XX%"`` or empty string when ``acc_pct`` is ``None``.
+    """
     return f" {label}={acc_pct:.2f}%" if acc_pct is not None else ""
 
 
@@ -141,7 +241,60 @@ def run_single_layers_config(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """Layers experiment — one (L, M_int, seed) job."""
+    """Run one (L, M_int, seed) job of the layers sweep for the joint Dual-SIM.
+
+    Trains a joint Dual-SIM with ``L`` layers per metasurface and ``M_int``
+    intermediate meta-atoms, then evaluates with both the linear probe and
+    (optionally) the neural classifier.  Results are written to
+    ``results/dual_layers/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of metasurface layers per SIM (TX and RX share the same depth).
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (pre-computed, logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (pre-computed, logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in : torch.Tensor
+        Cholesky factor of TX pilot covariance.
+    mu_in : torch.Tensor
+        TX pilot mean.
+    L_out : torch.Tensor
+        Cholesky factor of RX pilot covariance.
+    mu_out : torch.Tensor
+        RX pilot mean.
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label saved in the Parquet row.
+    seed : int, optional
+        Random seed for reproducibility.
+    max_iters : int, optional
+        Number of alternating optimization iterations.
+    lr : float, optional
+        Initial Adam learning rate (overridden internally by depth scaling).
+    clf_neural : nn.Module or None, optional
+        Neural classifier; accuracy columns are ``None`` when not provided.
+    no_mismatch_neural : float or None, optional
+        No-mismatch neural accuracy in % (logged only).
+    original_neural : float or None, optional
+        Original alignment neural accuracy in % (logged only).
+    tx_enc : str, optional
+        TX encoder name appended to the output filename.
+    rx_enc : str, optional
+        RX encoder name appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "dual_layers"
@@ -241,7 +394,50 @@ def run_single_snr_config(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """SNR experiment — one (M_int, snr, seed) job."""
+    """Run one (M_int, snr, seed) job of the SNR sweep for the joint Dual-SIM.
+
+    Same architecture as :func:`run_single_layers_config` but evaluates over a
+    range of AWGN SNR levels.  Results are written to ``results/dual_snr/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of metasurface layers per SIM.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    snr : float or None
+        AWGN SNR in dB for evaluation; ``None`` means noiseless.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics (Cholesky factors and means).
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label.
+    seed : int, optional
+        Random seed.
+    max_iters : int, optional
+        Optimization iterations.
+    lr : float, optional
+        Initial Adam learning rate.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    no_mismatch_neural, original_neural : float or None, optional
+        Pre-computed accuracy values logged to the Parquet row.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "dual_snr"
@@ -341,7 +537,52 @@ def run_single_slayer_config(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """Layer-spacing experiment — one (s_tx, s_rx, seed) job."""
+    """Run one (s_tx, s_rx, seed) job of the layer-spacing sweep.
+
+    Studies how the inter-layer spacing of the TX and RX metasurfaces affects
+    alignment quality.  Results are written to ``results/dual_slayer/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of layers per SIM.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    s_tx : int
+        TX inter-layer spacing in units of wavelength.
+    s_rx : int
+        RX inter-layer spacing in units of wavelength.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics.
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label.
+    seed : int, optional
+        Random seed.
+    max_iters : int, optional
+        Optimization iterations.
+    lr : float, optional
+        Initial Adam learning rate.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    no_mismatch_neural, original_neural : float or None, optional
+        Pre-computed accuracy values logged to the Parquet row.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "dual_slayer"
@@ -460,10 +701,55 @@ def run_single_mono_layers_config(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """Mono-SIM ablation — TX-only SIM with optional MIMO channel.
+    """Run one (L, M_int, seed) job of the Mono-SIM (TX-only) ablation.
 
-    Without channel (use_channel=False): y = β G_T x_w
-    With channel    (use_channel=True):  y = G_eq(H) · (H · β G_T · x_w + noise)
+    Evaluates a TX-only metasurface with two signal models:
+
+    - ``use_channel=False``:  ``y = β G_T x_white``  (no channel, no noise)
+    - ``use_channel=True``:   ``y = G_eq(H) · (H · β G_T · x_white + noise)``
+
+    Results are written to ``results/mono/`` or ``results/mono_channel/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of metasurface layers.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics.
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label.
+    seed : int, optional
+        Random seed.
+    max_iters : int, optional
+        Optimization iterations.
+    lr : float, optional
+        Adam learning rate.
+    use_channel : bool, optional
+        If ``True``, route signal through ``H_mimo`` with MMSE equalization.
+    H_mimo : torch.Tensor or None, optional
+        MIMO channel matrix; required when ``use_channel=True``.
+    snr : float or None, optional
+        AWGN SNR in dB used when ``use_channel=True``.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    no_mismatch_neural, original_neural : float or None, optional
+        Pre-computed accuracy values logged to the Parquet row.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
     """
     subdir = "mono_channel" if use_channel else "mono"
     filename = f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}"
@@ -617,7 +903,50 @@ def run_single_disjoint_layers(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """Disjoint layers experiment — one (L, M_int, seed) job."""
+    """Run one (L, M_int, seed) job of the disjoint layers sweep.
+
+    Trains TX and RX metasurfaces independently (sequentially):
+    the TX-SIM is optimised first, then the RX-SIM is optimised against the
+    effective channel ``H_eff = H · G_T``.  Results are written to
+    ``results/disjoint_layers/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of metasurface layers per SIM.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics.
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label.
+    seed : int, optional
+        Random seed.
+    max_iters : int, optional
+        Optimization iterations for each SIM stage.
+    lr : float, optional
+        Adam learning rate.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    no_mismatch_neural, original_neural : float or None, optional
+        Pre-computed accuracy values logged to the Parquet row.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "disjoint_layers"
@@ -755,7 +1084,51 @@ def run_single_disjoint_snr(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
-    """Disjoint SNR experiment — one (M_int, snr, seed) job."""
+    """Run one (M_int, snr, seed) job of the disjoint SNR sweep.
+
+    Disjoint Dual-SIM trained sequentially (TX first, then RX against
+    ``H_eff``), evaluated at a specific AWGN SNR level.  Results are written
+    to ``results/disjoint_snr/``.
+
+    Parameters
+    ----------
+    L : int
+        Number of metasurface layers per SIM.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    snr : float or None
+        AWGN SNR in dB; ``None`` means noiseless.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics.
+    device : torch.device
+        Training and inference device.
+    strategy_name : str, optional
+        Alignment strategy label.
+    seed : int, optional
+        Random seed.
+    max_iters : int, optional
+        Optimization iterations for each SIM stage.
+    lr : float, optional
+        Adam learning rate.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    no_mismatch_neural, original_neural : float or None, optional
+        Pre-computed accuracy values logged to the Parquet row.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "disjoint_snr"
@@ -894,6 +1267,43 @@ def run_single_rx_depth(
     tx_enc: str = "",
     rx_enc: str = "",
 ) -> None:
+    """Study the effect of asymmetric TX/RX SIM depth on alignment quality.
+
+    Trains a joint Dual-SIM where TX and RX may have different layer counts,
+    allowing analysis of which side benefits more from increased depth.
+    Results are written to ``results/rx_depth/``.
+
+    Parameters
+    ----------
+    L_TX : int
+        Number of layers in the TX-SIM.
+    L_RX : int
+        Number of layers in the RX-SIM.
+    M_int : int
+        Number of intermediate meta-atoms along each axis.
+    no_mismatch_probe : float
+        No-mismatch linear probe accuracy in % (logged only).
+    original_probe : float
+        Original alignment linear probe accuracy in % (logged only).
+    A_target : torch.Tensor
+        Target alignment matrix.
+    H_mimo : torch.Tensor
+        Complex MIMO channel matrix.
+    test_loader : DataLoader
+        Test split yielding ``(z_tx, labels)`` batches.
+    clf : torch.Tensor
+        Linear probe weight matrix.
+    L_in, mu_in, L_out, mu_out : torch.Tensor
+        Whitening statistics.
+    device : torch.device
+        Training and inference device.
+    seed : int, optional
+        Random seed.
+    clf_neural : nn.Module or None, optional
+        Neural classifier.
+    tx_enc, rx_enc : str, optional
+        Encoder names appended to the output filename.
+    """
     out_path = (
         RESULTS_DIR
         / "rx_depth"
