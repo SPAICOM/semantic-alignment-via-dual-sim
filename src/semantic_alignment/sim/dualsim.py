@@ -20,8 +20,6 @@ DualSIMoptimizer      — NumPy reference implementation (builds propagation mat
 DualSIMoptimizerTorch — PyTorch wrapper with gradient-based alternating optimisation.
 """
 
-import math
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -134,15 +132,17 @@ class DualSIMoptimizer:
             np.random.normal(0, std_dev, self.M_int_T) for _ in range(self.L_T - 1)
         ] + [np.random.normal(0, std_dev, self.N_out_T)]
 
-        self._phase_shifts_RX = [
+        # RX phase shifts: first at input aperture (N_in_R), rest at intermediate (M_int_R)
+        self._phase_shifts_RX = [np.random.normal(0, std_dev, self.N_in_R)] + [
             np.random.normal(0, std_dev, self.M_int_R) for _ in range(self.L_R - 1)
-        ] + [np.random.normal(0, std_dev, self.N_out_R)]
+        ]
 
         self.W_TX = self._build_W_list(self.L_T, "TX_input", "TX_intermediate", "TX_output")
+        # RX uses L_R propagation matrices (W·Y scheme, signal hits Y before W)
         self.W_RX = self._build_W_list(self.L_R, "RX_input", "RX_intermediate", "RX_output")
 
     def _build_W_list(self, L: int, type_in: str, type_int: str, type_out: str) -> list:
-        """Build the list of L propagation matrices for one SIM stack.
+        """Build the list of L propagation matrices for the TX-SIM (Y·W scheme).
 
         Layer layout: input → [intermediate × (L-2)] → output.
         For L=1 the single layer maps input directly to output.
@@ -283,11 +283,17 @@ class DualSIMoptimizer:
         return G
 
     def _calculate_G_R(self) -> np.ndarray:
-        """G_R = ∏_{l=1}^{L_R} Υ_l^(R) W_l^(R)  — RX cascade transfer matrix."""
-        G = np.eye(self.N_in_R, dtype=complex)
+        """G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0  — RX cascade (Y·W scheme).
+
+        Signal flow: x → Y_0 → W_0 → Y_1 → W_1 → … → Y_{L-1} → W_{L-1}.
+        First phase Y_0 acts on the input aperture (N_in_R); the rest are
+        intermediate (M_int_R).  Uses L_R propagation matrices and L_R phases.
+        """
+        G = None
         for i in range(self.L_R):
             Y_l = np.diag(np.exp(1j * self._phase_shifts_RX[i]))
-            G = Y_l @ self.W_RX[i] @ G
+            G = Y_l if G is None else Y_l @ G  # phase shift first
+            G = self.W_RX[i] @ G  # then propagation
         return G
 
     def calculate_effective_cascade(self, H_mimo: np.ndarray) -> np.ndarray:
@@ -347,6 +353,7 @@ class DualSIMoptimizerTorch(nn.Module):
 
         for i, W in enumerate(sim_cpu.W_TX):
             self.register_buffer(f"W_T_{i}", torch.tensor(W, dtype=torch.complex64))
+        # W_RX has L_R+1 matrices (W·Y·W scheme)
         for i, W in enumerate(sim_cpu.W_RX):
             self.register_buffer(f"W_R_{i}", torch.tensor(W, dtype=torch.complex64))
 
@@ -356,6 +363,7 @@ class DualSIMoptimizerTorch(nn.Module):
                 for p in sim_cpu._phase_shifts_TX
             ]
         )
+        # xi_R has L_R parameters all of size M_int_R (intermediate layers only)
         self.xi_R = nn.ParameterList(
             [
                 nn.Parameter(torch.zeros_like(torch.tensor(p, dtype=torch.float32)))
@@ -372,8 +380,9 @@ class DualSIMoptimizerTorch(nn.Module):
         device = phases[0].device
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
         for i in range(L):
-            # Phase matrix is diagonal: Υ_i = diag(exp(j ξ_i))
-            Y_l = torch.diag(torch.exp(1j * phases[i]))
+            # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
+            phase = 2 * torch.pi * torch.sigmoid(phases[i])
+            Y_l = torch.diag(torch.exp(1j * phase))
             G = Y_l @ W_list[i] @ G
         return G
 
@@ -383,9 +392,20 @@ class DualSIMoptimizerTorch(nn.Module):
         return self._calculate_G(W_T, self.xi_T, self.L_T, W_T[0].shape[1])
 
     def _calculate_G_R(self):
-        """Compute the RX cascade G_R from the current phase parameters."""
+        """Compute G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0 (Y·W scheme).
+
+        Signal flow: x → Y_0 → W_0 → … → Y_{L-1} → W_{L-1}.
+        First phase Y_0 acts on the input aperture; the rest are intermediate.
+        Uses L_R sigmoid-mapped phases.
+        """
         W_R = self._get_W_list("W_R", self.L_R)
-        return self._calculate_G(W_R, self.xi_R, self.L_R, W_R[0].shape[1])
+        G = None
+        for i in range(self.L_R):
+            phase = 2 * torch.pi * torch.sigmoid(self.xi_R[i])
+            Y_l = torch.diag(torch.exp(1j * phase))
+            G = Y_l if G is None else Y_l @ G  # phase shift first
+            G = W_R[i] @ G  # then propagation
+        return G
 
     def get_effective_cascade(self, H):
         """Compute the end-to-end cascade Z = G_R · H · G_T.
@@ -446,9 +466,17 @@ class DualSIMoptimizerTorch(nn.Module):
             Effective cascade matrix Z.
         """
         W_T = self._get_W_list("W_T", self.L_T)
-        W_R = self._get_W_list("W_R", self.L_R)
         GT = self._calculate_G(W_T, phases_T, self.L_T, W_T[0].shape[1])
-        GR = self._calculate_G(W_R, phases_R, self.L_R, W_R[0].shape[1])
+
+        # G_R uses Y·W scheme: signal hits the phase shift before each propagation
+        W_R = self._get_W_list("W_R", self.L_R)
+        GR = None
+        for i in range(self.L_R):
+            phase = 2 * torch.pi * torch.sigmoid(phases_R[i])
+            Y_l = torch.diag(torch.exp(1j * phase))
+            GR = Y_l if GR is None else Y_l @ GR
+            GR = W_R[i] @ GR
+
         return GR @ H @ GT
 
     def optimize_alternating(
@@ -540,10 +568,6 @@ class DualSIMoptimizerTorch(nn.Module):
             loss_J.backward()
             nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
-            with torch.no_grad():
-                # Wrap phase shifts into [0, 2π) — phase is 2π-periodic
-                for p in params:
-                    p.copy_(p % (2.0 * math.pi))
             return loss_J.item(), (beta_hat / Z_norm).detach(), Z_norm.detach()
 
         loss_history = []

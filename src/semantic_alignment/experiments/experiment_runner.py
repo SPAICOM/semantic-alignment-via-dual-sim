@@ -361,6 +361,7 @@ def run_single_layers_config(
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
             "loss": loss_history[-1] if loss_history else 0.0,
+            "loss_history": loss_history,
             "lr": actual_lr,
         },
     )
@@ -504,6 +505,7 @@ def run_single_snr_config(
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
             "loss": loss_history[-1] if loss_history else 0.0,
+            "loss_history": loss_history,
         },
     )
     del model
@@ -624,7 +626,9 @@ def run_single_slayer_config(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-    model.optimize_alternating(A_target=A_target, H_mimo=H_mimo, max_iters=max_iters, lr=lr)
+    loss_history = model.optimize_alternating(
+        A_target=A_target, H_mimo=H_mimo, max_iters=max_iters, lr=lr
+    )
 
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -663,6 +667,8 @@ def run_single_slayer_config(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "loss": loss_history[-1] if loss_history else 0.0,
+            "loss_history": loss_history,
         },
     )
     del model, sim_cpu
@@ -866,6 +872,7 @@ def run_single_mono_layers_config(
             "sim_accuracy_probe": mono_probe * 100,
             "sim_accuracy_neural": _pct(mono_neural),
             "loss": loss_history[-1] if loss_history else 0.0,
+            "loss_history": loss_history,
             "lr": lr,
         },
     )
@@ -990,10 +997,10 @@ def run_single_disjoint_layers(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-    tx_model.optimize_sim(target_matrix=A_torch, max_iters=max_iters, lr=lr)
+    tx_loss_history, _ = tx_model.optimize_sim(target_matrix=A_torch, max_iters=max_iters, lr=lr)
     with torch.no_grad():
         H_eff = H_torch @ tx_model.get_cascade()
-    _, beta_g = rx_model.optimize_rx_sequential(
+    rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
         H_eff=H_eff, A_target=A_torch, max_iters=max_iters, lr=lr
     )
 
@@ -1052,6 +1059,10 @@ def run_single_disjoint_layers(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "tx_loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "tx_loss_history": tx_loss_history,
+            "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
+            "rx_loss_history": rx_loss_history,
         },
     )
     del tx_model, rx_model
@@ -1172,10 +1183,10 @@ def run_single_disjoint_snr(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-    tx_model.optimize_sim(target_matrix=A_torch, max_iters=max_iters, lr=lr)
+    tx_loss_history, _ = tx_model.optimize_sim(target_matrix=A_torch, max_iters=max_iters, lr=lr)
     with torch.no_grad():
         H_eff = H_torch @ tx_model.get_cascade()
-    _, beta_g = rx_model.optimize_rx_sequential(
+    rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
         H_eff=H_eff, A_target=A_torch, max_iters=max_iters, lr=lr
     )
 
@@ -1235,6 +1246,10 @@ def run_single_disjoint_snr(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "tx_loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "tx_loss_history": tx_loss_history,
+            "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
+            "rx_loss_history": rx_loss_history,
         },
     )
     del tx_model, rx_model
@@ -1343,7 +1358,9 @@ def run_single_rx_depth(
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     iters = 500 if L_RX <= 10 else 1000
-    model.optimize_alternating(A_target=A_target, H_mimo=H_mimo, max_iters=iters, lr=0.05)
+    loss_history = model.optimize_alternating(
+        A_target=A_target, H_mimo=H_mimo, max_iters=iters, lr=0.05
+    )
 
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -1371,6 +1388,8 @@ def run_single_rx_depth(
             "original_probe": original_probe,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "loss": loss_history[-1] if loss_history else 0.0,
+            "loss_history": loss_history,
         },
     )
     del model, sim_cpu

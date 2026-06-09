@@ -223,8 +223,9 @@ class MonoSIMoptimizerTorch(nn.Module):
         G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
         for i in range(self.L):
             W_i = getattr(self, f"W_{i}")
-            # Υ_i = diag(exp(j ξ_i)) — diagonal phase matrix at layer i
-            Y_i = torch.diag(torch.exp(1j * self.xi[i]))
+            # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
+            phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
+            Y_i = torch.diag(torch.exp(1j * phase))
             G = Y_i @ W_i @ G
         return G
 
@@ -266,14 +267,10 @@ class MonoSIMoptimizerTorch(nn.Module):
 
             opt.zero_grad()
             G = self.get_cascade()
-            loss = torch.norm(beta_k * G - Target, p="fro") ** 2
+            # Normalize by matrix size to keep loss scale independent of dimensions
+            loss = torch.norm(beta_k * G - Target, p="fro") ** 2 / (G.shape[0] * G.shape[1])
             loss.backward()
             opt.step()
-
-            with torch.no_grad():
-                # Keep phase shifts in [0, 2π) — phase response is 2π-periodic
-                for p in self.xi:
-                    p.copy_(p % (2 * torch.pi))
 
             loss_history.append(loss.item())
             bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
@@ -334,13 +331,12 @@ class MonoSIMoptimizerTorch(nn.Module):
 
             opt.zero_grad()
             Z_cur = self.get_cascade() @ H_eff_t
-            loss = torch.norm(beta_k * Z_cur - A_t, p="fro") ** 2
+            # Normalize by matrix size to keep loss scale independent of dimensions
+            loss = torch.norm(beta_k * Z_cur - A_t, p="fro") ** 2 / (
+                Z_cur.shape[0] * Z_cur.shape[1]
+            )
             loss.backward()
             opt.step()
-
-            with torch.no_grad():
-                for p in self.xi:
-                    p.copy_(p % (2 * torch.pi))
 
             loss_history.append(loss.item())
             bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
