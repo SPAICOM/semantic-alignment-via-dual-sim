@@ -240,7 +240,9 @@ def run_single_layers_config(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (L, M_int, seed) job of the layers sweep for the joint Dual-SIM.
 
@@ -321,7 +323,9 @@ def run_single_layers_config(
         H_mimo=H_mimo,
         max_iters=max_iters,
         lr=lr,
-        use_scheduler=use_scheduler,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -394,7 +398,9 @@ def run_single_snr_config(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (M_int, snr, seed) job of the SNR sweep for the joint Dual-SIM.
 
@@ -466,7 +472,9 @@ def run_single_snr_config(
         H_mimo=H_mimo,
         max_iters=max_iters,
         lr=lr,
-        use_scheduler=use_scheduler,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -540,7 +548,9 @@ def run_single_slayer_config(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (s_tx, s_rx, seed) job of the layer-spacing sweep.
 
@@ -634,7 +644,9 @@ def run_single_slayer_config(
         H_mimo=H_mimo,
         max_iters=max_iters,
         lr=lr,
-        use_scheduler=use_scheduler,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
 
     with torch.no_grad():
@@ -713,7 +725,9 @@ def run_single_mono_layers_config(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (L, M_int, seed) job of the Mono-SIM (TX-only) ablation.
 
@@ -803,7 +817,12 @@ def run_single_mono_layers_config(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
 
     loss_history, _ = tx_model.optimize_sim(
-        target_matrix=A_torch, max_iters=max_iters, lr=lr, use_scheduler=use_scheduler
+        target_matrix=A_torch,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
 
     with torch.no_grad():
@@ -920,7 +939,9 @@ def run_single_disjoint_layers(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (L, M_int, seed) job of the disjoint layers sweep.
 
@@ -1012,12 +1033,23 @@ def run_single_disjoint_layers(
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     tx_loss_history, _ = tx_model.optimize_sim(
-        target_matrix=A_torch, max_iters=max_iters, lr=lr, use_scheduler=use_scheduler
+        target_matrix=A_torch,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
     with torch.no_grad():
         H_eff = H_torch @ tx_model.get_cascade()
     rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
-        H_eff=H_eff, A_target=A_torch, max_iters=max_iters, lr=lr, use_scheduler=use_scheduler
+        H_eff=H_eff,
+        A_target=A_torch,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
 
     sim_probe = run_evaluation_disjoint_fixed(
@@ -1110,7 +1142,9 @@ def run_single_disjoint_snr(
     original_neural: float | None = None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Run one (M_int, snr, seed) job of the disjoint SNR sweep.
 
@@ -1203,12 +1237,23 @@ def run_single_disjoint_snr(
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     tx_loss_history, _ = tx_model.optimize_sim(
-        target_matrix=A_torch, max_iters=max_iters, lr=lr, use_scheduler=use_scheduler
+        target_matrix=A_torch,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
     with torch.no_grad():
         H_eff = H_torch @ tx_model.get_cascade()
     rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
-        H_eff=H_eff, A_target=A_torch, max_iters=max_iters, lr=lr, use_scheduler=use_scheduler
+        H_eff=H_eff,
+        A_target=A_torch,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
 
     sim_probe = run_evaluation_disjoint_fixed(
@@ -1302,7 +1347,9 @@ def run_single_rx_depth(
     clf_neural=None,
     tx_enc: str = "",
     rx_enc: str = "",
-    use_scheduler: bool = False,
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
 ) -> None:
     """Study the effect of asymmetric TX/RX SIM depth on alignment quality.
 
@@ -1385,7 +1432,9 @@ def run_single_rx_depth(
         H_mimo=H_mimo,
         max_iters=iters,
         lr=0.05,
-        use_scheduler=use_scheduler,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
     )
 
     with torch.no_grad():

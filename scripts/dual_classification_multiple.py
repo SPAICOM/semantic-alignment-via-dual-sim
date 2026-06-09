@@ -181,7 +181,9 @@ def _setup(cfg: DictConfig):
         lr=cfg.training.lr,
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
-        use_scheduler=bool(cfg.training.get("use_scheduler", False)),
+        optimizer=cfg.training.get("optimizer", "adam"),
+        scheduler=cfg.training.get("scheduler", "none"),
+        warmup_frac=float(cfg.training.get("warmup_frac", 0.05)),
     )
 
 

@@ -6,12 +6,13 @@ max_iters: 3000
 lr: 0.1
 seed: 42
 
-# Adam hyperparameters
-warmup_frac: 0.05
+# Optimizer: sgd | adam (default)
+optimizer: adam
+
+# LR scheduler: none (default) | cosine (constant LR for warmup_frac iters, then cosine → lr*1e-3)
+scheduler: none
+warmup_frac: 0.05   # fraction of max_iters at constant LR before cosine decay (scheduler=cosine only)
+
+# Gradient clipping and alternating steps (dual SIM only)
 clip_value: 1.0
 rx_steps_per_tx: 2
-patience: 500
-
-# LR scheduler: cosine annealing with linear warmup (warmup_frac of max_iters)
-# Set to true to enable; false = constant LR (Adam default)
-use_scheduler: false

@@ -488,9 +488,8 @@ class DualSIMoptimizerTorch(nn.Module):
         warmup_frac: float = 0.05,
         clip_value: float = 1.0,
         rx_steps_per_tx: int = 2,
-        patience: int = 500,
-        rel_tol: float = 1e-7,
-        use_scheduler: bool = False,
+        optimizer: str = "adam",
+        scheduler: str = "none",
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
@@ -500,8 +499,7 @@ class DualSIMoptimizerTorch(nn.Module):
         through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
         with :class:`MonoSIMoptimizerTorch`.
 
-        Uses Adam with a linear warm-up followed by cosine annealing.  RX
-        phases are updated ``rx_steps_per_tx`` times per TX step.  Best
+        RX phases are updated ``rx_steps_per_tx`` times per TX step.  Best
         phase profiles are restored at the end.
 
         Parameters
@@ -513,25 +511,26 @@ class DualSIMoptimizerTorch(nn.Module):
         max_iters : int, optional
             Total number of optimization iterations.
         lr : float, optional
-            Initial Adam learning rate for both TX and RX optimizers.
+            Learning rate.
         warmup_frac : float, optional
-            Fraction of ``max_iters`` used for the linear warm-up phase.
+            Fraction of ``max_iters`` kept at constant LR before cosine decay
+            (only used when ``scheduler="cosine"``).
         clip_value : float, optional
             Gradient clipping norm.
         rx_steps_per_tx : int, optional
             Number of RX gradient steps taken per TX step.
-        patience : int, optional
-            Unused (kept for API compatibility with early-stopping callers).
-        rel_tol : float, optional
-            Unused (kept for API compatibility).
+        optimizer : str, optional
+            ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
+        scheduler : str, optional
+            ``"none"`` — fixed LR throughout (default);
+            ``"cosine"`` — constant LR for the first ``warmup_frac`` iterations,
+            then cosine annealing down to ``lr * 1e-3``.
 
         Returns
         -------
         list of float
             Per-iteration loss values ``‖β Z − A‖²_F / (n·m)``.
         """
-        # header printed by the calling experiment_runner after accuracy evaluation
-
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
 
@@ -539,23 +538,27 @@ class DualSIMoptimizerTorch(nn.Module):
         A_torch = A_torch.to(device)
         H_torch = H_torch.to(device)
 
-        opt_T = optim.Adam(self.xi_T.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
-        opt_R = optim.Adam(self.xi_R.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
+        if optimizer == "sgd":
+            opt_T = optim.SGD(self.xi_T.parameters(), lr=lr)
+            opt_R = optim.SGD(self.xi_R.parameters(), lr=lr)
+        else:
+            opt_T = optim.Adam(self.xi_T.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
+            opt_R = optim.Adam(self.xi_R.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
 
-        warmup_iters = max(1, int(max_iters * warmup_frac))
-        cosine_iters = max(1, max_iters - warmup_iters)
-        lr_min = lr * 1e-3
+        if scheduler == "cosine":
+            warmup_iters = max(1, int(max_iters * warmup_frac))
+            cosine_iters = max(1, max_iters - warmup_iters)
+            lr_min = lr * 1e-3
 
-        def _make_schedulers(opt):
-            warmup = optim.lr_scheduler.LinearLR(
-                opt, start_factor=1e-3, end_factor=1.0, total_iters=warmup_iters
-            )
-            cosine = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cosine_iters, eta_min=lr_min)
-            return optim.lr_scheduler.SequentialLR(
-                opt, schedulers=[warmup, cosine], milestones=[warmup_iters]
-            )
+            def _make_schedulers(opt):
+                constant = optim.lr_scheduler.ConstantLR(opt, factor=1.0, total_iters=warmup_iters)
+                cosine = optim.lr_scheduler.CosineAnnealingLR(
+                    opt, T_max=cosine_iters, eta_min=lr_min
+                )
+                return optim.lr_scheduler.SequentialLR(
+                    opt, schedulers=[constant, cosine], milestones=[warmup_iters]
+                )
 
-        if use_scheduler:
             sched_T = _make_schedulers(opt_T)
             sched_R = _make_schedulers(opt_R)
 
@@ -594,7 +597,7 @@ class DualSIMoptimizerTorch(nn.Module):
             for _ in range(rx_steps_per_tx):
                 current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
 
-            if use_scheduler:
+            if scheduler == "cosine":
                 sched_T.step()
                 sched_R.step()
             loss_history.append(current_loss)
