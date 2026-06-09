@@ -188,6 +188,7 @@ def main(cfg: DictConfig) -> None:
         original_neural=original_neural,
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
+        use_scheduler=bool(cfg.training.get("use_scheduler", False)),
     )
 
 

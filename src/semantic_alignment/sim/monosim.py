@@ -261,8 +261,29 @@ class MonoSIMoptimizerTorch(nn.Module):
                 G = Y_i @ W_i @ G
             return G
 
-    def optimize_sim(self, target_matrix, max_iters: int = 5000, lr: float = 0.01):
-        """Optimize TX phase shifts to minimise ``‖β G_T − A‖²_F``.
+    @staticmethod
+    def _make_scheduler(opt, max_iters: int, warmup_frac: float, lr: float):
+        """Warmup-then-cosine LR scheduler, mirroring DualSIMoptimizerTorch."""
+        warmup_iters = max(1, int(max_iters * warmup_frac))
+        cosine_iters = max(1, max_iters - warmup_iters)
+        lr_min = lr * 1e-3
+        warmup = optim.lr_scheduler.LinearLR(
+            opt, start_factor=1e-3, end_factor=1.0, total_iters=warmup_iters
+        )
+        cosine = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cosine_iters, eta_min=lr_min)
+        return optim.lr_scheduler.SequentialLR(
+            opt, schedulers=[warmup, cosine], milestones=[warmup_iters]
+        )
+
+    def optimize_sim(
+        self,
+        target_matrix,
+        max_iters: int = 5000,
+        lr: float = 0.01,
+        use_scheduler: bool = False,
+        warmup_frac: float = 0.05,
+    ):
+        """Optimize phase shifts to minimise ``‖β G − A‖²_F / (n·m)``.
 
         Parameters
         ----------
@@ -272,6 +293,11 @@ class MonoSIMoptimizerTorch(nn.Module):
             Number of Adam optimization steps.
         lr : float, optional
             Adam learning rate.
+        use_scheduler : bool, optional
+            If ``True``, apply linear warmup + cosine annealing LR schedule.
+        warmup_frac : float, optional
+            Fraction of ``max_iters`` used for the linear warmup (only when
+            ``use_scheduler=True``).
 
         Returns
         -------
@@ -286,6 +312,8 @@ class MonoSIMoptimizerTorch(nn.Module):
             Target = torch.tensor(target_matrix, dtype=torch.complex64, device=self.xi[0].device)
 
         opt = optim.Adam(self.xi.parameters(), lr=lr)
+        if use_scheduler:
+            sched = self._make_scheduler(opt, max_iters, warmup_frac, lr)
         loss_history = []
         best_loss = float("inf")
         best_xi = [p.data.clone() for p in self.xi]
@@ -303,10 +331,11 @@ class MonoSIMoptimizerTorch(nn.Module):
 
             opt.zero_grad()
             G = self.get_cascade()
-            # Normalize by matrix size to keep loss scale independent of dimensions
             loss = torch.norm(beta_k * G - Target, p="fro") ** 2 / (G.shape[0] * G.shape[1])
             loss.backward()
             opt.step()
+            if use_scheduler:
+                sched.step()
 
             loss_history.append(loss.item())
             if loss.item() < best_loss:
@@ -325,12 +354,20 @@ class MonoSIMoptimizerTorch(nn.Module):
 
         return loss_history, beta_f.item()
 
-    def optimize_rx_sequential(self, H_eff, A_target, max_iters: int = 5000, lr: float = 0.1):
+    def optimize_rx_sequential(
+        self,
+        H_eff,
+        A_target,
+        max_iters: int = 5000,
+        lr: float = 0.1,
+        use_scheduler: bool = False,
+        warmup_frac: float = 0.05,
+    ):
         """Optimize RX phase shifts given the effective channel ``H_eff = H · G_T``.
 
-        Minimises ``‖β G_R H_eff − A‖²_F`` with respect to the RX phase shifts.
-        Used in the disjoint Dual-SIM training pipeline after the TX-SIM has
-        been frozen.
+        Minimises ``‖β G_R H_eff − A‖²_F / (n·m)`` with respect to the RX
+        phase shifts.  Used in the disjoint Dual-SIM training pipeline after
+        the TX-SIM has been frozen.
 
         Parameters
         ----------
@@ -342,6 +379,11 @@ class MonoSIMoptimizerTorch(nn.Module):
             Number of Adam optimization steps.
         lr : float, optional
             Adam learning rate.
+        use_scheduler : bool, optional
+            If ``True``, apply linear warmup + cosine annealing LR schedule.
+        warmup_frac : float, optional
+            Fraction of ``max_iters`` used for the linear warmup (only when
+            ``use_scheduler=True``).
 
         Returns
         -------
@@ -361,6 +403,8 @@ class MonoSIMoptimizerTorch(nn.Module):
             A_t = torch.tensor(A_target, dtype=torch.complex64, device=self.xi[0].device)
 
         opt = optim.Adam(self.xi.parameters(), lr=lr)
+        if use_scheduler:
+            sched = self._make_scheduler(opt, max_iters, warmup_frac, lr)
         loss_history = []
         best_loss = float("inf")
         best_xi = [p.data.clone() for p in self.xi]
@@ -374,12 +418,13 @@ class MonoSIMoptimizerTorch(nn.Module):
 
             opt.zero_grad()
             Z_cur = self.get_cascade() @ H_eff_t
-            # Normalize by matrix size to keep loss scale independent of dimensions
             loss = torch.norm(beta_k * Z_cur - A_t, p="fro") ** 2 / (
                 Z_cur.shape[0] * Z_cur.shape[1]
             )
             loss.backward()
             opt.step()
+            if use_scheduler:
+                sched.step()
 
             loss_history.append(loss.item())
             if loss.item() < best_loss:

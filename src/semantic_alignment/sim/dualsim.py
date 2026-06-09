@@ -490,6 +490,7 @@ class DualSIMoptimizerTorch(nn.Module):
         rx_steps_per_tx: int = 2,
         patience: int = 500,
         rel_tol: float = 1e-7,
+        use_scheduler: bool = False,
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
@@ -554,8 +555,9 @@ class DualSIMoptimizerTorch(nn.Module):
                 opt, schedulers=[warmup, cosine], milestones=[warmup_iters]
             )
 
-        sched_T = _make_schedulers(opt_T)
-        sched_R = _make_schedulers(opt_R)
+        if use_scheduler:
+            sched_T = _make_schedulers(opt_T)
+            sched_R = _make_schedulers(opt_R)
 
         def _step_side(opt, params):
             with torch.no_grad():
@@ -592,8 +594,9 @@ class DualSIMoptimizerTorch(nn.Module):
             for _ in range(rx_steps_per_tx):
                 current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
 
-            sched_T.step()
-            sched_R.step()
+            if use_scheduler:
+                sched_T.step()
+                sched_R.step()
             loss_history.append(current_loss)
 
             if current_loss < best_loss:
