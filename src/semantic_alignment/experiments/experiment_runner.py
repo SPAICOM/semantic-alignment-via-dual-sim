@@ -789,6 +789,7 @@ def run_single_mono_layers_config(
         thickness=slayer * L,
         wavelength=wavelength,
         spacings={"in": dx, "out": dx, "int": dx},
+        side="tx",
     )
     tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
@@ -980,6 +981,7 @@ def run_single_disjoint_layers(
         num_meta_atoms_int_y=M_int,
         thickness=slayer * L,
         wavelength=wavelength,
+        side="tx",
     )
     rx_cpu = MonoSIMoptimizer(
         num_layers=L,
@@ -991,6 +993,7 @@ def run_single_disjoint_layers(
         num_meta_atoms_int_y=M_int,
         thickness=slayer * L,
         wavelength=wavelength,
+        side="rx",
     )
     tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
     rx_model = MonoSIMoptimizerTorch(rx_cpu).to(device)
@@ -1166,6 +1169,7 @@ def run_single_disjoint_snr(
         num_meta_atoms_int_y=M_int,
         thickness=slayer * L,
         wavelength=wavelength,
+        side="tx",
     )
     rx_cpu = MonoSIMoptimizer(
         num_layers=L,
@@ -1177,6 +1181,7 @@ def run_single_disjoint_snr(
         num_meta_atoms_int_y=M_int,
         thickness=slayer * L,
         wavelength=wavelength,
+        side="rx",
     )
     tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
     rx_model = MonoSIMoptimizerTorch(rx_cpu).to(device)

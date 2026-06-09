@@ -1,16 +1,18 @@
 """Single Stacked Intelligent Metasurface (Mono-SIM) optimizer — NumPy and PyTorch versions.
 
-A Mono-SIM uses a single metasurface stack (TX side only).  The RX side either
-relies on a conventional MMSE equalizer or has no processing at all.
+A Mono-SIM is a single metasurface stack placed at either the TX or the RX side.
+The signal flow and phase-shift layout differ between the two sides:
 
-The cascade transfer matrix is:
-    G_T = ∏_{l=1}^{L} Υ_l W_l
-where Υ_l = diag(exp(j ξ_l)) are learnable phase shifts and W_l is the fixed
-free-space propagation matrix between adjacent layers.
+TX (``side="tx"``):
+    G_T = Υ_L W_L … Υ_1 W_1
+    Phase layout: [M_int] × (L-1) intermediate layers, then [N_out] at the output.
 
-The optimizer minimises ‖β G_T − A‖²_F (``optimize_sim``) or
-‖β G_R H_eff − A‖²_F for RX-side training against an effective channel
-H_eff = H · G_T (``optimize_rx_sequential``).
+RX (``side="rx"``):
+    G_R = W_{L-1} Υ_{L-1} … W_0 Υ_0
+    Phase layout: [N_in] at the input aperture, then [M_int] × (L-1) intermediate.
+
+The optimizer minimises ‖β G − A‖²_F (``optimize_sim``) or
+‖β G_R H_eff − A‖²_F for RX-side training (``optimize_rx_sequential``).
 
 Classes
 -------
@@ -52,6 +54,8 @@ class MonoSIMoptimizer:
         If ``True``, print construction details.
     spacings : dict, optional
         Meta-atom spacings for each aperture type.  Defaults to ``λ/2`` for all.
+    side : str, optional
+        ``"tx"`` (default) or ``"rx"``.  Controls phase-shift layout and cascade order.
     """
 
     def __init__(
@@ -67,15 +71,19 @@ class MonoSIMoptimizer:
         wavelength: float,
         verbose: bool = False,
         spacings: dict = None,
+        side: str = "tx",
     ):
         if num_layers <= 0:
             raise ValueError("Number of layers must be positive.")
+        if side not in ("tx", "rx"):
+            raise ValueError(f"side must be 'tx' or 'rx', got {side!r}.")
 
         self.L = num_layers
         self.N_in = num_meta_atoms_in_x * num_meta_atoms_in_y
         self.N_out = num_meta_atoms_out_x * num_meta_atoms_out_y
         self.M_int = num_meta_atoms_int_x * num_meta_atoms_int_y
         self.slayer = thickness / num_layers
+        self.side = side
 
         self.wavelength = wavelength
         self.kappa = 2 * np.pi / wavelength
@@ -88,9 +96,16 @@ class MonoSIMoptimizer:
         }
 
         std_dev = 0.01
-        self._phase_shifts = [
-            np.random.normal(0, std_dev, self.M_int) for _ in range(self.L - 1)
-        ] + [np.random.normal(0, std_dev, self.N_out)]
+        if side == "rx":
+            # RX: first phase at input aperture (N_in), rest at intermediate (M_int)
+            self._phase_shifts = [np.random.normal(0, std_dev, self.N_in)] + [
+                np.random.normal(0, std_dev, self.M_int) for _ in range(self.L - 1)
+            ]
+        else:
+            # TX: intermediate phases (M_int), last at output aperture (N_out)
+            self._phase_shifts = [
+                np.random.normal(0, std_dev, self.M_int) for _ in range(self.L - 1)
+            ] + [np.random.normal(0, std_dev, self.N_out)]
 
         self.W = self._build_W_list(self.L)
 
@@ -209,6 +224,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         self.verbose = sim_cpu.verbose
         self.L = sim_cpu.L
         self.input_dim = sim_cpu.N_in
+        self.side = sim_cpu.side
 
         for i, W in enumerate(sim_cpu.W):
             self.register_buffer(f"W_{i}", torch.tensor(W, dtype=torch.complex64))
@@ -218,16 +234,32 @@ class MonoSIMoptimizerTorch(nn.Module):
         )
 
     def get_cascade(self):
-        """Compute G_T = Υ_L W_L … Υ_1 W_1 from the current phase parameters."""
+        """Compute the cascade matrix from the current phase parameters.
+
+        TX (``side='tx'``): G_T = Υ_L W_L … Υ_1 W_1
+            Phase applied at intermediate/output apertures.
+        RX (``side='rx'``): G_R = W_{L-1} Υ_{L-1} … W_0 Υ_0
+            Phase applied at input/intermediate apertures; signal hits Y before W.
+        """
         device = self.xi[0].device
-        G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
-        for i in range(self.L):
-            W_i = getattr(self, f"W_{i}")
-            # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
-            phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
-            Y_i = torch.diag(torch.exp(1j * phase))
-            G = Y_i @ W_i @ G
-        return G
+        if self.side == "rx":
+            G = None
+            for i in range(self.L):
+                W_i = getattr(self, f"W_{i}")
+                phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
+                Y_i = torch.diag(torch.exp(1j * phase))
+                G = Y_i if G is None else Y_i @ G
+                G = W_i @ G
+            return G
+        else:
+            G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
+            for i in range(self.L):
+                W_i = getattr(self, f"W_{i}")
+                # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
+                phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
+                Y_i = torch.diag(torch.exp(1j * phase))
+                G = Y_i @ W_i @ G
+            return G
 
     def optimize_sim(self, target_matrix, max_iters: int = 5000, lr: float = 0.01):
         """Optimize TX phase shifts to minimise ``‖β G_T − A‖²_F``.
@@ -255,8 +287,12 @@ class MonoSIMoptimizerTorch(nn.Module):
 
         opt = optim.Adam(self.xi.parameters(), lr=lr)
         loss_history = []
+        best_loss = float("inf")
+        best_xi = [p.data.clone() for p in self.xi]
 
-        bar = tqdm(range(max_iters), desc="MonoSIM TX", leave=False, dynamic_ncols=True)
+        bar = tqdm(
+            range(max_iters), desc=f"MonoSIM {self.side.upper()}", leave=False, dynamic_ncols=True
+        )
         for k in bar:
             with torch.no_grad():
                 G_k = self.get_cascade()
@@ -273,10 +309,15 @@ class MonoSIMoptimizerTorch(nn.Module):
             opt.step()
 
             loss_history.append(loss.item())
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                best_xi = [p.data.clone() for p in self.xi]
             bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
 
         bar.close()
         with torch.no_grad():
+            for p, best in zip(self.xi, best_xi):
+                p.copy_(best)
             G_f = self.get_cascade()
             beta_f = torch.sum(torch.conj(G_f) * Target) / (
                 torch.sum(torch.conj(G_f) * G_f) + 1e-12
@@ -321,8 +362,10 @@ class MonoSIMoptimizerTorch(nn.Module):
 
         opt = optim.Adam(self.xi.parameters(), lr=lr)
         loss_history = []
+        best_loss = float("inf")
+        best_xi = [p.data.clone() for p in self.xi]
 
-        bar = tqdm(range(max_iters), desc="MonoSIM RX", leave=False, dynamic_ncols=True)
+        bar = tqdm(range(max_iters), desc="MonoSIM RX seq", leave=False, dynamic_ncols=True)
         for k in bar:
             with torch.no_grad():
                 G_R = self.get_cascade()
@@ -339,10 +382,15 @@ class MonoSIMoptimizerTorch(nn.Module):
             opt.step()
 
             loss_history.append(loss.item())
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                best_xi = [p.data.clone() for p in self.xi]
             bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
         bar.close()
 
         with torch.no_grad():
+            for p, best in zip(self.xi, best_xi):
+                p.copy_(best)
             G_R_f = self.get_cascade()
             Z_f = G_R_f @ H_eff_t
             beta_f = torch.sum(torch.conj(Z_f) * A_t) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
