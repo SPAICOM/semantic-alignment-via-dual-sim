@@ -493,11 +493,11 @@ class DualSIMoptimizerTorch(nn.Module):
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
-        Minimises ``‖β̂ Ẑ − A‖²_F / (n·m)`` where ``Ẑ = Z / ‖Z‖_F`` and
-        ``β̂ = ⟨Ẑ, A⟩_F``.  Normalising by the Frobenius norm keeps the
-        gradient scale depth-independent (avoids β explosion for deep cascades
-        where ``‖Z‖_F → 0``); dividing by ``n·m`` makes the loss scale
-        consistent with :class:`MonoSIMoptimizerTorch`.
+        Minimises ``‖β Z − A‖²_F / (n·m)`` where
+        ``β = ⟨Z, A⟩_F / ‖Z‖²_F`` is the closed-form optimal scalar computed
+        without gradient (``torch.no_grad``), so the loss gradient flows only
+        through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
+        with :class:`MonoSIMoptimizerTorch`.
 
         Uses Adam with a linear warm-up followed by cosine annealing.  RX
         phases are updated ``rx_steps_per_tx`` times per TX step.  Best
@@ -527,7 +527,7 @@ class DualSIMoptimizerTorch(nn.Module):
         Returns
         -------
         list of float
-            Per-iteration loss values ``‖β̂ Ẑ − A‖²_F / (n·m)``.
+            Per-iteration loss values ``‖β Z − A‖²_F / (n·m)``.
         """
         # header printed by the calling experiment_runner after accuracy evaluation
 
@@ -558,20 +558,24 @@ class DualSIMoptimizerTorch(nn.Module):
         sched_R = _make_schedulers(opt_R)
 
         def _step_side(opt, params):
+            with torch.no_grad():
+                Z_tmp, _ = self.get_effective_cascade(H_torch)
+                Z_norm = torch.norm(Z_tmp, p="fro") + 1e-12
+                # Closed-form optimal β — computed without gradient so the loss
+                # gradient flows only through Z, not through β
+                beta_k = torch.sum(torch.conj(Z_tmp) * A_torch) / (
+                    torch.sum(torch.conj(Z_tmp) * Z_tmp) + 1e-12
+                )
+
             opt.zero_grad()
             Z, _ = self.get_effective_cascade(H_torch)
-            # Normalise Z so the gradient scale is depth-independent (‖Z‖_F → 0 for deep SIMs)
-            Z_norm = torch.norm(Z, p="fro") + 1e-12
-            Z_hat = Z / Z_norm
-            # Optimal scalar alignment: β̂ = ⟨Z̃, A⟩ / ‖Z̃‖² (Frobenius inner product)
-            beta_hat = torch.sum(torch.conj(Z_hat) * A_torch)
-            loss_J = torch.norm(beta_hat * Z_hat - A_torch, p="fro") ** 2 / (
+            loss_J = torch.norm(beta_k * Z - A_torch, p="fro") ** 2 / (
                 A_torch.shape[0] * A_torch.shape[1]
             )
             loss_J.backward()
             nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
-            return loss_J.item(), (beta_hat / Z_norm).detach(), Z_norm.detach()
+            return loss_J.item(), beta_k.detach(), Z_norm.detach()
 
         loss_history = []
         best_loss = float("inf")
