@@ -15,7 +15,10 @@ Usage
 
 from pathlib import Path
 
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import numpy as np
 import polars as pl
 import seaborn as sns
 
@@ -417,6 +420,83 @@ def accuracy_vs_mono_layers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Training loss curves — Joint Dual-SIM
+# ---------------------------------------------------------------------------
+
+
+def loss_curves_dual_layers() -> None:
+    """Training loss curves — Joint Dual-SIM.
+
+    Grid: rows = alignment strategy (Linear / PPFE),
+          cols = M_int,
+          color = SIM depth L (averaged across seeds).
+    """
+    df = _load_parquet_glob("dual_layers/*.parquet")
+    if df is None:
+        print("No layers results found.")
+        return
+
+    df = df.filter(pl.col("strategy").is_in(STRATEGIES))
+    if df.is_empty():
+        print("No dual_layers loss data found.")
+        return
+
+    m_ints = sorted(df["M_int"].unique().to_list())
+    L_values = sorted(df["L"].unique().to_list())
+
+    n_rows = len(STRATEGIES)
+    n_cols = len(m_ints)
+
+    cmap = cm.viridis
+    norm = mcolors.Normalize(vmin=min(L_values), vmax=max(L_values))
+
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(5 * n_cols, 4 * n_rows),
+        sharey=False,
+        sharex=True,
+        squeeze=False,
+        layout="constrained",
+    )
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            sub = df.filter((pl.col("strategy") == strategy) & (pl.col("M_int") == m_int))
+
+            for L in L_values:
+                rows = sub.filter(pl.col("L") == L)
+                if rows.is_empty():
+                    continue
+                histories = [list(h) for h in rows["loss_history"]]
+                avg = np.mean(np.array(histories), axis=0)
+                ax.plot(
+                    np.arange(len(avg)),
+                    avg,
+                    color=cmap(norm(L)),
+                    linewidth=0.9,
+                    alpha=0.85,
+                )
+
+            ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\nLoss")
+            if r == n_rows - 1:
+                ax.set_xlabel("Iteration")
+
+    cbar_ticks = [L for L in L_values if L in (1, 5, 10, 15, 20, 25)]
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, orientation="vertical", fraction=0.015, pad=0.02)
+    cbar.set_label(r"SIM Layers $L$")
+    cbar.set_ticks(cbar_ticks)
+
+    fig.suptitle("Training Loss — Joint Dual-SIM")
+    _save("LossCurves_DualLayers")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -429,6 +509,7 @@ def main() -> None:
     accuracy_vs_disjoint_layers()
     accuracy_vs_thickness()
     accuracy_vs_mono_layers()
+    loss_curves_dual_layers()
 
     print(f"\n All plots saved to {IMG_PATH}")
 

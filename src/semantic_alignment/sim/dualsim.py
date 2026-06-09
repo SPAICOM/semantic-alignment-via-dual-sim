@@ -493,10 +493,11 @@ class DualSIMoptimizerTorch(nn.Module):
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
-        Minimises ``‖β̂ Ẑ − A‖²_F`` where ``Ẑ = Z / ‖Z‖_F`` and
+        Minimises ``‖β̂ Ẑ − A‖²_F / (n·m)`` where ``Ẑ = Z / ‖Z‖_F`` and
         ``β̂ = ⟨Ẑ, A⟩_F``.  Normalising by the Frobenius norm keeps the
         gradient scale depth-independent (avoids β explosion for deep cascades
-        where ``‖Z‖_F → 0``).
+        where ``‖Z‖_F → 0``); dividing by ``n·m`` makes the loss scale
+        consistent with :class:`MonoSIMoptimizerTorch`.
 
         Uses Adam with a linear warm-up followed by cosine annealing.  RX
         phases are updated ``rx_steps_per_tx`` times per TX step.  Best
@@ -526,7 +527,7 @@ class DualSIMoptimizerTorch(nn.Module):
         Returns
         -------
         list of float
-            Per-iteration loss values ``‖β̂ Ẑ − A‖²_F``.
+            Per-iteration loss values ``‖β̂ Ẑ − A‖²_F / (n·m)``.
         """
         # header printed by the calling experiment_runner after accuracy evaluation
 
@@ -564,7 +565,9 @@ class DualSIMoptimizerTorch(nn.Module):
             Z_hat = Z / Z_norm
             # Optimal scalar alignment: β̂ = ⟨Z̃, A⟩ / ‖Z̃‖² (Frobenius inner product)
             beta_hat = torch.sum(torch.conj(Z_hat) * A_torch)
-            loss_J = torch.norm(beta_hat * Z_hat - A_torch, p="fro") ** 2
+            loss_J = torch.norm(beta_hat * Z_hat - A_torch, p="fro") ** 2 / (
+                A_torch.shape[0] * A_torch.shape[1]
+            )
             loss_J.backward()
             nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
