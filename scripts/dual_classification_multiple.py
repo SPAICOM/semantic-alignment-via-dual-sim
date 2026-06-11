@@ -189,6 +189,10 @@ def _setup(cfg: DictConfig):
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
+    gpu = cfg.training.get("gpu", None)
+    if gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
     exp = cfg.experiment
     exp_name = exp.name
     print(

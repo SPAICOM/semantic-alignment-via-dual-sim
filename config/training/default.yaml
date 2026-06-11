@@ -16,3 +16,6 @@ warmup_frac: 0.05   # fraction of max_iters at constant LR before cosine decay (
 # Gradient clipping and alternating steps (dual SIM only)
 clip_value: 1.0
 rx_steps_per_tx: 2
+
+# GPU index to use (null = let PyTorch pick, integer = sets CUDA_VISIBLE_DEVICES)
+gpu: null

@@ -44,6 +44,10 @@ from semantic_alignment.utils.utils import (
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
+    gpu = cfg.training.get("gpu", None)
+    if gpu is not None:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+
     exp = cfg.experiment
     use_channel = bool(exp.get("use_channel", False))
     snr = exp.get("snr", None)
