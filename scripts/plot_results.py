@@ -420,6 +420,192 @@ def accuracy_vs_mono_layers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Architecture comparison — Layers (M_int = 32×32)
+# ---------------------------------------------------------------------------
+
+
+def arch_comparison_layers() -> None:
+    """Accuracy vs $L$ — Joint vs Disjoint vs Mono, M_int=32×32, both strategies."""
+    M_FILTER = "32x32"
+
+    frames = {}
+    for key, pattern, arch_label in [
+        ("joint", "dual_layers/*.parquet", "Joint"),
+        ("disjoint", "disjoint_layers/*.parquet", "Disjoint"),
+        ("mono", "mono/*.parquet", "Mono"),
+    ]:
+        df = _load_parquet_glob(pattern)
+        if df is None:
+            continue
+        df = df.filter(
+            pl.col("strategy").is_in(STRATEGIES) & (pl.col("M_int") == M_FILTER)
+        ).with_columns(pl.lit(arch_label).alias("Architecture"))
+        if not df.is_empty():
+            frames[key] = df
+
+    if not frames:
+        print("No layers data found for architecture comparison.")
+        return
+
+    acc_col = "sim_accuracy_probe"
+    df_all = pl.concat(
+        [
+            f.select(
+                [
+                    "L",
+                    "strategy",
+                    "Architecture",
+                    acc_col,
+                    "no_mismatch_probe",
+                    "no_mismatch_neural",
+                ]
+            )
+            for f in frames.values()
+        ],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+
+    ticks = df_all["L"].unique().sort().to_list()
+
+    ax = sns.lineplot(
+        df_all.to_pandas(),
+        x="L",
+        y="accuracy",
+        hue="Architecture",
+        style="strategy",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df_all)
+
+    handles, labels = ax.get_legend_handles_labels()
+    arch_labels = sorted(df_all["Architecture"].unique().to_list())
+    strat_labels = sorted(df_all["strategy"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        arch_labels, "Architecture", ncol=3, loc="upper center", bbox_to_anchor=(0.37, 0.18)
+    )
+    leg2 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg3 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+    ax.add_artist(leg3)
+
+    plt.xlabel(r"SIM Layers $L$")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("ArchComparison_Layers_M32")
+
+
+# ---------------------------------------------------------------------------
+# Architecture comparison — SNR (M_int = 32×32)
+# ---------------------------------------------------------------------------
+
+
+def arch_comparison_snr() -> None:
+    """Accuracy vs SNR — Joint vs Disjoint vs Mono, M_int=32×32, both strategies."""
+    M_FILTER = "32x32"
+
+    frames = {}
+    for key, pattern, arch_label in [
+        ("joint", "dual_snr/*.parquet", "Joint"),
+        ("disjoint", "disjoint_snr/*.parquet", "Disjoint"),
+        ("mono", "mono_channel/*.parquet", "Mono"),
+    ]:
+        df = _load_parquet_glob(pattern)
+        if df is None:
+            continue
+        df = df.filter(
+            pl.col("strategy").is_in(STRATEGIES)
+            & (pl.col("M_int") == M_FILTER)
+            & pl.col("snr").is_not_null()
+        ).with_columns(pl.lit(arch_label).alias("Architecture"))
+        if not df.is_empty():
+            frames[key] = df
+
+    if not frames:
+        print("No SNR data found for architecture comparison.")
+        return
+
+    acc_col = "sim_accuracy_probe"
+    df_all = pl.concat(
+        [
+            f.select(
+                [
+                    "snr",
+                    "strategy",
+                    "Architecture",
+                    acc_col,
+                    "no_mismatch_probe",
+                    "no_mismatch_neural",
+                ]
+            )
+            for f in frames.values()
+        ],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+
+    ticks = df_all["snr"].unique().sort().to_list()
+
+    ax = sns.lineplot(
+        df_all.to_pandas(),
+        x="snr",
+        y="accuracy",
+        hue="Architecture",
+        style="strategy",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df_all)
+
+    handles, labels = ax.get_legend_handles_labels()
+    arch_labels = sorted(df_all["Architecture"].unique().to_list())
+    strat_labels = sorted(df_all["strategy"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        arch_labels, "Architecture", ncol=3, loc="upper center", bbox_to_anchor=(0.16, 0.88)
+    )
+    leg2 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg3 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+    ax.add_artist(leg3)
+
+    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("ArchComparison_SNR_M32")
+
+
+# ---------------------------------------------------------------------------
 # Training loss curves — Joint Dual-SIM
 # ---------------------------------------------------------------------------
 
@@ -510,6 +696,8 @@ def main() -> None:
     accuracy_vs_thickness()
     accuracy_vs_mono_layers()
     loss_curves_dual_layers()
+    arch_comparison_layers()
+    arch_comparison_snr()
 
     print(f"\n All plots saved to {IMG_PATH}")
 

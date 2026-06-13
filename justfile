@@ -51,9 +51,13 @@ run *ARGS: train-clf
 #   just run-mono                             # full layers sweep
 #   just run-mono alignment=linear
 #   just run-mono experiment.use_channel=true
+#   just run-mono-snr                         # SNR sweep with MIMO channel
 
 run-mono *ARGS: train-clf
     uv run python scripts/mono_sim.py --config-name config_mono_layers {{ARGS}}
+
+run-mono-snr *ARGS: train-clf
+    uv run python scripts/mono_sim.py --config-name config_mono_snr {{ARGS}}
 
 # ── Neural classifier ─────────────────────────────────────────────────────────
 # Train one MLP per (dataset, rx_enc, seed) and save to models/classifiers/.
