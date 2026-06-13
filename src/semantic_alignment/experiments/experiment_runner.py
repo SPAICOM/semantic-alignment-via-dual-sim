@@ -33,15 +33,8 @@ from semantic_alignment.evaluation.inference import (
     run_evaluation_disjoint_fixed,
     run_evaluation_mono_channel,
 )
-from semantic_alignment.evaluation.linear_probe import clf_predict
 from semantic_alignment.sim.dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
-from semantic_alignment.utils.utils import (
-    a_inv_times_b,
-    complex_compressed_tensor,
-    decompress_complex_tensor,
-    mmse_svd_equalizer,
-)
 
 RESULTS_DIR = Path("results")
 
@@ -133,49 +126,6 @@ def _build_joint_sim(L, M_int, wavelength, slayer, dx, device):
         verbose=False,
     )
     return DualSIMoptimizerTorch(sim_cpu).to(device)
-
-
-def _eval_mono(G_T, beta, test_loader, L_in, mu_in, L_out, mu_out, clf, device):
-    """Evaluate a TX-only SIM cascade with no channel and no noise.
-
-    Signal model: ``ŷ = L_out · (β G_T x_white) + μ_out``.
-
-    Parameters
-    ----------
-    G_T : torch.Tensor
-        TX cascade matrix.
-    beta : torch.Tensor
-        Optimal scalar alignment coefficient.
-    test_loader : DataLoader
-        Yields ``(z_tx_batch, labels)`` pairs.
-    L_in : torch.Tensor
-        Cholesky factor of TX pilot covariance.
-    mu_in : torch.Tensor
-        TX pilot mean.
-    L_out : torch.Tensor
-        Cholesky factor of RX pilot covariance.
-    mu_out : torch.Tensor
-        RX pilot mean.
-    clf : torch.Tensor or nn.Module
-        Linear probe or neural classifier.
-    device : torch.device
-        Inference device.
-
-    Returns
-    -------
-    float
-        Top-1 accuracy in ``[0, 1]``.
-    """
-    all_preds, all_labels = [], []
-    with torch.no_grad():
-        for x_real, labels in test_loader:
-            x_c = complex_compressed_tensor(x_real.T.to(device), device=device)
-            x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
-            z = (L_out.to(G_T.dtype) @ (beta * (G_T @ x_w))) + mu_out.to(G_T.dtype)
-            y_r = decompress_complex_tensor(z, device=device).T
-            all_preds.extend(clf_predict(clf, y_r).cpu().numpy())
-            all_labels.extend(labels.numpy())
-    return (np.array(all_preds) == np.array(all_labels)).mean()
 
 
 def _pct(v: float | None) -> float | None:
@@ -731,12 +681,14 @@ def run_single_mono_layers_config(
 ) -> None:
     """Run one (L, M_int, seed) job of the Mono-SIM (TX-only) ablation.
 
-    Evaluates a TX-only metasurface with two signal models:
+    The signal always propagates through the MIMO channel ``H`` and is equalized
+    at the receiver with ``G_eq``: ``ŷ = β G_eq(H) · (H · G_T · x_white + noise)``.
+    With ``snr=None`` the equalizer is zero-forcing and no noise is added
+    (infinite SNR); with a finite ``snr`` it is MMSE and AWGN is added.
 
-    - ``use_channel=False``:  ``y = β G_T x_white``  (no channel, no noise)
-    - ``use_channel=True``:   ``y = G_eq(H) · (H · β G_T · x_white + noise)``
-
-    Results are written to ``results/mono/`` or ``results/mono_channel/``.
+    ``use_channel`` only selects the output location: ``False`` (layers sweep,
+    noiseless ZF) writes to ``results/mono/``; ``True`` (SNR sweep, MMSE + AWGN)
+    writes to ``results/mono_channel/``.
 
     Parameters
     ----------
@@ -827,14 +779,32 @@ def run_single_mono_layers_config(
 
     with torch.no_grad():
         G_T_f = tx_model.get_cascade()
-        if use_channel:
-            H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
-            G_mmse, _ = mmse_svd_equalizer(H_torch, snr)
-            G_eff = G_mmse @ H_torch @ G_T_f
-            beta = torch.sum(torch.conj(G_eff) * A_torch) / (
-                torch.sum(torch.conj(G_eff) * G_eff) + 1e-12
-            )
-            mono_probe = run_evaluation_mono_channel(
+        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+        # β is the optimal scalar matching the *bare* SIM cascade to the target A
+        # — the same least-squares projection the SIM minimises during training.
+        # The channel is undone by the RX equalizer, not by β.
+        beta = torch.sum(torch.conj(G_T_f) * A_torch) / (
+            torch.sum(torch.conj(G_T_f) * G_T_f) + 1e-12
+        )
+
+        # Both sweeps run through the channel: the layers sweep uses snr=None
+        # (infinite SNR → zero-forcing, no noise), the SNR sweep uses MMSE + AWGN.
+        mono_probe = run_evaluation_mono_channel(
+            G_T_f,
+            test_loader,
+            H_torch,
+            snr,
+            beta,
+            L_in,
+            mu_in,
+            L_out,
+            mu_out,
+            clf,
+            device,
+        )
+        mono_neural = (
+            run_evaluation_mono_channel(
                 G_T_f,
                 test_loader,
                 H_torch,
@@ -844,38 +814,12 @@ def run_single_mono_layers_config(
                 mu_in,
                 L_out,
                 mu_out,
-                clf,
+                clf_neural,
                 device,
             )
-            mono_neural = (
-                run_evaluation_mono_channel(
-                    G_T_f,
-                    test_loader,
-                    H_torch,
-                    snr,
-                    beta,
-                    L_in,
-                    mu_in,
-                    L_out,
-                    mu_out,
-                    clf_neural,
-                    device,
-                )
-                if clf_neural is not None
-                else None
-            )
-        else:
-            beta = torch.sum(torch.conj(G_T_f) * A_torch) / (
-                torch.sum(torch.conj(G_T_f) * G_T_f) + 1e-12
-            )
-            mono_probe = _eval_mono(
-                G_T_f, beta, test_loader, L_in, mu_in, L_out, mu_out, clf, device
-            )
-            mono_neural = (
-                _eval_mono(G_T_f, beta, test_loader, L_in, mu_in, L_out, mu_out, clf_neural, device)
-                if clf_neural is not None
-                else None
-            )
+            if clf_neural is not None
+            else None
+        )
 
     print(
         f" Mono{'(+H)' if use_channel else ''} L={L} M={M_int} seed={seed}"

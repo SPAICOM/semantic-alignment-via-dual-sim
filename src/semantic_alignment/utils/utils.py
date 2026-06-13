@@ -307,7 +307,9 @@ def mmse_svd_equalizer(channel_matrix: torch.Tensor, snr_db: float = None):
 
     if snr_db is not None:
         snr_linear = 10 ** (snr_db / 10)
-        reg = (1.0 / snr_linear) * torch.eye(Nr, dtype=channel_matrix.dtype)
+        reg = (1.0 / snr_linear) * torch.eye(
+            Nr, dtype=channel_matrix.dtype, device=channel_matrix.device
+        )
         inv_term = torch.inverse(Sigma.H @ Sigma + reg)
         G = inv_term @ (U @ Sigma).H
     else:

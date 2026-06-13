@@ -1,10 +1,15 @@
 """Mono-SIM ablation — No Mismatch + TX-only SIM accuracy in one run.
 
 Mirrors ``dual_classification_multiple.py`` but uses only the TX metasurface.
-Supports two modes via ``experiment.use_channel``:
+The signal always propagates through the MIMO channel ``H`` and is equalized at
+the receiver; ``experiment.snr`` selects the regime:
 
-  False (default): y = β G_T x_w  — no channel, no noise
-  True:            y = G_eq(H) · (H · β G_T · x_w + noise)  — MMSE equalisation
+  snr is None: ŷ = β G_eq(H) · (H · G_T · x_w)          — ZF, infinite SNR (no noise)
+  snr finite:  ŷ = β G_eq(H) · (H · G_T · x_w + noise)  — MMSE equalisation + AWGN
+
+``experiment.use_channel`` only selects the output location: the layers sweep
+(``False`` → ``results/mono/``) runs the noiseless ZF case, the SNR sweep
+(``True`` → ``results/mono_channel/``) runs the MMSE+AWGN case.
 
 Always evaluates with the linear probe.  If a pre-trained neural classifier is
 available (run ``just train-clf`` first), it is also evaluated and the results
@@ -165,7 +170,9 @@ def main(cfg: DictConfig) -> None:
         if clf_neural is not None
         else None
     )
-    H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device) if use_channel else None
+    # Both sweeps propagate through the MIMO channel; the layers sweep equalizes
+    # at infinite SNR (zero-forcing, snr=None), the SNR sweep uses MMSE + AWGN.
+    H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
 
     run_single_mono_layers_config(
         L=exp.L,

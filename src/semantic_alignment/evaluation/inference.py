@@ -26,7 +26,7 @@ from semantic_alignment.utils.utils import (
     awgn,
     complex_compressed_tensor,
     decompress_complex_tensor,
-    mmse_svd_equalizer,
+    get_rx_equalizer,
     sigma_given_snr,
 )
 
@@ -162,7 +162,7 @@ def run_evaluation_mmse(
         Top-1 classification accuracy in ``[0, 1]``.
     """
     all_preds, all_labels = [], []
-    G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
+    G_mmse = get_rx_equalizer(H_mimo, snr_db)
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -205,9 +205,12 @@ def run_evaluation_mono_channel(
     clf,
     device: torch.device,
 ) -> float:
-    """Evaluate a Mono-SIM (TX only) with MIMO channel and MMSE equalization.
+    """Evaluate a Mono-SIM (TX only) with MIMO channel and ZF/MMSE equalization.
 
-    Signal model: ``y = G_mmse(H) · (H · β G_T · x_w + noise)``.
+    Signal model: ``ŷ = β · G_eq(H) · (H · G_T · x_w + noise)`` where ``G_eq`` is
+    a zero-forcing equalizer when ``snr_db`` is ``None`` (infinite SNR, noiseless)
+    and an MMSE equalizer otherwise.  ``G_eq · H ≈ I`` so the channel is undone by
+    the equalizer alone; ``β`` only rescales the recovered alignment.
 
     Parameters
     ----------
@@ -239,9 +242,17 @@ def run_evaluation_mono_channel(
     float
         Top-1 classification accuracy in ``[0, 1]``.
     """
-    G_mmse, _ = mmse_svd_equalizer(H_mimo, snr_db)
-    all_preds, all_labels = [], []
+    # Left-inverse equalizer: ZF when snr_db is None, MMSE otherwise.  Unlike the
+    # SVD precoder/equalizer pair, G_eq alone inverts the channel (G_eq · H ≈ I),
+    # so no transmit precoding is required by the TX-only Mono-SIM.
+    G_eq = get_rx_equalizer(H_mimo, snr_db)
 
+    if snr_db is not None:
+        snr_linear = 10 ** (snr_db / 10)
+        H_pinv = torch.linalg.pinv(H_mimo)
+        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
+
+    all_preds, all_labels = [], []
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
@@ -249,17 +260,22 @@ def run_evaluation_mono_channel(
         x_c = complex_compressed_tensor(x_real_batch.T, device=device)
         x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
 
-        y_signal = H_mimo @ (beta_opt * (G_T @ x_w))
+        # TX SIM cascade then propagation through the MIMO channel.
+        y = H_mimo @ (G_T @ x_w)
 
+        # AWGN scaled to the received signal power, only when SNR is finite.
         if snr_db is not None:
-            sigma_v = sigma_given_snr(snr_db, y_signal)
-            noise = awgn(sigma_v, y_signal.shape, device=device)
-            y_received = y_signal + noise
-        else:
-            y_received = y_signal
+            n = y.shape[1]
+            sigma = torch.sqrt(
+                (torch.trace(y @ y.H) / n) / (snr_linear * pinv_trace)
+            ).real.item()
+            y = y + awgn(sigma, y.shape, device=device)
 
-        y_eq = G_mmse @ y_received
-        z = (L_out.to(G_T.dtype) @ y_eq) + mu_out.to(G_T.dtype)
+        # Channel equalization, then the optimal scalar β (applied at the RX).
+        y = G_eq @ y
+        y = beta_opt * y
+
+        z = (L_out.to(G_T.dtype) @ y) + mu_out.to(G_T.dtype)
         y_hat = decompress_complex_tensor(z, device=device).T
 
         preds = clf_predict(clf, y_hat)
@@ -285,8 +301,9 @@ def run_evaluation_disjoint_fixed(
 ) -> float:
     """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.
 
-    Signal model: ``y = β (G_R H G_T) x_w + noise``.  Both ``G_T`` and ``G_R``
-    are computed once before the loop and held fixed.
+    Signal model: ``ŷ = β · G_R · (H G_T x_w + noise)``.  The AWGN is injected at
+    the receive antennas (between the channel and the RX SIM), so the RX cascade
+    ``G_R`` filters it.  Both ``G_T`` and ``G_R`` are computed once and held fixed.
 
     Parameters
     ----------
@@ -327,26 +344,33 @@ def run_evaluation_disjoint_fixed(
     with torch.no_grad():
         G_T = tx_model.get_cascade()
         G_R = rx_model.get_cascade()
-        Z_cascade = G_R @ H_mimo @ G_T
+
+    if snr_db is not None:
+        snr_linear = 10 ** (snr_db / 10)
+        H_pinv = torch.linalg.pinv(H_mimo)
+        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(Z_cascade.dtype)
+        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        y_signal = Z_cascade @ x_white
-        y_scaled = beta_global * y_signal
-
+        # TX SIM + channel → receive antennas.  AWGN enters here, *before* the RX
+        # SIM, so G_R filters the noise as a physical receive metasurface would.
+        y_ant = H_mimo @ (G_T @ x_white)
         if snr_db is not None:
-            sigma_v = sigma_given_snr(snr_db, y_scaled)
-            noise = awgn(sigma_v, y_scaled.shape, device=device)
-            y_received = y_scaled + noise
-        else:
-            y_received = y_scaled
+            n = y_ant.shape[1]
+            sigma = torch.sqrt(
+                (torch.trace(y_ant @ y_ant.H) / n) / (snr_linear * pinv_trace)
+            ).real.item()
+            y_ant = y_ant + awgn(sigma, y_ant.shape, device=device)
 
-        z_hat = (L_out @ y_received) + mu_out
+        # RX SIM equalizes the noisy antenna signal, then the global scalar β.
+        y = beta_global * (G_R @ y_ant)
+
+        z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)

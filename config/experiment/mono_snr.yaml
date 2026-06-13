@@ -1,4 +1,4 @@
-name: mono_layers
+name: mono_snr
 L: 10
 M_int: 32
 use_channel: true
