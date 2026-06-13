@@ -18,6 +18,11 @@ all: format check
 # hydra.mode=MULTIRUN so no -m flag is needed.
 # Sweep values are defined in each config file.
 #
+# Per-architecture aggregates run every sweep for that case:
+#   just joint        # = run-multi + run-snr + run-slayer
+#   just disjoint     # = run-disjoint + run-disjoint-snr
+#   just mono         # = run-mono + run-mono-snr
+#
 # Examples:
 #   just run-multi                            # layers sweep (PPFE, cifar10)
 #   just run-multi alignment=linear
@@ -42,12 +47,19 @@ run-disjoint *ARGS: train-clf
 run-disjoint-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_snr {{ARGS}}
 
+# Run every joint Dual-SIM sweep: layers + SNR + slayer
+joint: run-multi run-snr run-slayer
+
+# Run every disjoint Dual-SIM sweep: layers + SNR
+disjoint: run-disjoint run-disjoint-snr
+
 # Single run without multirun (useful for quick tests)
 run *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py {{ARGS}}
 
 # ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
 # Examples:
+#   just mono                                 # both sweeps (layers + SNR)
 #   just run-mono                             # full layers sweep
 #   just run-mono alignment=linear
 #   just run-mono experiment.use_channel=true
@@ -58,6 +70,9 @@ run-mono *ARGS: train-clf
 
 run-mono-snr *ARGS: train-clf
     uv run python scripts/mono_sim.py --config-name config_mono_snr {{ARGS}}
+
+# Run every Mono-SIM sweep: layers + SNR
+mono: run-mono run-mono-snr
 
 # ── Neural classifier ─────────────────────────────────────────────────────────
 # Train one MLP per (dataset, rx_enc, seed) and save to models/classifiers/.
