@@ -447,7 +447,7 @@ def arch_comparison_layers() -> None:
         print("No layers data found for architecture comparison.")
         return
 
-    acc_col = "sim_accuracy_probe"
+    acc_col = "sim_accuracy_neural"
     df_all = pl.concat(
         [
             f.select(
@@ -458,6 +458,8 @@ def arch_comparison_layers() -> None:
                     acc_col,
                     "no_mismatch_probe",
                     "no_mismatch_neural",
+                    "original_probe",
+                    "original_neural",
                 ]
             )
             for f in frames.values()
@@ -541,7 +543,7 @@ def arch_comparison_snr() -> None:
         print("No SNR data found for architecture comparison.")
         return
 
-    acc_col = "sim_accuracy_probe"
+    acc_col = "sim_accuracy_neural"
     df_all = pl.concat(
         [
             f.select(
@@ -552,6 +554,8 @@ def arch_comparison_snr() -> None:
                     acc_col,
                     "no_mismatch_probe",
                     "no_mismatch_neural",
+                    "original_probe",
+                    "original_neural",
                 ]
             )
             for f in frames.values()
