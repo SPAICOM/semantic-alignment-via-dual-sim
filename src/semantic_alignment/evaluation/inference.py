@@ -46,7 +46,9 @@ def run_evaluation(
 ) -> float:
     """Evaluate semantic accuracy for the joint Dual-SIM architecture.
 
-    Signal model: ``y = β Z x_white + noise``,  ``Z = G_R · H · G_T``.
+    Signal model: ``ŷ = β · G_R · (H G_T x_white + noise)``.  The AWGN is injected
+    at the receive antennas (between the channel and the RX SIM), so the RX cascade
+    ``G_R`` filters it, exactly as in the disjoint architecture.
 
     Parameters
     ----------
@@ -82,36 +84,40 @@ def run_evaluation(
     all_preds, all_labels = [], []
 
     with torch.no_grad():
-        Z_cascade, _ = model.get_effective_cascade(H_mimo)
+        G_T = model.get_TX_cascade()
+        G_R = model.get_RX_cascade()
+
+    if snr_db is not None:
+        snr_linear = 10 ** (snr_db / 10)
+        H_pinv = torch.linalg.pinv(H_mimo)
+        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(Z_cascade.dtype)
+        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        y_signal = Z_cascade @ x_white
-        y_scaled = beta_opt * y_signal
-
+        # TX SIM + channel → receive antennas.  AWGN enters here, before the RX
+        # SIM, so G_R filters the noise as a physical receive metasurface would.
+        y_ant = H_mimo @ (G_T @ x_white)
         if snr_db is not None:
-            sigma_v = sigma_given_snr(snr_db, y_scaled)
-            noise = awgn(sigma_v, y_scaled.shape, device=device)
-            y_received = y_scaled + noise
-        else:
-            y_received = y_scaled
+            n = y_ant.shape[1]
+            sigma = torch.sqrt(
+                (torch.trace(y_ant @ y_ant.H) / n) / (snr_linear * pinv_trace)
+            ).real.item()
+            y_ant = y_ant + awgn(sigma, y_ant.shape, device=device)
 
-        z_hat = (L_out @ y_received) + mu_out
+        # RX SIM equalizes the noisy antenna signal, then the global scalar β.
+        y = beta_opt * (G_R @ y_ant)
+
+        z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())
         all_labels.extend(labels_batch.cpu().numpy())
-
-    if snr_db is not None:
-        p_signal = torch.mean(torch.abs(y_scaled) ** 2)
-        p_noise = torch.mean(torch.abs(noise) ** 2)
-        print(f"Target SNR: {snr_db} dB | Test SNR: {10 * torch.log10(p_signal / p_noise):.2f} dB")
 
     return (np.array(all_preds) == np.array(all_labels)).mean()
 
