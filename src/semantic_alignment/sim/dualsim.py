@@ -490,10 +490,14 @@ class DualSIMoptimizerTorch(nn.Module):
         rx_steps_per_tx: int = 2,
         optimizer: str = "adam",
         scheduler: str = "none",
+        lambda_noise: float = 0.0,
+        snr: float | None = None,
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
-        Minimises ``‖β Z − A‖²_F / (n·m)`` where
+        Minimises ``‖β Z − A‖²_F / (n·m) + λ ‖G_R‖²_F`` where the noise
+        regularization term ``λ ‖G_R‖²_F`` (eq. 14 of the paper) upper-bounds
+        the post-SIM noise covariance trace and is applied only to the RX step.
         ``β = ⟨Z, A⟩_F / ‖Z‖²_F`` is the closed-form optimal scalar computed
         without gradient (``torch.no_grad``), so the loss gradient flows only
         through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
@@ -525,6 +529,13 @@ class DualSIMoptimizerTorch(nn.Module):
             ``"none"`` — fixed LR throughout (default);
             ``"cosine"`` — constant LR for the first ``warmup_frac`` iterations,
             then cosine annealing down to ``lr * 1e-3``.
+        lambda_noise : float, optional
+            Scale λ₀ for the RX noise-amplification regularizer (eq. 14).
+            The effective weight is ``λ_eff = λ₀ / SNR_linear`` when ``snr``
+            is finite, and ``0`` when ``snr`` is ``None`` (infinite SNR).
+        snr : float or None, optional
+            Operating SNR in dB used to compute the effective regularization
+            weight.  ``None`` means noiseless / infinite SNR → λ_eff = 0.
 
         Returns
         -------
@@ -537,6 +548,9 @@ class DualSIMoptimizerTorch(nn.Module):
         device = next(self.parameters()).device
         A_torch = A_torch.to(device)
         H_torch = H_torch.to(device)
+
+        # λ_eff = λ₀ / SNR_linear for finite SNR, 0 for infinite SNR (eq. 14)
+        lam_eff = 0.0 if snr is None else lambda_noise / (10 ** (snr / 10))
 
         if optimizer == "sgd":
             opt_T = optim.SGD(self.xi_T.parameters(), lr=lr)
@@ -562,7 +576,7 @@ class DualSIMoptimizerTorch(nn.Module):
             sched_T = _make_schedulers(opt_T)
             sched_R = _make_schedulers(opt_R)
 
-        def _step_side(opt, params):
+        def _step_side(opt, params, lam=0.0):
             with torch.no_grad():
                 Z_tmp, _ = self.get_effective_cascade(H_torch)
                 Z_norm = torch.norm(Z_tmp, p="fro") + 1e-12
@@ -573,10 +587,13 @@ class DualSIMoptimizerTorch(nn.Module):
                 )
 
             opt.zero_grad()
-            Z, _ = self.get_effective_cascade(H_torch)
+            Z, GR = self.get_effective_cascade(H_torch)
             loss_J = torch.norm(beta_k * Z - A_torch, p="fro") ** 2 / (
                 A_torch.shape[0] * A_torch.shape[1]
             )
+            # Noise regularization on G_R only (eq. 14): λ ‖G_R‖²_F
+            if lam > 0.0:
+                loss_J = loss_J + lam * torch.norm(GR, p="fro") ** 2
             loss_J.backward()
             nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
@@ -595,7 +612,9 @@ class DualSIMoptimizerTorch(nn.Module):
             beta_k = torch.tensor(1.0 + 0j, device=device)
             Z_norm_k = torch.tensor(1.0, device=device)
             for _ in range(rx_steps_per_tx):
-                current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
+                current_loss, beta_k, Z_norm_k = _step_side(
+                    opt_R, list(self.xi_R.parameters()), lam=lam_eff
+                )
 
             if scheduler == "cosine":
                 sched_T.step()

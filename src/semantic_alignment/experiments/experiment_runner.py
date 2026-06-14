@@ -193,6 +193,7 @@ def run_single_layers_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
+    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (L, M_int, seed) job of the layers sweep for the joint Dual-SIM.
 
@@ -276,6 +277,8 @@ def run_single_layers_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
+        lambda_noise=lambda_noise,
+        snr=None,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -351,6 +354,7 @@ def run_single_snr_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
+    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (M_int, snr, seed) job of the SNR sweep for the joint Dual-SIM.
 
@@ -425,6 +429,8 @@ def run_single_snr_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
+        lambda_noise=lambda_noise,
+        snr=snr,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -501,6 +507,7 @@ def run_single_slayer_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
+    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (s_tx, s_rx, seed) job of the layer-spacing sweep.
 
@@ -597,6 +604,8 @@ def run_single_slayer_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
+        lambda_noise=lambda_noise,
+        snr=None,
     )
 
     with torch.no_grad():
@@ -1294,6 +1303,7 @@ def run_single_rx_depth(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
+    lambda_noise: float = 0.0,
 ) -> None:
     """Study the effect of asymmetric TX/RX SIM depth on alignment quality.
 
@@ -1379,6 +1389,8 @@ def run_single_rx_depth(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
+        lambda_noise=lambda_noise,
+        snr=None,
     )
 
     with torch.no_grad():

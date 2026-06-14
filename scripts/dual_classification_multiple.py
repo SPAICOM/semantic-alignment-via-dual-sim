@@ -232,6 +232,7 @@ def _setup(cfg: DictConfig):
         optimizer=cfg.training.get("optimizer", "adam"),
         scheduler=cfg.training.get("scheduler", "none"),
         warmup_frac=float(cfg.training.get("warmup_frac", 0.05)),
+        lambda_noise=float(cfg.training.get("lambda_noise", 0.0)),
     )
 
 
