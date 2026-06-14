@@ -419,6 +419,71 @@ def accuracy_vs_mono_layers() -> None:
     _save("AccuracyVsSIMLayers_Mono")
 
 
+def accuracy_vs_mono_snr() -> None:
+    """Accuracy vs SNR [dB] — Mono-SIM (TX-only) over the MIMO channel."""
+    df = _load_parquet_glob("mono_channel/*.parquet")
+    if df is None:
+        print("No mono-SIM SNR results found.")
+        return
+
+    df = (
+        df.filter(pl.col("strategy").is_in(STRATEGIES) & pl.col("snr").is_not_null())
+        .with_columns(
+            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("M_int").alias("Intermediate Atoms"),
+        )
+        .sort(["Intermediate Atoms", "strategy", "snr"])
+    )
+    if df.is_empty():
+        print("No mono-SIM (channel) results found.")
+        return
+
+    ticks = df["snr"].unique().sort().to_list()
+
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="snr",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        style="strategy",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.16, 0.88)
+    )
+    leg2 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg3 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+    ax.add_artist(leg3)
+
+    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSNR_Mono")
+
+
 # ---------------------------------------------------------------------------
 # Architecture comparison — Layers (M_int = 32×32)
 # ---------------------------------------------------------------------------
@@ -699,6 +764,7 @@ def main() -> None:
     accuracy_vs_disjoint_layers()
     accuracy_vs_thickness()
     accuracy_vs_mono_layers()
+    accuracy_vs_mono_snr()
     loss_curves_dual_layers()
     arch_comparison_layers()
     arch_comparison_snr()
