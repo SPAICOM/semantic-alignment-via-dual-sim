@@ -24,6 +24,7 @@ Examples
 """
 
 import os
+from pathlib import Path
 
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import random
@@ -47,6 +48,28 @@ from semantic_alignment.utils.utils import (
 )
 
 
+def _out_path(cfg: DictConfig) -> Path:
+    """Return the output Parquet path for this job from cfg alone — no data needed."""
+    exp = cfg.experiment
+    use_channel = bool(exp.get("use_channel", False))
+    snr = exp.get("snr", None)
+    snr_val = None if str(snr) == "null" else snr
+    snr_tag = "inf" if snr_val is None else str(snr_val)
+    strategy = cfg.alignment.type
+    seed = cfg.training.seed
+    tx = cfg.data.tx_enc
+    rx = cfg.data.rx_enc
+    M = exp.M_int
+    L = exp.L
+
+    subdir = "mono_channel" if use_channel else "mono"
+    filename = f"{strategy}_seed{seed}_L{L}_M{M}x{M}"
+    if use_channel:
+        filename += f"_snr{snr_tag}"
+    filename += f"_{tx}_{rx}"
+    return Path("results") / subdir / f"{filename}.parquet"
+
+
 @hydra.main(version_base=None, config_path="../config", config_name="config")
 def main(cfg: DictConfig) -> None:
     gpu = cfg.training.get("gpu", None)
@@ -57,6 +80,10 @@ def main(cfg: DictConfig) -> None:
     use_channel = bool(exp.get("use_channel", False))
     snr = exp.get("snr", None)
     snr = None if str(snr) == "null" else snr
+
+    if _out_path(cfg).exists():
+        print(f" Already done: {_out_path(cfg).name} — skipping.")
+        return
 
     print(
         f" seed={cfg.training.seed} | Mono-SIM{'(+H)' if use_channel else ''} | "

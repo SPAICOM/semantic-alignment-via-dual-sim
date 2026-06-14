@@ -21,6 +21,7 @@ Examples
 """
 
 import os
+from pathlib import Path
 
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import random
@@ -48,6 +49,53 @@ from semantic_alignment.utils.utils import (
     complex_gaussian_matrix,
     prewhiten,
 )
+
+_RESULTS = Path("results")
+
+
+def _snr_tag(snr) -> str:
+    return "inf" if str(snr) == "null" else str(snr)
+
+
+def _out_path(cfg: DictConfig) -> Path | None:
+    """Return the output Parquet path for this job from cfg alone — no data needed."""
+    exp = cfg.experiment
+    name = exp.name
+    seed = cfg.training.seed
+    strategy = cfg.alignment.type
+    tx = cfg.data.tx_enc
+    rx = cfg.data.rx_enc
+    M = exp.M_int
+
+    if name == "layers":
+        return (
+            _RESULTS / "dual_layers" / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+        )
+    if name == "snr":
+        return (
+            _RESULTS
+            / "dual_snr"
+            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+        )
+    if name == "slayer":
+        return (
+            _RESULTS
+            / "dual_slayer"
+            / f"{strategy}_seed{seed}_stx{exp.s_tx}_srx{exp.s_rx}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_layers":
+        return (
+            _RESULTS
+            / "disjoint_layers"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_snr":
+        return (
+            _RESULTS
+            / "disjoint_snr"
+            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+        )
+    return None
 
 
 def _setup(cfg: DictConfig):
@@ -195,6 +243,12 @@ def main(cfg: DictConfig) -> None:
 
     exp = cfg.experiment
     exp_name = exp.name
+
+    out = _out_path(cfg)
+    if out is not None and out.exists():
+        print(f" Already done: {out.name} — skipping.")
+        return
+
     print(
         f" seed={cfg.training.seed} | exp={exp_name} | "
         f"dataset={cfg.datasets.hf_name} | align={cfg.alignment.type}"
