@@ -58,8 +58,7 @@ def _save(name: str) -> None:
         str(IMG_PATH / f"{name}.pdf"), format="pdf", bbox_inches="tight", bbox_extra_artists=extra
     )
     plt.savefig(str(IMG_PATH / f"{name}.png"), bbox_inches="tight", bbox_extra_artists=extra)
-    plt.clf()
-    plt.cla()
+    plt.close()
     print(f" {name}.pdf / .png")
 
 
@@ -573,29 +572,35 @@ def accuracy_vs_disjoint_csi_layers() -> None:
         x="L",
         y="accuracy",
         hue="Intermediate Atoms",
+        style="strategy",
         markers=True,
         dashes=True,
     )
     baseline_labels = _add_baseline_hlines(df)
     handles, labels = ax.get_legend_handles_labels()
     atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
     leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.37, 0.18)
+    )
+    leg2 = _make_legend(
         baseline_labels,
         "",
         ncol=len(baseline_labels),
         loc="upper center",
         bbox_to_anchor=(0.5, 1.12),
     )
-    leg2 = _make_legend(
+    leg3 = _make_legend(
         atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
+    ax.add_artist(leg3)
 
     plt.xlabel(r"SIM Layers $L$")
     plt.ylabel("Accuracy")
@@ -627,29 +632,35 @@ def accuracy_vs_disjoint_csi_snr() -> None:
         x="snr",
         y="accuracy",
         hue="Intermediate Atoms",
+        style="strategy",
         markers=True,
         dashes=True,
     )
     baseline_labels = _add_baseline_hlines(df)
     handles, labels = ax.get_legend_handles_labels()
     atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
     leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.16, 0.88)
+    )
+    leg2 = _make_legend(
         baseline_labels,
         "",
         ncol=len(baseline_labels),
         loc="upper center",
         bbox_to_anchor=(0.5, 1.12),
     )
-    leg2 = _make_legend(
+    leg3 = _make_legend(
         atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
+    ax.add_artist(leg3)
 
     plt.xlabel(r"Signal-to-Noise Ratio [dB]")
     plt.ylabel("Accuracy")
@@ -685,29 +696,35 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
         x="L",
         y="accuracy",
         hue="Intermediate Atoms",
+        style="strategy",
         markers=True,
         dashes=True,
     )
     baseline_labels = _add_baseline_hlines(df)
     handles, labels = ax.get_legend_handles_labels()
     atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
     leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.37, 0.18)
+    )
+    leg2 = _make_legend(
         baseline_labels,
         "",
         ncol=len(baseline_labels),
         loc="upper center",
         bbox_to_anchor=(0.5, 1.12),
     )
-    leg2 = _make_legend(
+    leg3 = _make_legend(
         atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
+    ax.add_artist(leg3)
 
     plt.xlabel(r"SIM Layers $L$ per SIM (equiv. $2L$ in 2-SIM)")
     plt.ylabel("Accuracy")
@@ -739,29 +756,35 @@ def accuracy_vs_disjoint_4sim_snr() -> None:
         x="snr",
         y="accuracy",
         hue="Intermediate Atoms",
+        style="strategy",
         markers=True,
         dashes=True,
     )
     baseline_labels = _add_baseline_hlines(df)
     handles, labels = ax.get_legend_handles_labels()
     atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
     leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.16, 0.88)
+    )
+    leg2 = _make_legend(
         baseline_labels,
         "",
         ncol=len(baseline_labels),
         loc="upper center",
         bbox_to_anchor=(0.5, 1.12),
     )
-    leg2 = _make_legend(
+    leg3 = _make_legend(
         atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
+    ax.add_artist(leg3)
 
     plt.xlabel(r"Signal-to-Noise Ratio [dB]")
     plt.ylabel("Accuracy")
