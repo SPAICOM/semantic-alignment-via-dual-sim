@@ -59,6 +59,30 @@ class _FixedCascade:
         return self._G
 
 
+def _inter_sim_propagation(
+    n_x: int, n_y: int, slayer: float, dx: float, wavelength: float, device
+) -> torch.Tensor:
+    """Free-space propagation matrix between two identical n_x × n_y apertures.
+
+    Used to model the physical coupling between consecutive SIMs in the 4-SIM
+    architecture.  Computed via Green's function diffraction (L=1 MonoSIM).
+    """
+    tmp = MonoSIMoptimizer(
+        num_layers=1,
+        num_meta_atoms_in_x=n_x,
+        num_meta_atoms_in_y=n_y,
+        num_meta_atoms_out_x=n_x,
+        num_meta_atoms_out_y=n_y,
+        num_meta_atoms_int_x=n_x,
+        num_meta_atoms_int_y=n_y,
+        thickness=slayer,
+        wavelength=wavelength,
+        spacings={"in": dx, "out": dx, "int": dx},
+        side="tx",
+    )
+    return torch.tensor(tmp.W[0], dtype=torch.complex64).to(device)
+
+
 def _save_result(path: Path, row: dict) -> None:
     """Write a single-row result dict to a Parquet file, creating parent dirs.
 
@@ -1683,10 +1707,13 @@ def run_single_disjoint_4sim_layers(
     beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
     beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
 
-    # Compose cascades and wrap for run_evaluation_disjoint_fixed
+    # Inter-SIM free-space propagation matrix (same aperture 24×16=384 on both sides)
+    W_inter = _inter_sim_propagation(24, 16, slayer, dx, wavelength, device)
+
+    # Compose cascades with physical propagation between consecutive SIMs
     with torch.no_grad():
-        G_T_eff = t2_model.get_cascade() @ t1_model.get_cascade()  # 384×192
-        G_R_eff = r1_model.get_cascade() @ r2_model.get_cascade()  # 384×384
+        G_T_eff = t2_model.get_cascade() @ W_inter @ t1_model.get_cascade()  # 384×192
+        G_R_eff = r1_model.get_cascade() @ W_inter @ r2_model.get_cascade()  # 384×384
 
     tx_wrap = _FixedCascade(G_T_eff)
     rx_wrap = _FixedCascade(G_R_eff)
@@ -2063,9 +2090,11 @@ def run_single_disjoint_4sim_snr(
     beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
     beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
 
+    W_inter = _inter_sim_propagation(24, 16, slayer, dx, wavelength, device)
+
     with torch.no_grad():
-        G_T_eff = t2_model.get_cascade() @ t1_model.get_cascade()
-        G_R_eff = r1_model.get_cascade() @ r2_model.get_cascade()
+        G_T_eff = t2_model.get_cascade() @ W_inter @ t1_model.get_cascade()
+        G_R_eff = r1_model.get_cascade() @ W_inter @ r2_model.get_cascade()
 
     tx_wrap = _FixedCascade(G_T_eff)
     rx_wrap = _FixedCascade(G_R_eff)
