@@ -1,0 +1,5 @@
+name: disjoint_4sim_layers
+L: 5
+M_int: 32
+# L layers per SIM (4 SIMs total). Hardware equivalence: L here ≈ 2L in the
+# 2-SIM disjoint case (G_T = G_T2 G_T1 and G_R = G_R1 G_R2 each sum L+L layers).

@@ -46,9 +46,9 @@ def run_evaluation(
 ) -> float:
     """Evaluate semantic accuracy for the joint Dual-SIM architecture.
 
-    Signal model: ``ŷ = β · G_R · (H G_T x_white + noise)``.  The AWGN is injected
-    at the receive antennas (between the channel and the RX SIM), so the RX cascade
-    ``G_R`` filters it, exactly as in the disjoint architecture.
+    Signal model: ``ŷ = β (G_R H G_T x_white + v)``.  AWGN is added after the
+    full cascade (post RX-SIM output); ``σ²`` is scaled to the cascade output
+    power at the given SNR.
 
     Parameters
     ----------
@@ -89,8 +89,6 @@ def run_evaluation(
 
     if snr_db is not None:
         snr_linear = 10 ** (snr_db / 10)
-        H_pinv = torch.linalg.pinv(H_mimo)
-        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -99,18 +97,17 @@ def run_evaluation(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # TX SIM + channel → receive antennas.  AWGN enters here, before the RX
-        # SIM, so G_R filters the noise as a physical receive metasurface would.
-        y_ant = H_mimo @ (G_T @ x_white)
+        # Full cascade G_R H G_T x.  AWGN is added after the RX SIM output,
+        # so the noise model is ỹ = β(G_R H G_T x + v).
+        y_sig = G_R @ (H_mimo @ (G_T @ x_white))
         if snr_db is not None:
-            n = y_ant.shape[1]
-            sigma = torch.sqrt(
-                (torch.trace(y_ant @ y_ant.H) / n) / (snr_linear * pinv_trace)
-            ).real.item()
-            y_ant = y_ant + awgn(sigma, y_ant.shape, device=device)
+            n = y_sig.shape[1]
+            sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
+            y_received = y_sig + awgn(sigma, y_sig.shape, device=device)
+        else:
+            y_received = y_sig
 
-        # RX SIM equalizes the noisy antenna signal, then the global scalar β.
-        y = beta_opt * (G_R @ y_ant)
+        y = beta_opt * y_received
 
         z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
@@ -272,9 +269,7 @@ def run_evaluation_mono_channel(
         # AWGN scaled to the received signal power, only when SNR is finite.
         if snr_db is not None:
             n = y.shape[1]
-            sigma = torch.sqrt(
-                (torch.trace(y @ y.H) / n) / (snr_linear * pinv_trace)
-            ).real.item()
+            sigma = torch.sqrt((torch.trace(y @ y.H) / n) / (snr_linear * pinv_trace)).real.item()
             y = y + awgn(sigma, y.shape, device=device)
 
         # Channel equalization, then the optimal scalar β (applied at the RX).
@@ -307,9 +302,9 @@ def run_evaluation_disjoint_fixed(
 ) -> float:
     """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.
 
-    Signal model: ``ŷ = β · G_R · (H G_T x_w + noise)``.  The AWGN is injected at
-    the receive antennas (between the channel and the RX SIM), so the RX cascade
-    ``G_R`` filters it.  Both ``G_T`` and ``G_R`` are computed once and held fixed.
+    Signal model: ``ŷ = β (G_R H G_T x_w + v)``.  AWGN is added after the full
+    cascade (post RX-SIM output); ``σ²`` is scaled to the cascade output power
+    at the given SNR.  Both ``G_T`` and ``G_R`` are computed once and held fixed.
 
     Parameters
     ----------
@@ -353,8 +348,6 @@ def run_evaluation_disjoint_fixed(
 
     if snr_db is not None:
         snr_linear = 10 ** (snr_db / 10)
-        H_pinv = torch.linalg.pinv(H_mimo)
-        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -363,18 +356,17 @@ def run_evaluation_disjoint_fixed(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # TX SIM + channel → receive antennas.  AWGN enters here, *before* the RX
-        # SIM, so G_R filters the noise as a physical receive metasurface would.
-        y_ant = H_mimo @ (G_T @ x_white)
+        # Full cascade G_R H G_T x.  AWGN is added after the RX SIM output,
+        # so the noise model is ỹ = β(G_R H G_T x + v).
+        y_sig = G_R @ (H_mimo @ (G_T @ x_white))
         if snr_db is not None:
-            n = y_ant.shape[1]
-            sigma = torch.sqrt(
-                (torch.trace(y_ant @ y_ant.H) / n) / (snr_linear * pinv_trace)
-            ).real.item()
-            y_ant = y_ant + awgn(sigma, y_ant.shape, device=device)
+            n = y_sig.shape[1]
+            sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
+            y_received = y_sig + awgn(sigma, y_sig.shape, device=device)
+        else:
+            y_received = y_sig
 
-        # RX SIM equalizes the noisy antenna signal, then the global scalar β.
-        y = beta_global * (G_R @ y_ant)
+        y = beta_global * y_received
 
         z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T

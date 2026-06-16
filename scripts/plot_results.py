@@ -485,26 +485,322 @@ def accuracy_vs_mono_snr() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Accuracy vs SNR — Disjoint standard
+# ---------------------------------------------------------------------------
+
+
+def accuracy_vs_disjoint_snr() -> None:
+    """Accuracy vs SNR [dB] — Disjoint architecture."""
+    df = _load_parquet_glob("disjoint_snr/*.parquet")
+    if df is None:
+        print("No disjoint SNR results found.")
+        return
+
+    df = (
+        df.filter(pl.col("strategy").is_in(STRATEGIES) & pl.col("snr").is_not_null())
+        .with_columns(
+            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
+        )
+        .sort(["Intermediate Atoms", "strategy", "snr"])
+    )
+
+    ticks = df["snr"].unique().sort().to_list()
+
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="snr",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        style="strategy",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    strat_labels = sorted(df["strategy"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.16, 0.88)
+    )
+    leg2 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg3 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+    ax.add_artist(leg3)
+
+    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSNR_Disjoint")
+
+
+# ---------------------------------------------------------------------------
+# Accuracy vs Layers / SNR — Disjoint CSI
+# ---------------------------------------------------------------------------
+
+
+def accuracy_vs_disjoint_csi_layers() -> None:
+    """Accuracy vs $L$ — Disjoint CSI architecture (PPFE only)."""
+    df = _load_parquet_glob("disjoint_csi_layers/*.parquet")
+    if df is None:
+        print("No disjoint CSI layers results found.")
+        return
+
+    df = df.with_columns(
+        (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+        pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
+    ).sort(["Intermediate Atoms", "L"])
+
+    ticks = df["L"].unique().sort().to_list()
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="L",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg2 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+
+    plt.xlabel(r"SIM Layers $L$")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSIMLayers_DisjointCSI")
+
+
+def accuracy_vs_disjoint_csi_snr() -> None:
+    """Accuracy vs SNR [dB] — Disjoint CSI architecture (PPFE only)."""
+    df = _load_parquet_glob("disjoint_csi_snr/*.parquet")
+    if df is None:
+        print("No disjoint CSI SNR results found.")
+        return
+
+    df = (
+        df.filter(pl.col("snr").is_not_null())
+        .with_columns(
+            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
+        )
+        .sort(["Intermediate Atoms", "snr"])
+    )
+
+    ticks = df["snr"].unique().sort().to_list()
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="snr",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg2 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+
+    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSNR_DisjointCSI")
+
+
+# ---------------------------------------------------------------------------
+# Accuracy vs Layers / SNR — Disjoint 4-SIM
+# ---------------------------------------------------------------------------
+
+
+def accuracy_vs_disjoint_4sim_layers() -> None:
+    """Accuracy vs $L$ — Disjoint 4-SIM architecture (PPFE only).
+
+    L is per-SIM depth; hardware equivalent to 2L layers in the 2-SIM case.
+    """
+    df = _load_parquet_glob("disjoint_4sim_layers/*.parquet")
+    if df is None:
+        print("No disjoint 4-SIM layers results found.")
+        return
+
+    df = df.with_columns(
+        (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+        pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
+    ).sort(["Intermediate Atoms", "L"])
+
+    ticks = df["L"].unique().sort().to_list()
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="L",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg2 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+
+    plt.xlabel(r"SIM Layers $L$ per SIM (equiv. $2L$ in 2-SIM)")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSIMLayers_Disjoint4SIM")
+
+
+def accuracy_vs_disjoint_4sim_snr() -> None:
+    """Accuracy vs SNR [dB] — Disjoint 4-SIM architecture (PPFE only)."""
+    df = _load_parquet_glob("disjoint_4sim_snr/*.parquet")
+    if df is None:
+        print("No disjoint 4-SIM SNR results found.")
+        return
+
+    df = (
+        df.filter(pl.col("snr").is_not_null())
+        .with_columns(
+            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
+        )
+        .sort(["Intermediate Atoms", "snr"])
+    )
+
+    ticks = df["snr"].unique().sort().to_list()
+    ax = sns.lineplot(
+        df.to_pandas(),
+        x="snr",
+        y="accuracy",
+        hue="Intermediate Atoms",
+        markers=True,
+        dashes=True,
+    )
+    baseline_labels = _add_baseline_hlines(df)
+    handles, labels = ax.get_legend_handles_labels()
+    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    leg2 = _make_legend(
+        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+
+    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
+    plt.ylabel("Accuracy")
+    plt.xticks(ticks, labels=ticks)
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    _save("AccuracyVsSNR_Disjoint4SIM")
+
+
+# ---------------------------------------------------------------------------
 # Architecture comparison — Layers (M_int = 32×32)
 # ---------------------------------------------------------------------------
 
 
 def arch_comparison_layers() -> None:
-    """Accuracy vs $L$ — Joint vs Disjoint vs Mono, M_int=32×32, both strategies."""
+    """Accuracy vs $L$ — all architectures, M_int=32×32.
+
+    4-SIM L values are multiplied by 2 to match hardware-equivalent depth
+    (each 4-SIM run uses L layers per SIM = 2L total layers per side).
+    """
     M_FILTER = "32x32"
 
     frames = {}
     for key, pattern, arch_label in [
         ("joint", "dual_layers/*.parquet", "Joint"),
         ("disjoint", "disjoint_layers/*.parquet", "Disjoint"),
+        ("disjoint_csi", "disjoint_csi_layers/*.parquet", "Disjoint CSI"),
+        ("disjoint_4sim", "disjoint_4sim_layers/*.parquet", "Disjoint 4-SIM"),
         ("mono", "mono/*.parquet", "Mono"),
     ]:
         df = _load_parquet_glob(pattern)
         if df is None:
             continue
-        df = df.filter(
-            pl.col("strategy").is_in(STRATEGIES) & (pl.col("M_int") == M_FILTER)
-        ).with_columns(pl.lit(arch_label).alias("Architecture"))
+        df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
+            pl.lit(arch_label).alias("Architecture")
+        )
+        # Normalise 4-SIM L to hardware-equivalent total depth (×2)
+        if key == "disjoint_4sim":
+            df = df.with_columns((pl.col("L") * 2).alias("L"))
         if not df.is_empty():
             frames[key] = df
 
@@ -570,7 +866,7 @@ def arch_comparison_layers() -> None:
     ax.add_artist(leg2)
     ax.add_artist(leg3)
 
-    plt.xlabel(r"SIM Layers $L$")
+    plt.xlabel(r"Equivalent SIM Layers $L$ (4-SIM: $2 \times L_{\mathrm{per\,SIM}}$)")
     plt.ylabel("Accuracy")
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
@@ -584,23 +880,23 @@ def arch_comparison_layers() -> None:
 
 
 def arch_comparison_snr() -> None:
-    """Accuracy vs SNR — Joint vs Disjoint vs Mono, M_int=32×32, both strategies."""
+    """Accuracy vs SNR — all architectures, M_int=32×32."""
     M_FILTER = "32x32"
 
     frames = {}
     for key, pattern, arch_label in [
         ("joint", "dual_snr/*.parquet", "Joint"),
         ("disjoint", "disjoint_snr/*.parquet", "Disjoint"),
+        ("disjoint_csi", "disjoint_csi_snr/*.parquet", "Disjoint CSI"),
+        ("disjoint_4sim", "disjoint_4sim_snr/*.parquet", "Disjoint 4-SIM"),
         ("mono", "mono_channel/*.parquet", "Mono"),
     ]:
         df = _load_parquet_glob(pattern)
         if df is None:
             continue
-        df = df.filter(
-            pl.col("strategy").is_in(STRATEGIES)
-            & (pl.col("M_int") == M_FILTER)
-            & pl.col("snr").is_not_null()
-        ).with_columns(pl.lit(arch_label).alias("Architecture"))
+        df = df.filter((pl.col("M_int") == M_FILTER) & pl.col("snr").is_not_null()).with_columns(
+            pl.lit(arch_label).alias("Architecture")
+        )
         if not df.is_empty():
             frames[key] = df
 
@@ -762,6 +1058,11 @@ def main() -> None:
     accuracy_vs_simlayers()
     accuracy_vs_snr()
     accuracy_vs_disjoint_layers()
+    accuracy_vs_disjoint_snr()
+    accuracy_vs_disjoint_csi_layers()
+    accuracy_vs_disjoint_csi_snr()
+    accuracy_vs_disjoint_4sim_layers()
+    accuracy_vs_disjoint_4sim_snr()
     accuracy_vs_thickness()
     accuracy_vs_mono_layers()
     accuracy_vs_mono_snr()

@@ -35,6 +35,7 @@ from semantic_alignment.evaluation.inference import (
 )
 from semantic_alignment.sim.dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
+from semantic_alignment.utils.utils import get_rx_equalizer
 
 RESULTS_DIR = Path("results")
 
@@ -42,6 +43,20 @@ RESULTS_DIR = Path("results")
 # ---------------------------------------------------------------------------
 # I/O helpers
 # ---------------------------------------------------------------------------
+
+
+class _FixedCascade:
+    """Minimal wrapper so a pre-computed cascade matrix satisfies the model
+    interface expected by :func:`run_evaluation_disjoint_fixed`."""
+
+    def __init__(self, G: torch.Tensor) -> None:
+        self._G = G
+
+    def eval(self):
+        return self
+
+    def get_cascade(self) -> torch.Tensor:
+        return self._G
 
 
 def _save_result(path: Path, row: dict) -> None:
@@ -193,7 +208,6 @@ def run_single_layers_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
-    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (L, M_int, seed) job of the layers sweep for the joint Dual-SIM.
 
@@ -277,8 +291,6 @@ def run_single_layers_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
-        lambda_noise=lambda_noise,
-        snr=None,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -309,6 +321,9 @@ def run_single_layers_config(
             "strategy": strategy_name,
             "M_int": f"{M_int}x{M_int}",
             "L": L,
+            "snr": None,
+            "s_tx": None,
+            "s_rx": None,
             "tx_enc": tx_enc,
             "rx_enc": rx_enc,
             "no_mismatch_probe": no_mismatch_probe,
@@ -317,9 +332,13 @@ def run_single_layers_config(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": None,
+            "beta_R": None,
             "loss": loss_history[-1] if loss_history else 0.0,
             "loss_history": loss_history,
-            "lr": lr,
+            "rx_loss": None,
+            "rx_loss_history": None,
         },
     )
     del model
@@ -354,7 +373,6 @@ def run_single_snr_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
-    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (M_int, snr, seed) job of the SNR sweep for the joint Dual-SIM.
 
@@ -429,8 +447,6 @@ def run_single_snr_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
-        lambda_noise=lambda_noise,
-        snr=snr,
     )
     with torch.no_grad():
         Z_f, _ = model.get_effective_cascade(H_torch)
@@ -462,6 +478,8 @@ def run_single_snr_config(
             "M_int": f"{M_int}x{M_int}",
             "L": L,
             "snr": snr,
+            "s_tx": None,
+            "s_rx": None,
             "tx_enc": tx_enc,
             "rx_enc": rx_enc,
             "no_mismatch_probe": no_mismatch_probe,
@@ -470,8 +488,13 @@ def run_single_snr_config(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": None,
+            "beta_R": None,
             "loss": loss_history[-1] if loss_history else 0.0,
             "loss_history": loss_history,
+            "rx_loss": None,
+            "rx_loss_history": None,
         },
     )
     del model
@@ -507,7 +530,6 @@ def run_single_slayer_config(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
-    lambda_noise: float = 0.0,
 ) -> None:
     """Run one (s_tx, s_rx, seed) job of the layer-spacing sweep.
 
@@ -604,8 +626,6 @@ def run_single_slayer_config(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
-        lambda_noise=lambda_noise,
-        snr=None,
     )
 
     with torch.no_grad():
@@ -635,6 +655,9 @@ def run_single_slayer_config(
         {
             "seed": seed,
             "strategy": strategy_name,
+            "M_int": f"{M_int}x{M_int}",
+            "L": L,
+            "snr": None,
             "s_tx": s_tx,
             "s_rx": s_rx,
             "tx_enc": tx_enc,
@@ -645,8 +668,13 @@ def run_single_slayer_config(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": None,
+            "beta_R": None,
             "loss": loss_history[-1] if loss_history else 0.0,
             "loss_history": loss_history,
+            "rx_loss": None,
+            "rx_loss_history": None,
         },
     )
     del model, sim_cpu
@@ -845,7 +873,8 @@ def run_single_mono_layers_config(
             "M_int": f"{M_int}x{M_int}",
             "L": L,
             "snr": snr,
-            "use_channel": use_channel,
+            "s_tx": None,
+            "s_rx": None,
             "tx_enc": tx_enc,
             "rx_enc": rx_enc,
             "no_mismatch_probe": no_mismatch_probe,
@@ -854,9 +883,13 @@ def run_single_mono_layers_config(
             "original_neural": original_neural,
             "sim_accuracy_probe": mono_probe * 100,
             "sim_accuracy_neural": _pct(mono_neural),
+            "lr": lr,
+            "beta_T": None,
+            "beta_R": None,
             "loss": loss_history[-1] if loss_history else 0.0,
             "loss_history": loss_history,
-            "lr": lr,
+            "rx_loss": None,
+            "rx_loss_history": None,
         },
     )
     del tx_model
@@ -898,9 +931,10 @@ def run_single_disjoint_layers(
 ) -> None:
     """Run one (L, M_int, seed) job of the disjoint layers sweep.
 
-    Trains TX and RX metasurfaces independently (sequentially):
-    the TX-SIM is optimised first, then the RX-SIM is optimised against the
-    effective channel ``H_eff = H · G_T``.  Results are written to
+    TX-SIM is optimised independently to emulate the alignment matrix A.
+    RX-SIM is optimised independently to emulate the ZF equalizer
+    ``Q = (Hᴴ H)⁻¹ Hᴴ = H†``.  Each yields its own scalar β_T, β_R;
+    at inference ``β̄ = β_T · β_R``.  Results are written to
     ``results/disjoint_layers/``.
 
     Parameters
@@ -985,25 +1019,22 @@ def run_single_disjoint_layers(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-    tx_loss_history, _ = tx_model.optimize_sim(
-        target_matrix=A_torch,
-        max_iters=max_iters,
-        lr=lr,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        warmup_frac=warmup_frac,
-    )
+    # Q = H† = (HᴴH)⁻¹Hᴴ — ZF left-inverse (noiseless)
     with torch.no_grad():
-        H_eff = H_torch @ tx_model.get_cascade()
-    rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
-        H_eff=H_eff,
-        A_target=A_torch,
+        Q = get_rx_equalizer(H_torch, snr_db=None)
+
+    sim_kw = dict(
         max_iters=max_iters,
         lr=lr,
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
     )
+    tx_loss_history, beta_T = tx_model.optimize_sim(target_matrix=A_torch, **sim_kw)
+    rx_loss_history, beta_R = rx_model.optimize_sim(target_matrix=Q, **sim_kw)
+
+    beta_bar = complex(beta_T) * complex(beta_R)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
 
     sim_probe = run_evaluation_disjoint_fixed(
         tx_model,
@@ -1043,6 +1074,7 @@ def run_single_disjoint_layers(
         f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
         f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
         f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+        f" | β_T={abs(beta_T):.3e} β_R={abs(beta_R):.3e}"
     )
 
     _save_result(
@@ -1052,6 +1084,9 @@ def run_single_disjoint_layers(
             "strategy": strategy_name,
             "M_int": f"{M_int}x{M_int}",
             "L": L,
+            "snr": None,
+            "s_tx": None,
+            "s_rx": None,
             "tx_enc": tx_enc,
             "rx_enc": rx_enc,
             "no_mismatch_probe": no_mismatch_probe,
@@ -1060,8 +1095,11 @@ def run_single_disjoint_layers(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
-            "tx_loss": tx_loss_history[-1] if tx_loss_history else 0.0,
-            "tx_loss_history": tx_loss_history,
+            "lr": lr,
+            "beta_T": abs(beta_T),
+            "beta_R": abs(beta_R),
+            "loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "loss_history": tx_loss_history,
             "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
             "rx_loss_history": rx_loss_history,
         },
@@ -1101,9 +1139,9 @@ def run_single_disjoint_snr(
 ) -> None:
     """Run one (M_int, snr, seed) job of the disjoint SNR sweep.
 
-    Disjoint Dual-SIM trained sequentially (TX first, then RX against
-    ``H_eff``), evaluated at a specific AWGN SNR level.  Results are written
-    to ``results/disjoint_snr/``.
+    TX-SIM emulates A, RX-SIM emulates Q = H†, both trained independently.
+    ``β̄ = β_T · β_R`` is applied at inference at the given SNR level.
+    Results are written to ``results/disjoint_snr/``.
 
     Parameters
     ----------
@@ -1189,25 +1227,21 @@ def run_single_disjoint_snr(
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-    tx_loss_history, _ = tx_model.optimize_sim(
-        target_matrix=A_torch,
-        max_iters=max_iters,
-        lr=lr,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        warmup_frac=warmup_frac,
-    )
     with torch.no_grad():
-        H_eff = H_torch @ tx_model.get_cascade()
-    rx_loss_history, beta_g = rx_model.optimize_rx_sequential(
-        H_eff=H_eff,
-        A_target=A_torch,
+        Q = get_rx_equalizer(H_torch, snr_db=None)
+
+    sim_kw = dict(
         max_iters=max_iters,
         lr=lr,
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
     )
+    tx_loss_history, beta_T = tx_model.optimize_sim(target_matrix=A_torch, **sim_kw)
+    rx_loss_history, beta_R = rx_model.optimize_sim(target_matrix=Q, **sim_kw)
+
+    beta_bar = complex(beta_T) * complex(beta_R)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
 
     sim_probe = run_evaluation_disjoint_fixed(
         tx_model,
@@ -1247,6 +1281,7 @@ def run_single_disjoint_snr(
         f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
         f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
         f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+        f" | β_T={abs(beta_T):.3e} β_R={abs(beta_R):.3e}"
     )
 
     _save_result(
@@ -1257,6 +1292,8 @@ def run_single_disjoint_snr(
             "M_int": f"{M_int}x{M_int}",
             "L": L,
             "snr": snr,
+            "s_tx": None,
+            "s_rx": None,
             "tx_enc": tx_enc,
             "rx_enc": rx_enc,
             "no_mismatch_probe": no_mismatch_probe,
@@ -1265,13 +1302,851 @@ def run_single_disjoint_snr(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": _pct(sim_neural),
-            "tx_loss": tx_loss_history[-1] if tx_loss_history else 0.0,
-            "tx_loss_history": tx_loss_history,
+            "lr": lr,
+            "beta_T": abs(beta_T),
+            "beta_R": abs(beta_R),
+            "loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "loss_history": tx_loss_history,
             "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
             "rx_loss_history": rx_loss_history,
         },
     )
     del tx_model, rx_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Disjoint Dual-SIM with full CSI (SVD precoding/decoding)
+# ---------------------------------------------------------------------------
+
+
+def run_single_disjoint_csi_layers(
+    L: int,
+    M_int: int,
+    no_mismatch_probe: float,
+    original_probe: float,
+    A_target,
+    H_mimo,
+    test_loader,
+    clf,
+    L_in,
+    mu_in,
+    L_out,
+    mu_out,
+    device,
+    strategy_name: str = "PPFE",
+    seed: int = 42,
+    max_iters: int = 3000,
+    lr: float = 0.1,
+    clf_neural=None,
+    no_mismatch_neural: float | None = None,
+    original_neural: float | None = None,
+    tx_enc: str = "",
+    rx_enc: str = "",
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
+) -> None:
+    """Disjoint Dual-SIM with full CSI at both TX and RX (SVD-based precoding).
+
+    Assumes both sides know ``H = U Σ Vᴴ``.  The TX-SIM is trained to emulate
+    the composition ``B_T · A`` (SVD precoder ``B_T = V Σ^{1/2}`` followed by
+    the alignment operator).  The RX-SIM is trained independently to emulate
+    the SVD decoder ``B_R = Σ^{1/2} Uᴴ``.  Each SIM yields its own optimal
+    scalar (β_T, β_R); at inference ``β̄ = β_T · β_R`` is applied to the full
+    cascade ``G_R H G_T x``.
+
+    Only PPFE alignment is supported; Linear raises ``NotImplementedError``.
+
+    Results are written to ``results/disjoint_csi_layers/``.
+    """
+    if strategy_name != "PPFE":
+        raise NotImplementedError(
+            f"Disjoint CSI not implemented for '{strategy_name}' alignment. Use PPFE."
+        )
+
+    out_path = (
+        RESULTS_DIR
+        / "disjoint_csi_layers"
+        / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_{tx_enc}_{rx_enc}.parquet"
+    )
+    if out_path.exists():
+        print(f"Skipping disjoint_csi L={L}, M_int={M_int}, seed={seed}.")
+        return
+
+    wavelength = 0.005
+    slayer = 5 * wavelength
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    tx_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=16,
+        num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        side="tx",
+    )
+    rx_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24,
+        num_meta_atoms_in_y=16,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        side="rx",
+    )
+    tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
+    rx_model = MonoSIMoptimizerTorch(rx_cpu).to(device)
+    A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+    # SVD of H and CSI-based precoder/decoder
+    with torch.no_grad():
+        U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
+        sqrt_s = torch.sqrt(s).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(sqrt_s)  # V Σ^{1/2} ∈ C^{N_T × N_T}
+        B_R = torch.diag(sqrt_s) @ U.H  # Σ^{1/2} Uᴴ ∈ C^{N_T × N_R}
+
+    # TX target: B_T A  (SVD precoder composed with alignment)
+    # RX target: B_R    (SVD decoder alone)
+    T_TX = (B_T @ A_torch).detach()  # C^{N_T × θ̄}
+    T_RX = B_R.detach()  # C^{N_T × N_R}
+
+    # Train TX and RX independently — no sequential dependency
+    tx_loss_history, beta_T = tx_model.optimize_sim(
+        target_matrix=T_TX,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
+    )
+    rx_loss_history, beta_R = rx_model.optimize_sim(
+        target_matrix=T_RX,
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
+    )
+
+    beta_bar = complex(beta_T) * complex(beta_R)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
+
+    sim_probe = run_evaluation_disjoint_fixed(
+        tx_model,
+        rx_model,
+        test_loader,
+        H_mimo,
+        None,
+        beta_g,
+        L_in,
+        mu_in,
+        L_out,
+        mu_out,
+        clf,
+        device,
+    )
+    sim_neural = (
+        run_evaluation_disjoint_fixed(
+            tx_model,
+            rx_model,
+            test_loader,
+            H_mimo,
+            None,
+            beta_g,
+            L_in,
+            mu_in,
+            L_out,
+            mu_out,
+            clf_neural,
+            device,
+        )
+        if clf_neural is not None
+        else None
+    )
+
+    print(
+        f" DisjointCSI L={L} M={M_int} seed={seed}"
+        f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
+        f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
+        f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+        f" | β_T={abs(beta_T):.3e} β_R={abs(beta_R):.3e}"
+    )
+
+    _save_result(
+        out_path,
+        {
+            "seed": seed,
+            "strategy": strategy_name,
+            "M_int": f"{M_int}x{M_int}",
+            "L": L,
+            "snr": None,
+            "s_tx": None,
+            "s_rx": None,
+            "tx_enc": tx_enc,
+            "rx_enc": rx_enc,
+            "no_mismatch_probe": no_mismatch_probe,
+            "no_mismatch_neural": no_mismatch_neural,
+            "original_probe": original_probe,
+            "original_neural": original_neural,
+            "sim_accuracy_probe": sim_probe * 100,
+            "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": abs(beta_T),
+            "beta_R": abs(beta_R),
+            "loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "loss_history": tx_loss_history,
+            "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
+            "rx_loss_history": rx_loss_history,
+        },
+    )
+    del tx_model, rx_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# 4-SIM Disjoint with full CSI (2 TX + 2 RX, each depth L)
+# ---------------------------------------------------------------------------
+
+
+def run_single_disjoint_4sim_layers(
+    L: int,
+    M_int: int,
+    no_mismatch_probe: float,
+    original_probe: float,
+    A_target,
+    H_mimo,
+    test_loader,
+    clf,
+    L_in,
+    mu_in,
+    L_out,
+    mu_out,
+    device,
+    strategy_name: str = "PPFE",
+    seed: int = 42,
+    max_iters: int = 3000,
+    lr: float = 0.1,
+    clf_neural=None,
+    no_mismatch_neural: float | None = None,
+    original_neural: float | None = None,
+    tx_enc: str = "",
+    rx_enc: str = "",
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
+) -> None:
+    """Disjoint 4-SIM architecture with full CSI: two TX SIMs + two RX SIMs.
+
+    Hardware layout (each SIM has L layers):
+
+        G_T1 (192→384)  →  G_T2 (384→384)  →  H  →  G_R2 (384→384)  →  G_R1 (384→384)
+
+    Targets (PPFE only):
+        G_T1 emulates  F_T  = A_target    (alignment synthesis, 192→384)
+        G_T2 emulates  B_T  = V Σ^{1/2}   (SVD channel precoder, 384→384)
+        G_R2 emulates  B_R  = Σ^{1/2} Uᴴ  (SVD channel decoder,  384→384)
+        G_R1 emulates  F_R^H = I_{384}     (identity analysis,    384→384)
+
+    Each SIM is optimised independently, yielding β_T1, β_T2, β_R2, β_R1.
+    At inference: β̄ = β_T1 · β_T2 · β_R2 · β_R1.
+
+    Hardware equivalence: L layers per SIM here ≈ 2L layers in the 2-SIM
+    disjoint case (G_T = G_T2 G_T1 sums L+L depth at the TX side, idem RX).
+
+    Only PPFE alignment is supported; Linear raises ``NotImplementedError``.
+
+    Results are written to ``results/disjoint_4sim_layers/``.
+    """
+    if strategy_name != "PPFE":
+        raise NotImplementedError(
+            f"4-SIM disjoint not implemented for '{strategy_name}' alignment. Use PPFE."
+        )
+
+    out_path = (
+        RESULTS_DIR
+        / "disjoint_4sim_layers"
+        / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_{tx_enc}_{rx_enc}.parquet"
+    )
+    if out_path.exists():
+        print(f"Skipping disjoint_4sim L={L}, M_int={M_int}, seed={seed}.")
+        return
+
+    wavelength = 0.005
+    slayer = 5 * wavelength
+    dx = wavelength / 2
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    # G_T1: standard TX SIM  (192 → 384)
+    t1_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=16,
+        num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        spacings={"in": dx, "out": dx, "int": dx},
+        side="tx",
+    )
+    # G_T2: square TX SIM  (384 → 384)
+    t2_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24,
+        num_meta_atoms_in_y=16,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        spacings={"in": dx, "out": dx, "int": dx},
+        side="tx",
+    )
+    # G_R2: square RX SIM  (384 → 384)
+    r2_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24,
+        num_meta_atoms_in_y=16,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        spacings={"in": dx, "out": dx, "int": dx},
+        side="rx",
+    )
+    # G_R1: standard RX SIM  (384 → 384)
+    r1_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24,
+        num_meta_atoms_in_y=16,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        spacings={"in": dx, "out": dx, "int": dx},
+        side="rx",
+    )
+
+    t1_model = MonoSIMoptimizerTorch(t1_cpu).to(device)
+    t2_model = MonoSIMoptimizerTorch(t2_cpu).to(device)
+    r2_model = MonoSIMoptimizerTorch(r2_cpu).to(device)
+    r1_model = MonoSIMoptimizerTorch(r1_cpu).to(device)
+
+    A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+    # SVD-based precoder / decoder from full CSI
+    with torch.no_grad():
+        U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
+        sqrt_s = torch.sqrt(s).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(sqrt_s)  # V Σ^{1/2} ∈ C^{384×384}
+        B_R = torch.diag(sqrt_s) @ U.H  # Σ^{1/2} Uᴴ ∈ C^{384×384}
+        I_RX = torch.eye(B_R.shape[0], dtype=torch.complex64, device=device)
+
+    # Targets: F_T = A, B_T, B_R, F_R^H = I
+    sim_kwargs = dict(
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
+    )
+
+    t1_loss, beta_T1 = t1_model.optimize_sim(target_matrix=A_torch, **sim_kwargs)
+    t2_loss, beta_T2 = t2_model.optimize_sim(target_matrix=B_T, **sim_kwargs)
+    r2_loss, beta_R2 = r2_model.optimize_sim(target_matrix=B_R, **sim_kwargs)
+    r1_loss, beta_R1 = r1_model.optimize_sim(target_matrix=I_RX, **sim_kwargs)
+
+    beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
+
+    # Compose cascades and wrap for run_evaluation_disjoint_fixed
+    with torch.no_grad():
+        G_T_eff = t2_model.get_cascade() @ t1_model.get_cascade()  # 384×192
+        G_R_eff = r1_model.get_cascade() @ r2_model.get_cascade()  # 384×384
+
+    tx_wrap = _FixedCascade(G_T_eff)
+    rx_wrap = _FixedCascade(G_R_eff)
+
+    sim_probe = run_evaluation_disjoint_fixed(
+        tx_wrap,
+        rx_wrap,
+        test_loader,
+        H_mimo,
+        None,
+        beta_g,
+        L_in,
+        mu_in,
+        L_out,
+        mu_out,
+        clf,
+        device,
+    )
+    sim_neural = (
+        run_evaluation_disjoint_fixed(
+            tx_wrap,
+            rx_wrap,
+            test_loader,
+            H_mimo,
+            None,
+            beta_g,
+            L_in,
+            mu_in,
+            L_out,
+            mu_out,
+            clf_neural,
+            device,
+        )
+        if clf_neural is not None
+        else None
+    )
+
+    print(
+        f" Disjoint4SIM L={L} M={M_int} seed={seed}"
+        f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
+        f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
+        f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+        f" | β_T1={abs(beta_T1):.2e} β_T2={abs(beta_T2):.2e}"
+        f" β_R2={abs(beta_R2):.2e} β_R1={abs(beta_R1):.2e}"
+    )
+
+    _save_result(
+        out_path,
+        {
+            "seed": seed,
+            "strategy": strategy_name,
+            "M_int": f"{M_int}x{M_int}",
+            "L": L,
+            "snr": None,
+            "s_tx": None,
+            "s_rx": None,
+            "tx_enc": tx_enc,
+            "rx_enc": rx_enc,
+            "no_mismatch_probe": no_mismatch_probe,
+            "no_mismatch_neural": no_mismatch_neural,
+            "original_probe": original_probe,
+            "original_neural": original_neural,
+            "sim_accuracy_probe": sim_probe * 100,
+            "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": abs(beta_T1) * abs(beta_T2),
+            "beta_R": abs(beta_R2) * abs(beta_R1),
+            "loss": t1_loss[-1] if t1_loss else 0.0,
+            "loss_history": t1_loss,
+            "rx_loss": r1_loss[-1] if r1_loss else 0.0,
+            "rx_loss_history": r1_loss,
+            # per-SIM detail
+            "beta_T1": abs(beta_T1),
+            "beta_T2": abs(beta_T2),
+            "beta_R2": abs(beta_R2),
+            "beta_R1": abs(beta_R1),
+            "t2_loss": t2_loss[-1] if t2_loss else 0.0,
+            "t2_loss_history": t2_loss,
+            "r2_loss": r2_loss[-1] if r2_loss else 0.0,
+            "r2_loss_history": r2_loss,
+        },
+    )
+    del t1_model, t2_model, r2_model, r1_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# Disjoint CSI — SNR sweep
+# ---------------------------------------------------------------------------
+
+
+def run_single_disjoint_csi_snr(
+    L: int,
+    M_int: int,
+    snr: float | None,
+    no_mismatch_probe: float,
+    original_probe: float,
+    A_target,
+    H_mimo,
+    test_loader,
+    clf,
+    L_in,
+    mu_in,
+    L_out,
+    mu_out,
+    device,
+    strategy_name: str = "PPFE",
+    seed: int = 42,
+    max_iters: int = 3000,
+    lr: float = 0.1,
+    clf_neural=None,
+    no_mismatch_neural: float | None = None,
+    original_neural: float | None = None,
+    tx_enc: str = "",
+    rx_enc: str = "",
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
+) -> None:
+    """SNR sweep variant of :func:`run_single_disjoint_csi_layers`.
+
+    Same CSI-assisted disjoint training (noiseless); evaluation at ``snr`` dB.
+    Results are written to ``results/disjoint_csi_snr/``.
+    Only PPFE alignment is supported.
+    """
+    if strategy_name != "PPFE":
+        raise NotImplementedError(
+            f"Disjoint CSI not implemented for '{strategy_name}' alignment. Use PPFE."
+        )
+
+    out_path = (
+        RESULTS_DIR
+        / "disjoint_csi_snr"
+        / f"{strategy_name}_seed{seed}_M{M_int}x{M_int}_snr{_snr_tag(snr)}_{tx_enc}_{rx_enc}.parquet"
+    )
+    if out_path.exists():
+        print(f"Skipping disjoint_csi snr={snr}, M_int={M_int}, seed={seed}.")
+        return
+
+    wavelength = 0.005
+    slayer = 5 * wavelength
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    tx_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=16,
+        num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        side="tx",
+    )
+    rx_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24,
+        num_meta_atoms_in_y=16,
+        num_meta_atoms_out_x=24,
+        num_meta_atoms_out_y=16,
+        num_meta_atoms_int_x=M_int,
+        num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength,
+        side="rx",
+    )
+    tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
+    rx_model = MonoSIMoptimizerTorch(rx_cpu).to(device)
+    A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+    with torch.no_grad():
+        U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
+        sqrt_s = torch.sqrt(s).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(sqrt_s)
+        B_R = torch.diag(sqrt_s) @ U.H
+
+    T_TX = (B_T @ A_torch).detach()
+    T_RX = B_R.detach()
+
+    sim_kw = dict(
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
+    )
+    tx_loss_history, beta_T = tx_model.optimize_sim(target_matrix=T_TX, **sim_kw)
+    rx_loss_history, beta_R = rx_model.optimize_sim(target_matrix=T_RX, **sim_kw)
+
+    beta_bar = complex(beta_T) * complex(beta_R)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
+
+    sim_probe = run_evaluation_disjoint_fixed(
+        tx_model,
+        rx_model,
+        test_loader,
+        H_mimo,
+        snr,
+        beta_g,
+        L_in,
+        mu_in,
+        L_out,
+        mu_out,
+        clf,
+        device,
+    )
+    sim_neural = (
+        run_evaluation_disjoint_fixed(
+            tx_model,
+            rx_model,
+            test_loader,
+            H_mimo,
+            snr,
+            beta_g,
+            L_in,
+            mu_in,
+            L_out,
+            mu_out,
+            clf_neural,
+            device,
+        )
+        if clf_neural is not None
+        else None
+    )
+
+    print(
+        f" DisjointCSI snr={snr} M={M_int} seed={seed}"
+        f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
+        f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
+        f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+    )
+
+    _save_result(
+        out_path,
+        {
+            "seed": seed,
+            "strategy": strategy_name,
+            "M_int": f"{M_int}x{M_int}",
+            "L": L,
+            "snr": snr,
+            "s_tx": None,
+            "s_rx": None,
+            "tx_enc": tx_enc,
+            "rx_enc": rx_enc,
+            "no_mismatch_probe": no_mismatch_probe,
+            "no_mismatch_neural": no_mismatch_neural,
+            "original_probe": original_probe,
+            "original_neural": original_neural,
+            "sim_accuracy_probe": sim_probe * 100,
+            "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": abs(beta_T),
+            "beta_R": abs(beta_R),
+            "loss": tx_loss_history[-1] if tx_loss_history else 0.0,
+            "loss_history": tx_loss_history,
+            "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
+            "rx_loss_history": rx_loss_history,
+        },
+    )
+    del tx_model, rx_model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+# ---------------------------------------------------------------------------
+# 4-SIM Disjoint — SNR sweep
+# ---------------------------------------------------------------------------
+
+
+def run_single_disjoint_4sim_snr(
+    L: int,
+    M_int: int,
+    snr: float | None,
+    no_mismatch_probe: float,
+    original_probe: float,
+    A_target,
+    H_mimo,
+    test_loader,
+    clf,
+    L_in,
+    mu_in,
+    L_out,
+    mu_out,
+    device,
+    strategy_name: str = "PPFE",
+    seed: int = 42,
+    max_iters: int = 3000,
+    lr: float = 0.1,
+    clf_neural=None,
+    no_mismatch_neural: float | None = None,
+    original_neural: float | None = None,
+    tx_enc: str = "",
+    rx_enc: str = "",
+    optimizer: str = "adam",
+    scheduler: str = "none",
+    warmup_frac: float = 0.05,
+) -> None:
+    """SNR sweep variant of :func:`run_single_disjoint_4sim_layers`.
+
+    Same 4-SIM CSI-assisted training (noiseless); evaluation at ``snr`` dB.
+    Results are written to ``results/disjoint_4sim_snr/``.
+    Only PPFE alignment is supported.
+    """
+    if strategy_name != "PPFE":
+        raise NotImplementedError(
+            f"4-SIM disjoint not implemented for '{strategy_name}' alignment. Use PPFE."
+        )
+
+    out_path = (
+        RESULTS_DIR
+        / "disjoint_4sim_snr"
+        / f"{strategy_name}_seed{seed}_M{M_int}x{M_int}_snr{_snr_tag(snr)}_{tx_enc}_{rx_enc}.parquet"
+    )
+    if out_path.exists():
+        print(f"Skipping disjoint_4sim snr={snr}, M_int={M_int}, seed={seed}.")
+        return
+
+    wavelength = 0.005
+    slayer = 5 * wavelength
+    dx = wavelength / 2
+
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    def _make_sim(in_x, in_y, out_x, out_y, s):
+        return MonoSIMoptimizer(
+            num_layers=L,
+            num_meta_atoms_in_x=in_x,
+            num_meta_atoms_in_y=in_y,
+            num_meta_atoms_out_x=out_x,
+            num_meta_atoms_out_y=out_y,
+            num_meta_atoms_int_x=M_int,
+            num_meta_atoms_int_y=M_int,
+            thickness=slayer * L,
+            wavelength=wavelength,
+            spacings={"in": dx, "out": dx, "int": dx},
+            side=s,
+        )
+
+    t1_model = MonoSIMoptimizerTorch(_make_sim(16, 12, 24, 16, "tx")).to(device)
+    t2_model = MonoSIMoptimizerTorch(_make_sim(24, 16, 24, 16, "tx")).to(device)
+    r2_model = MonoSIMoptimizerTorch(_make_sim(24, 16, 24, 16, "rx")).to(device)
+    r1_model = MonoSIMoptimizerTorch(_make_sim(24, 16, 24, 16, "rx")).to(device)
+
+    A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+    with torch.no_grad():
+        U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
+        sqrt_s = torch.sqrt(s).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(sqrt_s)
+        B_R = torch.diag(sqrt_s) @ U.H
+        I_RX = torch.eye(B_R.shape[0], dtype=torch.complex64, device=device)
+
+    sim_kw = dict(
+        max_iters=max_iters,
+        lr=lr,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        warmup_frac=warmup_frac,
+    )
+    t1_loss, beta_T1 = t1_model.optimize_sim(target_matrix=A_torch, **sim_kw)
+    t2_loss, beta_T2 = t2_model.optimize_sim(target_matrix=B_T, **sim_kw)
+    r2_loss, beta_R2 = r2_model.optimize_sim(target_matrix=B_R, **sim_kw)
+    r1_loss, beta_R1 = r1_model.optimize_sim(target_matrix=I_RX, **sim_kw)
+
+    beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
+    beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
+
+    with torch.no_grad():
+        G_T_eff = t2_model.get_cascade() @ t1_model.get_cascade()
+        G_R_eff = r1_model.get_cascade() @ r2_model.get_cascade()
+
+    tx_wrap = _FixedCascade(G_T_eff)
+    rx_wrap = _FixedCascade(G_R_eff)
+
+    sim_probe = run_evaluation_disjoint_fixed(
+        tx_wrap,
+        rx_wrap,
+        test_loader,
+        H_mimo,
+        snr,
+        beta_g,
+        L_in,
+        mu_in,
+        L_out,
+        mu_out,
+        clf,
+        device,
+    )
+    sim_neural = (
+        run_evaluation_disjoint_fixed(
+            tx_wrap,
+            rx_wrap,
+            test_loader,
+            H_mimo,
+            snr,
+            beta_g,
+            L_in,
+            mu_in,
+            L_out,
+            mu_out,
+            clf_neural,
+            device,
+        )
+        if clf_neural is not None
+        else None
+    )
+
+    print(
+        f" Disjoint4SIM snr={snr} M={M_int} seed={seed}"
+        f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
+        f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
+        f" | sim={sim_probe * 100:.2f}%{_neural_str('sim_neural', _pct(sim_neural))}"
+    )
+
+    _save_result(
+        out_path,
+        {
+            "seed": seed,
+            "strategy": strategy_name,
+            "M_int": f"{M_int}x{M_int}",
+            "L": L,
+            "snr": snr,
+            "s_tx": None,
+            "s_rx": None,
+            "tx_enc": tx_enc,
+            "rx_enc": rx_enc,
+            "no_mismatch_probe": no_mismatch_probe,
+            "no_mismatch_neural": no_mismatch_neural,
+            "original_probe": original_probe,
+            "original_neural": original_neural,
+            "sim_accuracy_probe": sim_probe * 100,
+            "sim_accuracy_neural": _pct(sim_neural),
+            "lr": lr,
+            "beta_T": abs(beta_T1) * abs(beta_T2),
+            "beta_R": abs(beta_R2) * abs(beta_R1),
+            "loss": t1_loss[-1] if t1_loss else 0.0,
+            "loss_history": t1_loss,
+            "rx_loss": r1_loss[-1] if r1_loss else 0.0,
+            "rx_loss_history": r1_loss,
+            # per-SIM detail
+            "beta_T1": abs(beta_T1),
+            "beta_T2": abs(beta_T2),
+            "beta_R2": abs(beta_R2),
+            "beta_R1": abs(beta_R1),
+            "t2_loss": t2_loss[-1] if t2_loss else 0.0,
+            "t2_loss_history": t2_loss,
+            "r2_loss": r2_loss[-1] if r2_loss else 0.0,
+            "r2_loss_history": r2_loss,
+        },
+    )
+    del t1_model, t2_model, r2_model, r1_model
     gc.collect()
     torch.cuda.empty_cache()
 
@@ -1303,7 +2178,6 @@ def run_single_rx_depth(
     optimizer: str = "adam",
     scheduler: str = "none",
     warmup_frac: float = 0.05,
-    lambda_noise: float = 0.0,
 ) -> None:
     """Study the effect of asymmetric TX/RX SIM depth on alignment quality.
 
@@ -1389,8 +2263,6 @@ def run_single_rx_depth(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
-        lambda_noise=lambda_noise,
-        snr=None,
     )
 
     with torch.no_grad():

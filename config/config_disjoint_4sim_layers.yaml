@@ -1,0 +1,19 @@
+defaults:
+  - sim: default
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: default
+  - classifier: default
+  - experiment: disjoint_4sim_layers
+  - _self_
+
+# L here = layers per SIM (4 SIMs). Hardware equivalent to 2×L layers in the
+# 2-SIM disjoint case. Sweep mirrors old L/2: 1..12 ≈ old 2..24.
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      experiment.M_int: 16,32
+      training.seed: 27,42,100,123,144,200
+      experiment.L: 1,2,3,4,5,6,7,8,9,10,12

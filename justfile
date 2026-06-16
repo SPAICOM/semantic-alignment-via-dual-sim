@@ -19,27 +19,21 @@ all: format check
 # Sweep values are defined in each config file.
 #
 # Per-architecture aggregates run every sweep for that case:
-#   just joint        # = run-multi + run-snr + run-slayer
-#   just disjoint     # = run-disjoint + run-disjoint-snr
+#   just joint        # = run-joint + run-joint-snr + run-joint-slayer
+#   just disjoint     # = run-disjoint + run-disjoint-snr + CSI + 4-SIM variants
 #   just mono         # = run-mono + run-mono-snr
-#
-# Examples:
-#   just run-multi                            # layers sweep (PPFE, cifar10)
-#   just run-multi alignment=linear
-#   just run-multi datasets=cifar100
-#   just run-snr
-#   just run-slayer
-#   just run-disjoint
-#   just run-disjoint-snr
 
-run-multi *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_layers {{ARGS}}
+run-joint *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_joint_layers {{ARGS}}
 
-run-snr *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_snr {{ARGS}}
+run-joint-snr *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_joint_snr {{ARGS}}
 
-run-slayer *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_slayer {{ARGS}}
+run-joint-slayer *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_joint_slayer {{ARGS}}
+
+# Run every joint Dual-SIM sweep: layers + SNR + slayer
+joint: run-joint run-joint-snr run-joint-slayer
 
 run-disjoint *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_layers {{ARGS}}
@@ -47,23 +41,32 @@ run-disjoint *ARGS: train-clf
 run-disjoint-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_snr {{ARGS}}
 
-# Run every joint Dual-SIM sweep: layers + SNR + slayer
-joint: run-multi run-snr run-slayer
+run-disjoint-csi *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_layers {{ARGS}}
 
-# Run every disjoint Dual-SIM sweep: layers + SNR
-disjoint: run-disjoint run-disjoint-snr
+run-disjoint-csi-snr *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_snr {{ARGS}}
+
+run-disjoint-4sim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_layers {{ARGS}}
+
+run-disjoint-4sim-snr *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_snr {{ARGS}}
+
+# Aggregate: CSI disjoint (layers + SNR)
+disjoint-csi: run-disjoint-csi run-disjoint-csi-snr
+
+# Aggregate: 4-SIM disjoint (layers + SNR)
+disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr
+
+# Run every disjoint Dual-SIM sweep: all variants
+disjoint: run-disjoint run-disjoint-snr run-disjoint-csi run-disjoint-csi-snr run-disjoint-4sim run-disjoint-4sim-snr
 
 # Single run without multirun (useful for quick tests)
 run *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py {{ARGS}}
 
 # ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
-# Examples:
-#   just mono                                 # both sweeps (layers + SNR)
-#   just run-mono                             # full layers sweep
-#   just run-mono alignment=linear
-#   just run-mono experiment.use_channel=true
-#   just run-mono-snr                         # SNR sweep with MIMO channel
 
 run-mono *ARGS: train-clf
     uv run python scripts/mono_sim.py --config-name config_mono_layers {{ARGS}}
@@ -77,11 +80,6 @@ mono: run-mono run-mono-snr
 # ── Neural classifier ─────────────────────────────────────────────────────────
 # Train one MLP per (dataset, rx_enc, seed) and save to models/classifiers/.
 # Sweep seeds and rx_enc models are defined in config/config_train_clf.yaml.
-#
-# Examples:
-#   just train-clf                              # full sweep (all seeds × models)
-#   just train-clf datasets=cifar100
-#   just train-clf "training.seed=27,42"
 
 train-clf *ARGS:
     uv run python scripts/train_classifier.py {{ARGS}}

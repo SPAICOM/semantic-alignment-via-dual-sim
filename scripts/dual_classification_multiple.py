@@ -12,12 +12,12 @@ activate with ``-m``.
 
 Examples
 --------
-    just run-multi                              # layers sweep
-    just run-multi experiment=snr
-    just run-multi experiment=slayer
-    just run-multi experiment=disjoint_layers
-    just run-multi datasets=cifar100
-    just run-multi alignment=linear
+    just run-joint                              # layers sweep
+    just run-joint-snr
+    just run-joint-slayer
+    just run-disjoint
+    just run-joint datasets=cifar100
+    just run-joint alignment=linear
 """
 
 import os
@@ -37,6 +37,10 @@ from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linea
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
 from semantic_alignment.experiments.experiment_runner import (
+    run_single_disjoint_4sim_layers,
+    run_single_disjoint_4sim_snr,
+    run_single_disjoint_csi_layers,
+    run_single_disjoint_csi_snr,
     run_single_disjoint_layers,
     run_single_disjoint_snr,
     run_single_layers_config,
@@ -88,6 +92,30 @@ def _out_path(cfg: DictConfig) -> Path | None:
             _RESULTS
             / "disjoint_layers"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_csi_layers":
+        return (
+            _RESULTS
+            / "disjoint_csi_layers"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_4sim_layers":
+        return (
+            _RESULTS
+            / "disjoint_4sim_layers"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_csi_snr":
+        return (
+            _RESULTS
+            / "disjoint_csi_snr"
+            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+        )
+    if name == "disjoint_4sim_snr":
+        return (
+            _RESULTS
+            / "disjoint_4sim_snr"
+            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_snr":
         return (
@@ -232,7 +260,6 @@ def _setup(cfg: DictConfig):
         optimizer=cfg.training.get("optimizer", "adam"),
         scheduler=cfg.training.get("scheduler", "none"),
         warmup_frac=float(cfg.training.get("warmup_frac", 0.05)),
-        lambda_noise=float(cfg.training.get("lambda_noise", 0.0)),
     )
 
 
@@ -256,37 +283,29 @@ def main(cfg: DictConfig) -> None:
     )
 
     ctx = _setup(cfg)
+    snr = None if str(exp.get("snr", "null")) == "null" else exp.snr
 
-    if exp_name == "layers":
-        run_single_layers_config(L=exp.L, M_int=exp.M_int, **ctx)
-
-    elif exp_name == "snr":
-        run_single_snr_config(
-            L=exp.L,
-            M_int=exp.M_int,
-            snr=None if str(exp.snr) == "null" else exp.snr,
-            **ctx,
-        )
-    elif exp_name == "slayer":
-        run_single_slayer_config(
-            L=exp.L,
-            M_int=exp.M_int,
-            s_tx=exp.s_tx,
-            s_rx=exp.s_rx,
-            **ctx,
-        )
-    elif exp_name == "disjoint_layers":
-        run_single_disjoint_layers(L=exp.L, M_int=exp.M_int, **ctx)
-
-    elif exp_name == "disjoint_snr":
-        run_single_disjoint_snr(
-            L=exp.L,
-            M_int=exp.M_int,
-            snr=None if str(exp.snr) == "null" else exp.snr,
-            **ctx,
-        )
-    else:
-        print(f"Unknown experiment '{exp_name}'.")
+    match exp_name:
+        case "layers":
+            run_single_layers_config(L=exp.L, M_int=exp.M_int, **ctx)
+        case "snr":
+            run_single_snr_config(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+        case "slayer":
+            run_single_slayer_config(L=exp.L, M_int=exp.M_int, s_tx=exp.s_tx, s_rx=exp.s_rx, **ctx)
+        case "disjoint_layers":
+            run_single_disjoint_layers(L=exp.L, M_int=exp.M_int, **ctx)
+        case "disjoint_snr":
+            run_single_disjoint_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+        case "disjoint_csi_layers":
+            run_single_disjoint_csi_layers(L=exp.L, M_int=exp.M_int, **ctx)
+        case "disjoint_csi_snr":
+            run_single_disjoint_csi_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+        case "disjoint_4sim_layers":
+            run_single_disjoint_4sim_layers(L=exp.L, M_int=exp.M_int, **ctx)
+        case "disjoint_4sim_snr":
+            run_single_disjoint_4sim_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+        case _:
+            print(f"Unknown experiment '{exp_name}'.")
 
 
 if __name__ == "__main__":

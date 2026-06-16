@@ -17,9 +17,5 @@ warmup_frac: 0.05   # fraction of max_iters at constant LR before cosine decay (
 clip_value: 1.0
 rx_steps_per_tx: 2
 
-# Noise regularization weight λ for RX SIM (eq. 14): λ ‖G_R‖²_F added to RX loss.
-# 0.0 disables it (default). Joint pipeline only.
-lambda_noise: 1.0e-1
-
 # GPU index to use (null = let PyTorch pick, integer = sets CUDA_VISIBLE_DEVICES)
 gpu: null
