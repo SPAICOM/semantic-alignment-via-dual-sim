@@ -8,7 +8,7 @@ its result to a dedicated Parquet file inside a per-experiment subdirectory:
         dual_snr/       {strategy}_seed{seed}_M{M}x{M}_ch{C}_snr{snr}_{tx}_{rx}.parquet
         dual_slayer/    {strategy}_seed{seed}_stx{s_tx}_srx{s_rx}_ch{C}_{tx}_{rx}.parquet
         mono/           {strategy}_seed{seed}_L{L}_M{M}x{M}_{tx}_{rx}.parquet
-        mono_channel/   {strategy}_seed{seed}_L{L}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
+        mono_snr/       {strategy}_seed{seed}_L{L}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
         disjoint_layers/{strategy}_seed{seed}_L{L}_M{M}x{M}_ch{C}_{tx}_{rx}.parquet
         disjoint_snr/   {strategy}_seed{seed}_M{M}x{M}_ch{C}_snr{snr}_{tx}_{rx}.parquet
         rx_depth/       seed{seed}_LTX{L_TX}_LRX{L_RX}_M{M}x{M}_{tx}_{rx}.parquet
@@ -31,7 +31,7 @@ import torch
 from semantic_alignment.evaluation.inference import (
     run_evaluation,
     run_evaluation_disjoint_fixed,
-    run_evaluation_mono_channel,
+    run_evaluation_mono,
 )
 from semantic_alignment.sim.dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
@@ -772,7 +772,6 @@ def run_single_mono_layers_config(
     seed: int = 42,
     max_iters: int = 3000,
     lr: float = 0.1,
-    use_channel: bool = False,
     H_mimo=None,
     snr: float | None = None,
     clf_neural=None,
@@ -789,12 +788,10 @@ def run_single_mono_layers_config(
 
     The signal always propagates through the MIMO channel ``H`` and is equalized
     at the receiver with ``G_eq``: ``ŷ = β G_eq(H) · (H · G_T · x_white + noise)``.
-    With ``snr=None`` the equalizer is zero-forcing and no noise is added
-    (infinite SNR); with a finite ``snr`` it is MMSE and AWGN is added.
 
-    ``use_channel`` only selects the output location: ``False`` (layers sweep,
-    noiseless ZF) writes to ``results/mono/``; ``True`` (SNR sweep, MMSE + AWGN)
-    writes to ``results/mono_channel/``.
+    The output directory and filename are determined by ``snr``:
+      - ``snr=None``: ZF equalizer, no noise → ``results/mono/``
+      - ``snr`` finite: MMSE equalizer + AWGN → ``results/mono_snr/``
 
     Parameters
     ----------
@@ -824,12 +821,10 @@ def run_single_mono_layers_config(
         Optimization iterations.
     lr : float, optional
         Adam learning rate.
-    use_channel : bool, optional
-        If ``True``, route signal through ``H_mimo`` with MMSE equalization.
     H_mimo : torch.Tensor or None, optional
-        MIMO channel matrix; required when ``use_channel=True``.
+        MIMO channel matrix.
     snr : float or None, optional
-        AWGN SNR in dB used when ``use_channel=True``.
+        AWGN SNR in dB; ``None`` means noiseless ZF.
     clf_neural : nn.Module or None, optional
         Neural classifier.
     no_mismatch_neural, original_neural : float or None, optional
@@ -837,16 +832,16 @@ def run_single_mono_layers_config(
     tx_enc, rx_enc : str, optional
         Encoder names appended to the output filename.
     """
-    subdir = "mono_channel" if use_channel else "mono"
+    subdir = "mono_snr" if snr is not None else "mono"
     filename = f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}"
-    if use_channel:
+    if snr is not None:
         filename += f"_snr{_snr_tag(snr)}"
     filename += f"_{tx_enc}_{rx_enc}"
     out_path = RESULTS_DIR / subdir / f"{filename}.parquet"
 
     if out_path.exists():
         print(
-            f"Skipping mono{'_channel' if use_channel else ''} L={L}, M_int={M_int}, seed={seed}."
+            f"Skipping mono{'_snr' if snr is not None else ''} L={L}, M_int={M_int}, seed={seed}."
         )
         return
 
@@ -901,7 +896,7 @@ def run_single_mono_layers_config(
 
         # Both sweeps run through the channel: the layers sweep uses snr=None
         # (infinite SNR → zero-forcing, no noise), the SNR sweep uses MMSE + AWGN.
-        mono_probe = run_evaluation_mono_channel(
+        mono_probe = run_evaluation_mono(
             G_T_f,
             test_loader,
             H_torch,
@@ -915,7 +910,7 @@ def run_single_mono_layers_config(
             device,
         )
         mono_neural = (
-            run_evaluation_mono_channel(
+            run_evaluation_mono(
                 G_T_f,
                 test_loader,
                 H_torch,
@@ -933,7 +928,7 @@ def run_single_mono_layers_config(
         )
 
     print(
-        f" Mono{'(+H)' if use_channel else ''} L={L} M={M_int} seed={seed}"
+        f" Mono{'(snr=' + str(snr) + ')' if snr is not None else ''} L={L} M={M_int} seed={seed}"
         f" | no_mismatch={no_mismatch_probe:.2f}%{_neural_str('nm_neural', no_mismatch_neural)}"
         f" | orig={original_probe:.2f}%{_neural_str('orig_neural', original_neural)}"
         f" | sim={mono_probe * 100:.2f}%{_neural_str('sim_neural', _pct(mono_neural))}"

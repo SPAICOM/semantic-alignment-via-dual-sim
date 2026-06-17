@@ -12,7 +12,7 @@ Functions
 ---------
 run_evaluation              — joint Dual-SIM (G_R · H · G_T), optional AWGN.
 run_evaluation_mmse         — digital MMSE/ZF baseline (no SIM).
-run_evaluation_mono_channel — TX-only SIM with MMSE equalizer at RX.
+run_evaluation_mono — TX-only SIM with MMSE equalizer at RX.
 run_evaluation_disjoint_fixed — disjoint Dual-SIM with frozen TX and RX cascades.
 """
 
@@ -195,7 +195,7 @@ def run_evaluation_mmse(
     return (np.array(all_preds) == np.array(all_labels)).mean()
 
 
-def run_evaluation_mono_channel(
+def run_evaluation_mono(
     G_T: torch.Tensor,
     dataloader: DataLoader,
     H_mimo: torch.Tensor,

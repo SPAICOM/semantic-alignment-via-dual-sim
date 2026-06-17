@@ -7,9 +7,9 @@ the receiver; ``experiment.snr`` selects the regime:
   snr is None: ŷ = β G_eq(H) · (H · G_T · x_w)          — ZF, infinite SNR (no noise)
   snr finite:  ŷ = β G_eq(H) · (H · G_T · x_w + noise)  — MMSE equalisation + AWGN
 
-``experiment.use_channel`` only selects the output location: the layers sweep
-(``False`` → ``results/mono/``) runs the noiseless ZF case, the SNR sweep
-(``True`` → ``results/mono_channel/``) runs the MMSE+AWGN case.
+Output location is determined by ``snr``:
+  snr=null   → ``results/mono/``      (layers sweep, noiseless ZF)
+  snr finite → ``results/mono_snr/`` (SNR sweep, MMSE + AWGN)
 
 Always evaluates with the linear probe.  If a pre-trained neural classifier is
 available (run ``just train-clf`` first), it is also evaluated and the results
@@ -17,8 +17,8 @@ are stored in the *_neural Parquet columns.
 
 Examples
 --------
-    just run-mono                                      # no-channel sweep
-    just run-mono experiment.use_channel=true          # with-channel sweep
+    just run-mono                          # layers sweep, noiseless
+    just run-mono-snr                      # SNR sweep
     just run-mono alignment=linear
     uv run python scripts/mono_sim.py -m training.seed=42 experiment.L=10
 """
@@ -51,24 +51,19 @@ from semantic_alignment.utils.utils import (
 def _out_path(cfg: DictConfig) -> Path:
     """Return the output Parquet path for this job from cfg alone — no data needed."""
     exp = cfg.experiment
-    use_channel = bool(exp.get("use_channel", False))
     snr = exp.get("snr", None)
-    snr_val = None if str(snr) == "null" else snr
-    snr_tag = "inf" if snr_val is None else str(snr_val)
+    snr = None if str(snr) == "null" else snr
     strategy = cfg.alignment.type
     seed = cfg.training.seed
     tx = cfg.data.tx_enc
     rx = cfg.data.rx_enc
     M = exp.M_int
     L = exp.L
-    ch_dim = exp.get("channel_dim", None)
-    ch_dim = ch_dim if ch_dim is not None else 384
-    ch_tag = f"ch{ch_dim}"
 
-    subdir = "mono_channel" if use_channel else "mono"
-    filename = f"{strategy}_seed{seed}_L{L}_M{M}x{M}_{ch_tag}"
-    if use_channel:
-        filename += f"_snr{snr_tag}"
+    subdir = "mono_snr" if snr is not None else "mono"
+    filename = f"{strategy}_seed{seed}_L{L}_M{M}x{M}"
+    if snr is not None:
+        filename += f"_snr{snr}"
     filename += f"_{tx}_{rx}"
     return Path("results") / subdir / f"{filename}.parquet"
 
@@ -80,7 +75,6 @@ def main(cfg: DictConfig) -> None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
     exp = cfg.experiment
-    use_channel = bool(exp.get("use_channel", False))
     snr = exp.get("snr", None)
     snr = None if str(snr) == "null" else snr
 
@@ -88,8 +82,9 @@ def main(cfg: DictConfig) -> None:
         print(f" Already done: {_out_path(cfg).name} — skipping.")
         return
 
+    snr_label = f"snr={snr}" if snr is not None else "noiseless"
     print(
-        f" seed={cfg.training.seed} | Mono-SIM{'(+H)' if use_channel else ''} | "
+        f" seed={cfg.training.seed} | Mono-SIM ({snr_label}) | "
         f"L={exp.L} M_int={exp.M_int} | "
         f"dataset={cfg.datasets.hf_name} | align={cfg.alignment.type}"
     )
@@ -201,8 +196,6 @@ def main(cfg: DictConfig) -> None:
         if clf_neural is not None
         else None
     )
-    # Both sweeps propagate through the MIMO channel; the layers sweep equalizes
-    # at infinite SNR (zero-forcing, snr=None), the SNR sweep uses MMSE + AWGN.
     H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
 
     run_single_mono_layers_config(
@@ -222,7 +215,6 @@ def main(cfg: DictConfig) -> None:
         seed=seed,
         max_iters=cfg.training.max_iters,
         lr=cfg.training.lr,
-        use_channel=use_channel,
         H_mimo=H_mimo,
         snr=snr,
         clf_neural=clf_neural,

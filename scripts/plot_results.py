@@ -420,7 +420,7 @@ def accuracy_vs_mono_layers() -> None:
 
 def accuracy_vs_mono_snr() -> None:
     """Accuracy vs SNR [dB] — Mono-SIM (TX-only) over the MIMO channel."""
-    df = _load_parquet_glob("mono_channel/*.parquet")
+    df = _load_parquet_glob("mono_snr/*.parquet")
     if df is None:
         print("No mono-SIM SNR results found.")
         return
@@ -912,7 +912,7 @@ def arch_comparison_snr() -> None:
         ("disjoint", "disjoint_snr/*.parquet", "Disjoint"),
         ("disjoint_csi", "disjoint_csi_snr/*.parquet", "Disjoint CSI"),
         ("disjoint_4sim", "disjoint_4sim_snr/*.parquet", "Disjoint 4-SIM"),
-        ("mono", "mono_channel/*.parquet", "Mono"),
+        ("mono", "mono_snr/*.parquet", "Mono"),
     ]:
         df = _load_parquet_glob(pattern)
         if df is None:

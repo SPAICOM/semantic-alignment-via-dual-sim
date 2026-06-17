@@ -1,5 +1,4 @@
 name: mono_snr
 L: 10
 M_int: 32
-use_channel: true
 snr: 0          # dB; swept via config_mono_snr sweeper

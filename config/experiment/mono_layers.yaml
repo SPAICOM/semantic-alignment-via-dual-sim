@@ -1,5 +1,4 @@
 name: mono_layers
 L: 10
 M_int: 32
-use_channel: false
-snr: null         # dB; null = no noise (only used when use_channel=true)
+snr: null         # dB; null = noiseless ZF equalizer
