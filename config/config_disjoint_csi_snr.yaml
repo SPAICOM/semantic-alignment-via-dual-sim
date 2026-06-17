@@ -13,5 +13,5 @@ hydra:
   sweeper:
     params:
       experiment.M_int: 16,32
-      training.seed: 27,42,100,123,144,200
+      training.seed: 27,42,100
       experiment.snr: -30,-20,-10,0,10,20,30

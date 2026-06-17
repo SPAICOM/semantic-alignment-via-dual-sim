@@ -15,12 +15,15 @@ def ppfe(
     n_clusters: int,
     n_proto: int,
     seed: int = None,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Prototype-based Parseval Frame Equalization (zero-shot alignment).
 
     Clusters the RX embedding space, computes per-cluster prototypes for TX
-    and RX, then finds orthonormal maps via polar decomposition (SVD) and
-    returns A = G @ F.
+    and RX, then finds the nearest orthonormal maps via polar decomposition.
+
+    The TX synthesis frame ``F`` and the RX analysis frame ``G`` satisfy
+    ``G @ F = A`` (the full alignment matrix).  The caller is responsible for
+    computing ``A = G @ F`` when needed.
 
     Parameters
     ----------
@@ -31,16 +34,19 @@ def ppfe(
     output_real : torch.Tensor
         Real-valued RX embeddings used for KMeans clustering, shape ``(N, D_rx)``.
     n_clusters : int
-        Number of semantic clusters (typically equal to the number of classes).
+        Number of prototypes / cluster centres.  Set to ``ch_dim`` (the physical
+        channel dimension) when computing frames for the CSI-disjoint SIM.
     n_proto : int
-        Number of samples per cluster used to compute each prototype.
+        Number of samples per cluster used to compute each prototype mean.
     seed : int, optional
         Random seed for KMeans and prototype subsampling.
 
     Returns
     -------
-    torch.Tensor
-        Alignment matrix A of shape ``(D_rx, D_tx)``.
+    F : torch.Tensor
+        TX synthesis frame, shape ``(n_clusters, D_tx)``.
+    G : torch.Tensor
+        RX analysis frame, shape ``(D_rx, n_clusters)``.
     """
     # Work with samples as rows for cluster/prototype operations
     X = X.H
@@ -70,15 +76,15 @@ def ppfe(
     X = X[idx]
     Y = Y[idx]
 
-    # Polar decomposition of X_proto: F = U Vt (nearest orthonormal matrix)
+    # Polar decomposition of X_proto: F = U Vt  (TX synthesis frame)
     U, S, Vt = torch.linalg.svd(X, full_matrices=False)
     F = U @ Vt
 
-    # Polar decomposition of Y_proto: G = (U Vt)ᴴ maps to RX canonical frame
+    # Polar decomposition of Y_proto: G = (U Vt)ᴴ  (RX analysis frame)
     U, S, Vt = torch.linalg.svd(Y, full_matrices=False)
     G = (U @ Vt).H
 
-    return G @ F
+    return F, G
 
 
 def ridge_regression(

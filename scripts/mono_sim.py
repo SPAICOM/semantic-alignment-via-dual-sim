@@ -61,9 +61,12 @@ def _out_path(cfg: DictConfig) -> Path:
     rx = cfg.data.rx_enc
     M = exp.M_int
     L = exp.L
+    ch_dim = exp.get("channel_dim", None)
+    ch_dim = ch_dim if ch_dim is not None else 384
+    ch_tag = f"ch{ch_dim}"
 
     subdir = "mono_channel" if use_channel else "mono"
-    filename = f"{strategy}_seed{seed}_L{L}_M{M}x{M}"
+    filename = f"{strategy}_seed{seed}_L{L}_M{M}x{M}_{ch_tag}"
     if use_channel:
         filename += f"_snr{snr_tag}"
     filename += f"_{tx}_{rx}"
@@ -160,7 +163,7 @@ def main(cfg: DictConfig) -> None:
     if cfg.alignment.type == "Linear":
         A_target = ridge_regression(input_w, output_w, lmb=cfg.alignment.lmb)
     else:
-        A_target = ppfe(
+        F, G = ppfe(
             input_w,
             output_w,
             output_real=pilots.z_rx,
@@ -168,6 +171,7 @@ def main(cfg: DictConfig) -> None:
             n_proto=cfg.alignment.n_proto,
             seed=seed,
         )
+        A_target = G @ F
 
     original_probe = (
         run_original_accuracy(

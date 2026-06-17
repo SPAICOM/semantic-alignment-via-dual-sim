@@ -70,58 +70,63 @@ def _out_path(cfg: DictConfig) -> Path | None:
     tx = cfg.data.tx_enc
     rx = cfg.data.rx_enc
     M = exp.M_int
+    ch_dim = exp.get("channel_dim", None)
+    ch_dim = ch_dim if ch_dim is not None else 384
+    ch_tag = f"ch{ch_dim}"
 
     if name == "layers":
         return (
-            _RESULTS / "dual_layers" / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+            _RESULTS
+            / "dual_layers"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "snr":
         return (
             _RESULTS
             / "dual_snr"
-            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "slayer":
         return (
             _RESULTS
             / "dual_slayer"
-            / f"{strategy}_seed{seed}_stx{exp.s_tx}_srx{exp.s_rx}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_stx{exp.s_tx}_srx{exp.s_rx}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_layers":
         return (
             _RESULTS
             / "disjoint_layers"
-            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_csi_layers":
         return (
             _RESULTS
             / "disjoint_csi_layers"
-            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_4sim_layers":
         return (
             _RESULTS
             / "disjoint_4sim_layers"
-            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_csi_snr":
         return (
             _RESULTS
             / "disjoint_csi_snr"
-            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_4sim_snr":
         return (
             _RESULTS
             / "disjoint_4sim_snr"
-            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_snr":
         return (
             _RESULTS
             / "disjoint_snr"
-            / f"{strategy}_seed{seed}_M{M}x{M}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
+            / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     return None
 
@@ -193,17 +198,37 @@ def _setup(cfg: DictConfig):
     input_w, L_in, mu_in = prewhiten(input_c, device=device)
     output_w, L_out, mu_out = prewhiten(output_c, device=device)
 
+    _CSI_EXPERIMENTS = {
+        "disjoint_csi_layers",
+        "disjoint_csi_snr",
+        "disjoint_4sim_layers",
+        "disjoint_4sim_snr",
+    }
+
     if cfg.alignment.type == "Linear":
         A_target = ridge_regression(input_w, output_w, lmb=cfg.alignment.lmb)
+        F_T, F_R_H = None, None
     else:
-        A_target = ppfe(
+        is_csi = cfg.experiment.name in _CSI_EXPERIMENTS
+        if is_csi:
+            # CSI-disjoint frames: n_clusters = ch_dim so that B_T @ F_T and F_R_H @ B_R
+            # are dimensionally consistent with the SIM and the physical channel H.
+            n_k = int(max(input_w.shape[0], output_w.shape[0]))
+        else:
+            n_k = cfg.alignment.n_clusters
+
+        F_T, F_R_H = ppfe(
             input_w,
             output_w,
             output_real=pilots.z_rx,
-            n_clusters=cfg.alignment.n_clusters,
+            n_clusters=n_k,
             n_proto=cfg.alignment.n_proto,
             seed=seed,
         )
+        A_target = F_R_H @ F_T
+
+        if not is_csi:
+            F_T, F_R_H = None, None
 
     # Original: A_target applied to TX embeddings, no SIM, no channel
     original_probe = (
@@ -234,7 +259,9 @@ def _setup(cfg: DictConfig):
         if clf_neural is not None
         else None
     )
-    H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+    ch_dim_cfg = cfg.experiment.get("channel_dim", None)
+    h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
+    H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
 
     return dict(
         seed=seed,
@@ -260,6 +287,8 @@ def _setup(cfg: DictConfig):
         optimizer=cfg.training.get("optimizer", "adam"),
         scheduler=cfg.training.get("scheduler", "none"),
         warmup_frac=float(cfg.training.get("warmup_frac", 0.05)),
+        F_T=F_T,
+        F_R_H=F_R_H,
     )
 
 
@@ -283,27 +312,42 @@ def main(cfg: DictConfig) -> None:
     )
 
     ctx = _setup(cfg)
+    # F_T / F_R_H are only used by CSI-disjoint runners; pop them so the generic
+    # **ctx spread doesn't break other runner signatures.
+    F_T = ctx.pop("F_T")
+    F_R_H = ctx.pop("F_R_H")
     snr = None if str(exp.get("snr", "null")) == "null" else exp.snr
+    ch_dim = exp.get("channel_dim", None)
 
     match exp_name:
         case "layers":
-            run_single_layers_config(L=exp.L, M_int=exp.M_int, **ctx)
+            run_single_layers_config(L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, **ctx)
         case "snr":
-            run_single_snr_config(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+            run_single_snr_config(L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, **ctx)
         case "slayer":
-            run_single_slayer_config(L=exp.L, M_int=exp.M_int, s_tx=exp.s_tx, s_rx=exp.s_rx, **ctx)
+            run_single_slayer_config(
+                L=exp.L, M_int=exp.M_int, s_tx=exp.s_tx, s_rx=exp.s_rx, channel_dim=ch_dim, **ctx
+            )
         case "disjoint_layers":
-            run_single_disjoint_layers(L=exp.L, M_int=exp.M_int, **ctx)
+            run_single_disjoint_layers(L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, **ctx)
         case "disjoint_snr":
-            run_single_disjoint_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+            run_single_disjoint_snr(L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, **ctx)
         case "disjoint_csi_layers":
-            run_single_disjoint_csi_layers(L=exp.L, M_int=exp.M_int, **ctx)
+            run_single_disjoint_csi_layers(
+                L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
+            )
         case "disjoint_csi_snr":
-            run_single_disjoint_csi_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+            run_single_disjoint_csi_snr(
+                L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
+            )
         case "disjoint_4sim_layers":
-            run_single_disjoint_4sim_layers(L=exp.L, M_int=exp.M_int, **ctx)
+            run_single_disjoint_4sim_layers(
+                L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
+            )
         case "disjoint_4sim_snr":
-            run_single_disjoint_4sim_snr(L=exp.L, M_int=exp.M_int, snr=snr, **ctx)
+            run_single_disjoint_4sim_snr(
+                L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
+            )
         case _:
             print(f"Unknown experiment '{exp_name}'.")
 

@@ -3,3 +3,4 @@ L: 10
 M_int: 32
 s_tx: 5         # TX inter-layer spacing in units of lambda
 s_rx: 5         # RX inter-layer spacing in units of lambda
+channel_dim: null   # null → max(K_in, K_out)
