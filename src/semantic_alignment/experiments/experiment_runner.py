@@ -1534,6 +1534,11 @@ def run_single_disjoint_csi_layers(
         inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
         B_T = Vh.H @ torch.diag(inv_sqrt_s)  # V Σ^{-1/2}
         B_R = torch.diag(inv_sqrt_s) @ U.H  # Σ^{-1/2} Uᴴ
+        I_approx = B_R @ H_torch @ B_T
+        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=H_torch.device)
+        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
+            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
+        )
 
         # Truncate to ch_dim if needed (for channel_dim < full rank)
         if ch_dim < B_T.shape[0]:
@@ -1820,6 +1825,11 @@ def run_single_disjoint_4sim_layers(
         inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
         B_T = Vh.H @ torch.diag(inv_sqrt_s)  # V Σ^{-1/2}
         B_R = torch.diag(inv_sqrt_s) @ U.H  # Σ^{-1/2} Uᴴ
+        I_approx = B_R @ H_torch @ B_T
+        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=H_torch.device)
+        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
+            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
+        )
 
         match strategy_name:
             case "PPFE":
@@ -2051,6 +2061,11 @@ def run_single_disjoint_csi_snr(
         inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
         B_T = Vh.H @ torch.diag(inv_sqrt_s)  # V Σ^{-1/2}
         B_R = torch.diag(inv_sqrt_s) @ U.H  # Σ^{-1/2} Uᴴ
+        I_approx = B_R @ H_torch @ B_T
+        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=H_torch.device)
+        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
+            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
+        )
 
         match strategy_name:
             case "PPFE":
@@ -2256,6 +2271,11 @@ def run_single_disjoint_4sim_snr(
         inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
         B_T = Vh.H @ torch.diag(inv_sqrt_s)  # V Σ^{-1/2}
         B_R = torch.diag(inv_sqrt_s) @ U.H  # Σ^{-1/2} Uᴴ
+        I_approx = B_R @ H_torch @ B_T
+        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=H_torch.device)
+        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
+            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
+        )
 
         match strategy_name:
             case "PPFE":
