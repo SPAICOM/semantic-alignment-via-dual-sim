@@ -128,6 +128,30 @@ def _out_path(cfg: DictConfig) -> Path | None:
             / "disjoint_snr"
             / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
+    if name == "channel_dim_joint":
+        return (
+            _RESULTS
+            / "dual_channel_dim"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
+        )
+    if name == "channel_dim_disjoint":
+        return (
+            _RESULTS
+            / "disjoint_channel_dim"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
+        )
+    if name == "channel_dim_disjoint_csi":
+        return (
+            _RESULTS
+            / "disjoint_csi_channel_dim"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
+        )
+    if name == "channel_dim_disjoint_4sim":
+        return (
+            _RESULTS
+            / "disjoint_4sim_channel_dim"
+            / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
+        )
     return None
 
 
@@ -352,6 +376,42 @@ def main(cfg: DictConfig) -> None:
         case "disjoint_4sim_snr":
             run_single_disjoint_4sim_snr(
                 L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
+            )
+        case "channel_dim_joint":
+            run_single_layers_config(
+                L=exp.L,
+                M_int=exp.M_int,
+                channel_dim=ch_dim,
+                result_subdir="dual_channel_dim",
+                **ctx,
+            )
+        case "channel_dim_disjoint":
+            run_single_disjoint_layers(
+                L=exp.L,
+                M_int=exp.M_int,
+                channel_dim=ch_dim,
+                result_subdir="disjoint_channel_dim",
+                **ctx,
+            )
+        case "channel_dim_disjoint_csi":
+            run_single_disjoint_csi_layers(
+                L=exp.L,
+                M_int=exp.M_int,
+                channel_dim=ch_dim,
+                result_subdir="disjoint_csi_channel_dim",
+                F_T=F_T,
+                F_R_H=F_R_H,
+                **ctx,
+            )
+        case "channel_dim_disjoint_4sim":
+            run_single_disjoint_4sim_layers(
+                L=exp.L,
+                M_int=exp.M_int,
+                channel_dim=ch_dim,
+                result_subdir="disjoint_4sim_channel_dim",
+                F_T=F_T,
+                F_R_H=F_R_H,
+                **ctx,
             )
         case _:
             print(f"Unknown experiment '{exp_name}'.")

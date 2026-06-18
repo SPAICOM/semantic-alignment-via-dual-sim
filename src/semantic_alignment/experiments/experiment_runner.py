@@ -230,6 +230,7 @@ def run_single_layers_config(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
+    result_subdir: str = "dual_layers",
 ) -> None:
     """Run one (L, M_int, seed) job of the layers sweep for the joint Dual-SIM.
 
@@ -288,7 +289,7 @@ def run_single_layers_config(
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     out_path = (
         RESULTS_DIR
-        / "dual_layers"
+        / result_subdir
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
@@ -999,6 +1000,7 @@ def run_single_disjoint_layers(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
+    result_subdir: str = "disjoint_layers",
 ) -> None:
     """Run one (L, M_int, seed) job of the disjoint layers sweep.
 
@@ -1048,7 +1050,7 @@ def run_single_disjoint_layers(
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     out_path = (
         RESULTS_DIR
-        / "disjoint_layers"
+        / result_subdir
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
@@ -1450,6 +1452,7 @@ def run_single_disjoint_csi_layers(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
+    result_subdir: str = "disjoint_csi_layers",
     F_T=None,
     F_R_H=None,
 ) -> None:
@@ -1476,7 +1479,7 @@ def run_single_disjoint_csi_layers(
 
     out_path = (
         RESULTS_DIR
-        / "disjoint_csi_layers"
+        / result_subdir
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
@@ -1695,6 +1698,7 @@ def run_single_disjoint_4sim_layers(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
+    result_subdir: str = "disjoint_4sim_layers",
     F_T=None,
     F_R_H=None,
 ) -> None:
@@ -1731,7 +1735,7 @@ def run_single_disjoint_4sim_layers(
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     out_path = (
         RESULTS_DIR
-        / "disjoint_4sim_layers"
+        / result_subdir
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():

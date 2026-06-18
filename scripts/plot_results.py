@@ -73,8 +73,8 @@ def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
         added.append("No Mismatch")
 
     for strat, linestyle, label in [
-        ("Linear", "-.", "Original Linear"),
-        ("PPFE", ":", "Original PPFE"),
+        ("Linear", "-.", "Oracle Linear"),
+        ("PPFE", ":", "Oracle PPFE"),
     ]:
         vals = df.filter(pl.col("strategy") == strat)["original_neural"].drop_nulls()
         if vals.len() > 0:
@@ -1071,6 +1071,111 @@ def loss_curves_dual_layers() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Accuracy vs Channel Dimension
+# ---------------------------------------------------------------------------
+
+
+def accuracy_vs_channel_dim() -> None:
+    """Accuracy vs channel dimension C — all architectures, L=10, M_int=32×32.
+
+    One plot per alignment strategy (Linear / PPFE). X-axis is channel_dim on
+    a log scale; architectures are distinguished by colour.
+    """
+    M_FILTER = "32x32"
+    ARCH_SOURCES = [
+        ("dual_channel_dim", "Joint"),
+        ("disjoint_channel_dim", "Disjoint"),
+        ("disjoint_csi_channel_dim", "Disjoint CSI"),
+        ("disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
+    ]
+
+    frames = []
+    for subdir, arch_label in ARCH_SOURCES:
+        df = _load_parquet_glob(f"{subdir}/*.parquet")
+        if df is None:
+            continue
+        df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
+            pl.lit(arch_label).alias("Architecture")
+        )
+        if not df.is_empty():
+            frames.append(df)
+
+    if not frames:
+        print("No channel_dim data found — run 'just channel-dim' first.")
+        return
+
+    acc_col = "sim_accuracy_neural"
+    if frames[0][acc_col].drop_nulls().is_empty():
+        acc_col = "sim_accuracy_probe"
+
+    df_all = pl.concat(
+        [
+            f.select(
+                [
+                    "channel_dim",
+                    "strategy",
+                    "Architecture",
+                    acc_col,
+                    "no_mismatch_probe",
+                    "no_mismatch_neural",
+                    "original_probe",
+                    "original_neural",
+                ]
+            )
+            for f in frames
+        ],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+
+    channel_dims = sorted(df_all["channel_dim"].drop_nulls().unique().to_list())
+
+    for strategy in df_all["strategy"].unique().sort().to_list():
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+        if df_s.is_empty():
+            continue
+
+        ax = sns.lineplot(
+            df_s.to_pandas(),
+            x="channel_dim",
+            y="accuracy",
+            hue="Architecture",
+            markers=True,
+            dashes=False,
+        )
+        baseline_labels = _add_baseline_hlines(df_s)
+
+        ax.set_xscale("log")
+        ax.set_xticks(channel_dims)
+        ax.set_xticklabels([str(c) for c in channel_dims], rotation=45, ha="right")
+
+        handles, labels = ax.get_legend_handles_labels()
+        arch_labels = sorted(df_s["Architecture"].unique().to_list())
+
+        def _make_legend(lbl_list, title, **kwargs):
+            hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+            return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+        leg1 = _make_legend(
+            arch_labels, "Architecture", ncol=2, loc="upper center", bbox_to_anchor=(0.5, 0.25)
+        )
+        leg2 = _make_legend(
+            baseline_labels,
+            "",
+            ncol=len(baseline_labels),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+        )
+        ax.add_artist(leg1)
+        ax.add_artist(leg2)
+
+        plt.xlabel(r"Channel Dimension $C$")
+        plt.ylabel("Accuracy")
+        plt.ylim(None, 1.0)
+        plt.title(f"{strategy} — Accuracy vs Channel Dimension (L=10, M=32×32)")
+        _save(f"ChannelDim_{strategy}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1092,6 +1197,7 @@ def main() -> None:
     loss_curves_dual_layers()
     arch_comparison_layers()
     arch_comparison_snr()
+    accuracy_vs_channel_dim()
 
     print(f"\n All plots saved to {IMG_PATH}")
 
