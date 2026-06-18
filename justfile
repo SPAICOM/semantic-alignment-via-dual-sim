@@ -53,15 +53,6 @@ run-disjoint-4sim *ARGS: train-clf
 run-disjoint-4sim-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_snr {{ARGS}}
 
-# Aggregate: symmetric disjoint (layers + SNR + channel-dim)
-disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
-
-# Aggregate: 4-SIM disjoint (layers + SNR + channel-dim)
-disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
-
-# Run every disjoint Dual-SIM sweep: all variants
-disjoint: run-disjoint-asym run-disjoint-asym-snr run-disjoint-sym run-disjoint-sym-snr run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-asym-channel-dim run-disjoint-sym-channel-dim run-disjoint-4sim-channel-dim
-
 # ── Channel-dim sweep (L=10, M_int=32, channel_dim in {1,2,4,6,8,10,20,192,384}) ──
 
 run-joint-channel-dim *ARGS: train-clf
@@ -78,6 +69,18 @@ run-disjoint-4sim-channel-dim *ARGS: train-clf
 
 # Run all channel-dim sweeps
 channel-dim: run-joint-channel-dim run-disjoint-asym-channel-dim run-disjoint-sym-channel-dim run-disjoint-4sim-channel-dim
+
+# Aggregate: asymmetric disjoint (layers + SNR + channel-dim)
+disjoint-asym: run-disjoint-asym run-disjoint-asym-snr run-disjoint-asym-channel-dim
+
+# Aggregate: symmetric disjoint (layers + SNR + channel-dim)
+disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
+
+# Aggregate: 4-SIM disjoint (layers + SNR + channel-dim)
+disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
+
+# Run every disjoint Dual-SIM sweep: all variants
+disjoint: disjoint-asym disjoint-sym
 
 # Single run without multirun (useful for quick tests)
 run *ARGS: train-clf
