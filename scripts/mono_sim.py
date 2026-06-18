@@ -196,7 +196,8 @@ def main(cfg: DictConfig) -> None:
         if clf_neural is not None
         else None
     )
-    H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+    h_dim = int(A_target.shape[0])
+    H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
 
     run_single_mono_layers_config(
         L=exp.L,
