@@ -227,6 +227,8 @@ def _setup(cfg: DictConfig):
         "disjoint_csi_snr",
         "disjoint_4sim_layers",
         "disjoint_4sim_snr",
+        "channel_dim_disjoint_csi",
+        "channel_dim_disjoint_4sim",
     }
 
     if cfg.alignment.type == "Linear":

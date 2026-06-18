@@ -800,7 +800,7 @@ def accuracy_vs_disjoint_4sim_snr() -> None:
 
 
 def arch_comparison_layers() -> None:
-    """Accuracy vs $L$ — all architectures, M_int=32×32.
+    """Accuracy vs $L$ — all architectures, M_int=32×32. Grid: cols = strategy.
 
     4-SIM L values are multiplied by 2 to match hardware-equivalent depth
     (each 4-SIM run uses L layers per SIM = 2L total layers per side).
@@ -821,7 +821,6 @@ def arch_comparison_layers() -> None:
         df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
             pl.lit(arch_label).alias("Architecture")
         )
-        # Normalise 4-SIM L to hardware-equivalent total depth (×2)
         if key == "disjoint_4sim":
             df = df.with_columns((pl.col("L") * 2).alias("L"))
         if not df.is_empty():
@@ -852,48 +851,91 @@ def arch_comparison_layers() -> None:
     ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
 
     ticks = df_all["L"].unique().sort().to_list()
-
-    ax = sns.lineplot(
-        df_all.to_pandas(),
-        x="L",
-        y="accuracy",
-        hue="Architecture",
-        style="strategy",
-        markers=True,
-        dashes=True,
-    )
-    baseline_labels = _add_baseline_hlines(df_all)
-
-    handles, labels = ax.get_legend_handles_labels()
+    strat_list = sorted(df_all["strategy"].unique().to_list())
     arch_labels = sorted(df_all["Architecture"].unique().to_list())
-    strat_labels = sorted(df_all["strategy"].unique().to_list())
 
-    def _make_legend(lbl_list, title, **kwargs):
-        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
-        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+    fig, axes = plt.subplots(
+        1,
+        len(strat_list),
+        sharey=True,
+        sharex=True,
+        squeeze=False,
+        figsize=(8 * len(strat_list), 6),
+        layout="constrained",
+    )
 
-    leg1 = _make_legend(
-        arch_labels, "Architecture", ncol=3, loc="upper center", bbox_to_anchor=(0.37, 0.18)
-    )
-    leg2 = _make_legend(
-        baseline_labels,
-        "",
-        ncol=len(baseline_labels),
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.12),
-    )
-    leg3 = _make_legend(
-        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
-    )
-    ax.add_artist(leg1)
-    ax.add_artist(leg2)
-    ax.add_artist(leg3)
+    arch_handles, arch_handle_labels = [], []
+    baseline_handles_dict: dict[str, object] = {}
 
-    plt.xlabel(r"Equivalent SIM Layers $L$ (4-SIM: $2 \times L_{\mathrm{per\,SIM}}$)")
-    plt.ylabel("Accuracy")
-    plt.xticks(ticks, labels=ticks)
-    plt.xlim(min(ticks), max(ticks))
-    plt.ylim(None, 1.0)
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+
+        sns.lineplot(
+            df_s.to_pandas(),
+            x="L",
+            y="accuracy",
+            hue="Architecture",
+            markers=True,
+            dashes=False,
+            ax=ax,
+        )
+
+        # Capture arch handles from the first subplot only
+        if c == 0:
+            arch_handle_labels, arch_handles = (
+                zip(
+                    *[
+                        (label, h)
+                        for h, label in zip(*ax.get_legend_handles_labels())
+                        if label in arch_labels
+                    ]
+                )
+                if arch_labels
+                else ([], [])
+            )
+
+        plt.sca(ax)
+        bl_added = _add_baseline_hlines(df_s)
+
+        # Collect baseline handles (each subplot contributes its own Oracle)
+        h_all, l_all = ax.get_legend_handles_labels()
+        for hi, li in zip(h_all, l_all):
+            if li in bl_added and li not in baseline_handles_dict:
+                baseline_handles_dict[li] = hi
+
+        if ax.get_legend():
+            ax.get_legend().remove()
+
+        ax.set_title(strategy)
+        ax.set_xlabel(r"Equivalent SIM Layers $L$ (4-SIM: $2 \times L_{\mathrm{per\,SIM}}$)")
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(ticks)
+        ax.set_xlim(min(ticks), max(ticks))
+        ax.set_ylim(None, 1.0)
+
+    # Two shared figure legends
+    fig.legend(
+        list(arch_handles),
+        list(arch_handle_labels),
+        title="Architecture",
+        ncol=len(arch_labels),
+        loc="outside lower left",
+        frameon=True,
+        framealpha=1,
+    )
+    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+    fig.legend(
+        [baseline_handles_dict[lbl] for lbl in bl_labels],
+        bl_labels,
+        ncol=len(bl_labels),
+        loc="outside lower right",
+        frameon=True,
+        framealpha=1,
+    )
+
     _save("ArchComparison_Layers_M32")
 
 
@@ -903,7 +945,7 @@ def arch_comparison_layers() -> None:
 
 
 def arch_comparison_snr() -> None:
-    """Accuracy vs SNR — all architectures, M_int=32×32."""
+    """Accuracy vs SNR — all architectures, M_int=32×32. Grid: cols = strategy."""
     M_FILTER = "32x32"
 
     frames = {}
@@ -948,48 +990,88 @@ def arch_comparison_snr() -> None:
     ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
 
     ticks = df_all["snr"].unique().sort().to_list()
-
-    ax = sns.lineplot(
-        df_all.to_pandas(),
-        x="snr",
-        y="accuracy",
-        hue="Architecture",
-        style="strategy",
-        markers=True,
-        dashes=True,
-    )
-    baseline_labels = _add_baseline_hlines(df_all)
-
-    handles, labels = ax.get_legend_handles_labels()
+    strat_list = sorted(df_all["strategy"].unique().to_list())
     arch_labels = sorted(df_all["Architecture"].unique().to_list())
-    strat_labels = sorted(df_all["strategy"].unique().to_list())
 
-    def _make_legend(lbl_list, title, **kwargs):
-        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
-        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+    fig, axes = plt.subplots(
+        1,
+        len(strat_list),
+        sharey=True,
+        sharex=True,
+        squeeze=False,
+        figsize=(8 * len(strat_list), 6),
+        layout="constrained",
+    )
 
-    leg1 = _make_legend(
-        arch_labels, "Architecture", ncol=3, loc="upper center", bbox_to_anchor=(0.16, 0.88)
-    )
-    leg2 = _make_legend(
-        baseline_labels,
-        "",
-        ncol=len(baseline_labels),
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.12),
-    )
-    leg3 = _make_legend(
-        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
-    )
-    ax.add_artist(leg1)
-    ax.add_artist(leg2)
-    ax.add_artist(leg3)
+    arch_handles, arch_handle_labels = [], []
+    baseline_handles_dict: dict[str, object] = {}
 
-    plt.xlabel(r"Signal-to-Noise Ratio [dB]")
-    plt.ylabel("Accuracy")
-    plt.xticks(ticks, labels=ticks)
-    plt.xlim(min(ticks), max(ticks))
-    plt.ylim(None, 1.0)
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+
+        sns.lineplot(
+            df_s.to_pandas(),
+            x="snr",
+            y="accuracy",
+            hue="Architecture",
+            markers=True,
+            dashes=False,
+            ax=ax,
+        )
+
+        if c == 0:
+            arch_handle_labels, arch_handles = (
+                zip(
+                    *[
+                        (lbl, h)
+                        for h, lbl in zip(*ax.get_legend_handles_labels())
+                        if lbl in arch_labels
+                    ]
+                )
+                if arch_labels
+                else ([], [])
+            )
+
+        plt.sca(ax)
+        bl_added = _add_baseline_hlines(df_s)
+
+        h_all, l_all = ax.get_legend_handles_labels()
+        for hi, li in zip(h_all, l_all):
+            if li in bl_added and li not in baseline_handles_dict:
+                baseline_handles_dict[li] = hi
+
+        if ax.get_legend():
+            ax.get_legend().remove()
+
+        ax.set_title(strategy)
+        ax.set_xlabel(r"Signal-to-Noise Ratio [dB]")
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(ticks)
+        ax.set_xlim(min(ticks), max(ticks))
+        ax.set_ylim(None, 1.0)
+
+    fig.legend(
+        list(arch_handles),
+        list(arch_handle_labels),
+        title="Architecture",
+        ncol=len(arch_labels),
+        loc="outside lower left",
+        frameon=True,
+        framealpha=1,
+    )
+    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+    fig.legend(
+        [baseline_handles_dict[lbl] for lbl in bl_labels],
+        bl_labels,
+        ncol=len(bl_labels),
+        loc="outside lower right",
+        frameon=True,
+        framealpha=1,
+    )
+
     _save("ArchComparison_SNR_M32")
 
 
@@ -1076,11 +1158,7 @@ def loss_curves_dual_layers() -> None:
 
 
 def accuracy_vs_channel_dim() -> None:
-    """Accuracy vs channel dimension C — all architectures, L=10, M_int=32×32.
-
-    One plot per alignment strategy (Linear / PPFE). X-axis is channel_dim on
-    a log scale; architectures are distinguished by colour.
-    """
+    """Accuracy vs channel dimension C — all architectures, L=10, M_int=32×32."""
     M_FILTER = "32x32"
     ARCH_SOURCES = [
         ("dual_channel_dim", "Joint"),
@@ -1108,71 +1186,52 @@ def accuracy_vs_channel_dim() -> None:
     if frames[0][acc_col].drop_nulls().is_empty():
         acc_col = "sim_accuracy_probe"
 
-    df_all = pl.concat(
-        [
-            f.select(
-                [
-                    "channel_dim",
-                    "strategy",
-                    "Architecture",
-                    acc_col,
-                    "no_mismatch_probe",
-                    "no_mismatch_neural",
-                    "original_probe",
-                    "original_neural",
-                ]
-            )
-            for f in frames
-        ],
-        how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+    df_all = (
+        pl.concat(
+            [f.select(["channel_dim", "strategy", "Architecture", acc_col]) for f in frames],
+            how="diagonal_relaxed",
+        )
+        .with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+        .sort(["Architecture", "strategy"])
+    )
 
     channel_dims = sorted(df_all["channel_dim"].drop_nulls().unique().to_list())
 
-    for strategy in df_all["strategy"].unique().sort().to_list():
-        df_s = df_all.filter(pl.col("strategy") == strategy)
-        if df_s.is_empty():
-            continue
+    ax = sns.lineplot(
+        df_all.to_pandas(),
+        x="channel_dim",
+        y="accuracy",
+        hue="Architecture",
+        style="strategy",
+        markers=True,
+        dashes=True,
+    )
 
-        ax = sns.lineplot(
-            df_s.to_pandas(),
-            x="channel_dim",
-            y="accuracy",
-            hue="Architecture",
-            markers=True,
-            dashes=False,
-        )
-        baseline_labels = _add_baseline_hlines(df_s)
+    ax.set_xscale("log")
+    ax.set_xticks(channel_dims)
+    ax.set_xticklabels([str(c) for c in channel_dims], rotation=45, ha="right")
 
-        ax.set_xscale("log")
-        ax.set_xticks(channel_dims)
-        ax.set_xticklabels([str(c) for c in channel_dims], rotation=45, ha="right")
+    handles, labels = ax.get_legend_handles_labels()
+    arch_labels = sorted(df_all["Architecture"].unique().to_list())
+    strat_labels = sorted(df_all["strategy"].unique().to_list())
 
-        handles, labels = ax.get_legend_handles_labels()
-        arch_labels = sorted(df_s["Architecture"].unique().to_list())
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
-        def _make_legend(lbl_list, title, **kwargs):
-            hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
-            return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+    leg1 = _make_legend(
+        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.37, 0.18)
+    )
+    leg2 = _make_legend(
+        arch_labels, "Architecture", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
 
-        leg1 = _make_legend(
-            arch_labels, "Architecture", ncol=2, loc="upper center", bbox_to_anchor=(0.5, 0.25)
-        )
-        leg2 = _make_legend(
-            baseline_labels,
-            "",
-            ncol=len(baseline_labels),
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.12),
-        )
-        ax.add_artist(leg1)
-        ax.add_artist(leg2)
-
-        plt.xlabel(r"Channel Dimension $C$")
-        plt.ylabel("Accuracy")
-        plt.ylim(None, 1.0)
-        plt.title(f"{strategy} — Accuracy vs Channel Dimension (L=10, M=32×32)")
-        _save(f"ChannelDim_{strategy}")
+    plt.xlabel(r"Channel Dimension $C$")
+    plt.ylabel("Accuracy")
+    ax.set_xlim(min(channel_dims), max(channel_dims))
+    _save("AccuracyVsChannelDim")
 
 
 # ---------------------------------------------------------------------------
