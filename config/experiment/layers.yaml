@@ -1,4 +1,4 @@
 name: layers
 L: 10
 M_int: 32
-channel_dim: null   # null → max(K_in, K_out)
+channel_dim: 20

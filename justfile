@@ -32,8 +32,8 @@ run-joint-snr *ARGS: train-clf
 run-joint-slayer *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_joint_slayer {{ARGS}}
 
-# Run every joint Dual-SIM sweep: layers + SNR + slayer
-joint: run-joint run-joint-snr run-joint-slayer
+# Run every joint Dual-SIM sweep: layers + SNR + slayer + channel-dim
+joint: run-joint run-joint-snr run-joint-slayer run-joint-channel-dim
 
 run-disjoint *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_layers {{ARGS}}
@@ -53,14 +53,31 @@ run-disjoint-4sim *ARGS: train-clf
 run-disjoint-4sim-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_snr {{ARGS}}
 
-# Aggregate: CSI disjoint (layers + SNR)
-disjoint-csi: run-disjoint-csi run-disjoint-csi-snr
+# Aggregate: CSI disjoint (layers + SNR + channel-dim)
+disjoint-csi: run-disjoint-csi run-disjoint-csi-snr run-disjoint-csi-channel-dim
 
-# Aggregate: 4-SIM disjoint (layers + SNR)
-disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr
+# Aggregate: 4-SIM disjoint (layers + SNR + channel-dim)
+disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
 
 # Run every disjoint Dual-SIM sweep: all variants
-disjoint: run-disjoint run-disjoint-snr run-disjoint-csi run-disjoint-csi-snr run-disjoint-4sim run-disjoint-4sim-snr
+disjoint: run-disjoint run-disjoint-snr run-disjoint-csi run-disjoint-csi-snr run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-channel-dim run-disjoint-csi-channel-dim run-disjoint-4sim-channel-dim
+
+# ── Channel-dim sweep (L=10, M_int=32, channel_dim in {1,2,4,6,8,10,20,192,384}) ──
+
+run-joint-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_joint_channel_dim {{ARGS}}
+
+run-disjoint-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_channel_dim {{ARGS}}
+
+run-disjoint-csi-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_channel_dim {{ARGS}}
+
+run-disjoint-4sim-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_channel_dim {{ARGS}}
+
+# Run all channel-dim sweeps
+channel-dim: run-joint-channel-dim run-disjoint-channel-dim run-disjoint-csi-channel-dim run-disjoint-4sim-channel-dim
 
 # Single run without multirun (useful for quick tests)
 run *ARGS: train-clf

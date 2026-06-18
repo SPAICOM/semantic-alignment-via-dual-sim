@@ -1,8 +1,8 @@
-# CIFAR-10 dataset with ViT-Small (TX) and ViT-Base (RX) encoders
+# CIFAR-10 dataset with ViT-Base (TX) and ViT-Small (RX) encoders
 
 name: cifar10
-tx_enc: vit_small_patch16_224
-rx_enc: vit_base_patch16_224
+tx_enc: vit_base_patch16_224
+rx_enc: vit_small_patch16_224
 
 train_label_size: 4200    # semantic pilots per class
 method: centroid          # pilot selection: centroid | random

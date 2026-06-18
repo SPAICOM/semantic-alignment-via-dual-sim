@@ -1,0 +1,18 @@
+defaults:
+  - sim: default
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: default
+  - classifier: default
+  - experiment: channel_dim_disjoint_4sim
+  - _self_
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      # For Linear, channel_dim must be <= min(K_tx, K_rx) = 192 — 384 will raise ValueError.
+      experiment.channel_dim: 1,2,4,6,8,10,20,192,384
+      alignment: linear,ppfe
+      training.seed: 27,42,100

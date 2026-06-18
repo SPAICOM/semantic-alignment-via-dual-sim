@@ -1,8 +1,8 @@
 # Encoder models and pilot-selection settings.
 # The dataset identity is set via the datasets/ config group.
 
-tx_enc: vit_small_patch16_224.augreg_in1k
-rx_enc: vit_base_patch16_224.augreg_in1k
+tx_enc: vit_base_patch16_224.augreg_in1k
+rx_enc: vit_small_patch16_224.augreg_in1k
 
 train_label_size: 4200   # semantic pilots selected per class
 method: centroid         # pilot selection: centroid | random

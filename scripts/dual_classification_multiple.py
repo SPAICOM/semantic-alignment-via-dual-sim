@@ -211,9 +211,14 @@ def _setup(cfg: DictConfig):
     else:
         is_csi = cfg.experiment.name in _CSI_EXPERIMENTS
         if is_csi:
-            # CSI-disjoint frames: n_clusters = ch_dim so that B_T @ F_T and F_R_H @ B_R
-            # are dimensionally consistent with the SIM and the physical channel H.
-            n_k = int(max(input_w.shape[0], output_w.shape[0]))
+            # n_clusters must equal channel_dim so F_T and F_R_H are dimensionally
+            # consistent with B_T and B_R (both live in the ch_dim space).
+            ch_dim_cfg = cfg.experiment.get("channel_dim", None)
+            n_k = (
+                int(ch_dim_cfg)
+                if ch_dim_cfg is not None
+                else int(max(input_w.shape[0], output_w.shape[0]))
+            )
         else:
             n_k = cfg.alignment.n_clusters
 

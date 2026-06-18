@@ -3,4 +3,4 @@ L: 5
 M_int: 32
 snr: 0          # dB; swept via config_disjoint_4sim_snr sweeper
 # L=5 per SIM ≈ L=10 in the 2-SIM disjoint case (hardware equivalence)
-channel_dim: null   # null → max(K_in, K_out)
+channel_dim: 20
