@@ -5,7 +5,7 @@ defaults:
   - data: default
   - training: default
   - classifier: default
-  - experiment: disjoint_csi_layers
+  - experiment: disjoint_sym_snr
   - _self_
 
 hydra:
@@ -15,4 +15,4 @@ hydra:
       experiment.M_int: 16,32
       alignment: linear,ppfe
       training.seed: 27,42,100
-      experiment.L: 1,2,3,4,5,6,7,8,9,10,15,20,25
+      experiment.snr: -30,-20,-10,0,10,20,30

@@ -5,7 +5,7 @@ defaults:
   - data: default
   - training: default
   - classifier: default
-  - experiment: disjoint_layers
+  - experiment: disjoint_asym_layers
   - _self_
 
 hydra:

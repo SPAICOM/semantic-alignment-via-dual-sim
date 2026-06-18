@@ -1,4 +1,4 @@
-name: disjoint_csi_layers
+name: disjoint_asym_layers
 L: 10
 M_int: 32
 channel_dim: 20

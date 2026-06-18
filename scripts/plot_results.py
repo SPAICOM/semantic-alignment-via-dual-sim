@@ -226,11 +226,11 @@ def accuracy_vs_snr() -> None:
 # ---------------------------------------------------------------------------
 
 
-def accuracy_vs_disjoint_layers() -> None:
-    """Accuracy vs $L$ — Disjoint architecture."""
-    df = _load_parquet_glob("disjoint_layers/*.parquet")
+def accuracy_vs_disjoint_asym_layers() -> None:
+    """Accuracy vs $L$ — Disjoint Asym architecture."""
+    df = _load_parquet_glob("disjoint_asym_layers/*.parquet")
     if df is None:
-        print("No disjoint layers results found.")
+        print("No disjoint asym layers results found.")
         return
 
     df = (
@@ -285,7 +285,7 @@ def accuracy_vs_disjoint_layers() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSIMLayers_Disjoint")
+    _save("AccuracyVsSIMLayers_DisjointAsym")
 
 
 # ---------------------------------------------------------------------------
@@ -488,11 +488,11 @@ def accuracy_vs_mono_snr() -> None:
 # ---------------------------------------------------------------------------
 
 
-def accuracy_vs_disjoint_snr() -> None:
-    """Accuracy vs SNR [dB] — Disjoint architecture."""
-    df = _load_parquet_glob("disjoint_snr/*.parquet")
+def accuracy_vs_disjoint_asym_snr() -> None:
+    """Accuracy vs SNR [dB] — Disjoint Asym architecture."""
+    df = _load_parquet_glob("disjoint_asym_snr/*.parquet")
     if df is None:
-        print("No disjoint SNR results found.")
+        print("No disjoint asym SNR results found.")
         return
 
     df = (
@@ -546,19 +546,19 @@ def accuracy_vs_disjoint_snr() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSNR_Disjoint")
+    _save("AccuracyVsSNR_DisjointAsym")
 
 
 # ---------------------------------------------------------------------------
-# Accuracy vs Layers / SNR — Disjoint CSI
+# Accuracy vs Layers / SNR — Disjoint Sym
 # ---------------------------------------------------------------------------
 
 
-def accuracy_vs_disjoint_csi_layers() -> None:
-    """Accuracy vs $L$ — Disjoint CSI architecture (PPFE only)."""
-    df = _load_parquet_glob("disjoint_csi_layers/*.parquet")
+def accuracy_vs_disjoint_sym_layers() -> None:
+    """Accuracy vs $L$ — Disjoint Sym architecture (PPFE only)."""
+    df = _load_parquet_glob("disjoint_sym_layers/*.parquet")
     if df is None:
-        print("No disjoint CSI layers results found.")
+        print("No disjoint sym layers results found.")
         return
 
     df = df.with_columns(
@@ -607,14 +607,14 @@ def accuracy_vs_disjoint_csi_layers() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSIMLayers_DisjointCSI")
+    _save("AccuracyVsSIMLayers_DisjointSym")
 
 
-def accuracy_vs_disjoint_csi_snr() -> None:
-    """Accuracy vs SNR [dB] — Disjoint CSI architecture (PPFE only)."""
-    df = _load_parquet_glob("disjoint_csi_snr/*.parquet")
+def accuracy_vs_disjoint_sym_snr() -> None:
+    """Accuracy vs SNR [dB] — Disjoint Sym architecture (PPFE only)."""
+    df = _load_parquet_glob("disjoint_sym_snr/*.parquet")
     if df is None:
-        print("No disjoint CSI SNR results found.")
+        print("No disjoint sym SNR results found.")
         return
 
     df = (
@@ -667,7 +667,7 @@ def accuracy_vs_disjoint_csi_snr() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSNR_DisjointCSI")
+    _save("AccuracyVsSNR_DisjointSym")
 
 
 # ---------------------------------------------------------------------------
@@ -810,8 +810,8 @@ def arch_comparison_layers() -> None:
     frames = {}
     for key, pattern, arch_label in [
         ("joint", "dual_layers/*.parquet", "Joint"),
-        ("disjoint", "disjoint_layers/*.parquet", "Disjoint"),
-        ("disjoint_csi", "disjoint_csi_layers/*.parquet", "Disjoint CSI"),
+        ("disjoint_asym", "disjoint_asym_layers/*.parquet", "Disjoint Asym"),
+        ("disjoint_sym", "disjoint_sym_layers/*.parquet", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_layers/*.parquet", "Disjoint 4-SIM"),
         ("mono", "mono/*.parquet", "Mono"),
     ]:
@@ -951,8 +951,8 @@ def arch_comparison_snr() -> None:
     frames = {}
     for key, pattern, arch_label in [
         ("joint", "dual_snr/*.parquet", "Joint"),
-        ("disjoint", "disjoint_snr/*.parquet", "Disjoint"),
-        ("disjoint_csi", "disjoint_csi_snr/*.parquet", "Disjoint CSI"),
+        ("disjoint_asym", "disjoint_asym_snr/*.parquet", "Disjoint Asym"),
+        ("disjoint_sym", "disjoint_sym_snr/*.parquet", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_snr/*.parquet", "Disjoint 4-SIM"),
         ("mono", "mono_snr/*.parquet", "Mono"),
     ]:
@@ -1162,8 +1162,8 @@ def accuracy_vs_channel_dim() -> None:
     M_FILTER = "32x32"
     ARCH_SOURCES = [
         ("dual_channel_dim", "Joint"),
-        ("disjoint_channel_dim", "Disjoint"),
-        ("disjoint_csi_channel_dim", "Disjoint CSI"),
+        ("disjoint_asym_channel_dim", "Disjoint Asym"),
+        ("disjoint_sym_channel_dim", "Disjoint Sym"),
         ("disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
     ]
 
@@ -1244,10 +1244,10 @@ def main() -> None:
 
     accuracy_vs_simlayers()
     accuracy_vs_snr()
-    accuracy_vs_disjoint_layers()
-    accuracy_vs_disjoint_snr()
-    accuracy_vs_disjoint_csi_layers()
-    accuracy_vs_disjoint_csi_snr()
+    accuracy_vs_disjoint_asym_layers()
+    accuracy_vs_disjoint_asym_snr()
+    accuracy_vs_disjoint_sym_layers()
+    accuracy_vs_disjoint_sym_snr()
     accuracy_vs_disjoint_4sim_layers()
     accuracy_vs_disjoint_4sim_snr()
     accuracy_vs_thickness()

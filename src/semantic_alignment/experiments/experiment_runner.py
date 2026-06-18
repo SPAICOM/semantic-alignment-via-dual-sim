@@ -9,8 +9,8 @@ its result to a dedicated Parquet file inside a per-experiment subdirectory:
         dual_slayer/    {strategy}_seed{seed}_stx{s_tx}_srx{s_rx}_ch{C}_{tx}_{rx}.parquet
         mono/           {strategy}_seed{seed}_L{L}_M{M}x{M}_{tx}_{rx}.parquet
         mono_snr/       {strategy}_seed{seed}_L{L}_M{M}x{M}_snr{snr}_{tx}_{rx}.parquet
-        disjoint_layers/{strategy}_seed{seed}_L{L}_M{M}x{M}_ch{C}_{tx}_{rx}.parquet
-        disjoint_snr/   {strategy}_seed{seed}_M{M}x{M}_ch{C}_snr{snr}_{tx}_{rx}.parquet
+        disjoint_asym_layers/{strategy}_seed{seed}_L{L}_M{M}x{M}_ch{C}_{tx}_{rx}.parquet
+        disjoint_asym_snr/  {strategy}_seed{seed}_M{M}x{M}_ch{C}_snr{snr}_{tx}_{rx}.parquet
         rx_depth/       seed{seed}_LTX{L_TX}_LRX{L_RX}_M{M}x{M}_{tx}_{rx}.parquet
 
 If the target file already exists the run is skipped (idempotent Hydra sweeps).
@@ -973,7 +973,7 @@ def run_single_mono_layers_config(
 # ---------------------------------------------------------------------------
 
 
-def run_single_disjoint_layers(
+def run_single_disjoint_asym_layers(
     L: int,
     M_int: int,
     no_mismatch_probe: float,
@@ -1000,15 +1000,15 @@ def run_single_disjoint_layers(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
-    result_subdir: str = "disjoint_layers",
+    result_subdir: str = "disjoint_asym_layers",
 ) -> None:
-    """Run one (L, M_int, seed) job of the disjoint layers sweep.
+    """Run one (L, M_int, seed) job of the disjoint-asym layers sweep.
 
     TX-SIM is optimised independently to emulate the alignment matrix A.
     RX-SIM is optimised independently to emulate the ZF equalizer
     ``Q = (Hᴴ H)⁻¹ Hᴴ = H†``.  Each yields its own scalar β_T, β_R;
     at inference ``β̄ = β_T · β_R``.  Results are written to
-    ``results/disjoint_layers/``.
+    ``results/disjoint_asym_layers/``.
 
     Parameters
     ----------
@@ -1054,7 +1054,7 @@ def run_single_disjoint_layers(
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
-        print(f"Skipping disjoint L={L}, M_int={M_int}, seed={seed}.")
+        print(f"Skipping disjoint_asym L={L}, M_int={M_int}, seed={seed}.")
         return
     ch_x, ch_y = _ch_dims(ch_dim)
     tx_in_x, tx_in_y = _ch_dims(int(A_target.shape[1]))
@@ -1198,7 +1198,7 @@ def run_single_disjoint_layers(
     torch.cuda.empty_cache()
 
 
-def run_single_disjoint_snr(
+def run_single_disjoint_asym_snr(
     L: int,
     M_int: int,
     snr: float | None,
@@ -1227,11 +1227,11 @@ def run_single_disjoint_snr(
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
 ) -> None:
-    """Run one (M_int, snr, seed) job of the disjoint SNR sweep.
+    """Run one (M_int, snr, seed) job of the disjoint-asym SNR sweep.
 
     TX-SIM emulates A, RX-SIM emulates Q = H†, both trained independently.
     ``β̄ = β_T · β_R`` is applied at inference at the given SNR level.
-    Results are written to ``results/disjoint_snr/``.
+    Results are written to ``results/disjoint_asym_snr/``.
 
     Parameters
     ----------
@@ -1275,11 +1275,11 @@ def run_single_disjoint_snr(
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     out_path = (
         RESULTS_DIR
-        / "disjoint_snr"
+        / "disjoint_asym_snr"
         / f"{strategy_name}_seed{seed}_M{M_int}x{M_int}_ch{ch_dim}_snr{_snr_tag(snr)}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
-        print(f"Skipping disjoint M={M_int}, snr={snr}, seed={seed}.")
+        print(f"Skipping disjoint_asym M={M_int}, snr={snr}, seed={seed}.")
         return
     ch_x, ch_y = _ch_dims(ch_dim)
     tx_in_x, tx_in_y = _ch_dims(int(A_target.shape[1]))
@@ -1425,7 +1425,7 @@ def run_single_disjoint_snr(
 # ---------------------------------------------------------------------------
 
 
-def run_single_disjoint_csi_layers(
+def run_single_disjoint_sym_layers(
     L: int,
     M_int: int,
     no_mismatch_probe: float,
@@ -1452,7 +1452,7 @@ def run_single_disjoint_csi_layers(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     channel_dim: int | None = None,
-    result_subdir: str = "disjoint_csi_layers",
+    result_subdir: str = "disjoint_sym_layers",
     F_T=None,
     F_R_H=None,
 ) -> None:
@@ -1470,10 +1470,10 @@ def run_single_disjoint_csi_layers(
     Each SIM yields its own optimal scalar (β_T, β_R); at inference
     ``β̄ = β_T · β_R`` is applied to the full cascade ``G_R H G_T x``.
 
-    Results are written to ``results/disjoint_csi_layers/``.
+    Results are written to ``results/disjoint_sym_layers/``.
     """
     if strategy_name not in ("PPFE", "Linear"):
-        raise NotImplementedError(f"Disjoint CSI not implemented for '{strategy_name}' alignment.")
+        raise NotImplementedError(f"Disjoint sym not implemented for '{strategy_name}' alignment.")
 
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
 
@@ -1483,7 +1483,7 @@ def run_single_disjoint_csi_layers(
         / f"{strategy_name}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
-        print(f"Skipping disjoint_csi L={L}, M_int={M_int}, seed={seed}.")
+        print(f"Skipping disjoint_sym L={L}, M_int={M_int}, seed={seed}.")
         return
     ch_x, ch_y = _ch_dims(ch_dim)
     tx_in_x, tx_in_y = _ch_dims(int(A_target.shape[1]))
@@ -1966,7 +1966,7 @@ def run_single_disjoint_4sim_layers(
 # ---------------------------------------------------------------------------
 
 
-def run_single_disjoint_csi_snr(
+def run_single_disjoint_sym_snr(
     L: int,
     M_int: int,
     snr: float | None,
@@ -1997,23 +1997,23 @@ def run_single_disjoint_csi_snr(
     F_T=None,
     F_R_H=None,
 ) -> None:
-    """SNR sweep variant of :func:`run_single_disjoint_csi_layers`.
+    """SNR sweep variant of :func:`run_single_disjoint_sym_layers`.
 
-    Same CSI-assisted disjoint training (noiseless); evaluation at ``snr`` dB.
-    Results are written to ``results/disjoint_csi_snr/``.
+    Same sym-disjoint training (noiseless); evaluation at ``snr`` dB.
+    Results are written to ``results/disjoint_sym_snr/``.
     """
     if strategy_name not in ("PPFE", "Linear"):
-        raise NotImplementedError(f"Disjoint CSI not implemented for '{strategy_name}' alignment.")
+        raise NotImplementedError(f"Disjoint sym not implemented for '{strategy_name}' alignment.")
 
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
 
     out_path = (
         RESULTS_DIR
-        / "disjoint_csi_snr"
+        / "disjoint_sym_snr"
         / f"{strategy_name}_seed{seed}_M{M_int}x{M_int}_ch{ch_dim}_snr{_snr_tag(snr)}_{tx_enc}_{rx_enc}.parquet"
     )
     if out_path.exists():
-        print(f"Skipping disjoint_csi snr={snr}, M_int={M_int}, seed={seed}.")
+        print(f"Skipping disjoint_sym snr={snr}, M_int={M_int}, seed={seed}.")
         return
     ch_x, ch_y = _ch_dims(ch_dim)
     tx_in_x, tx_in_y = _ch_dims(int(A_target.shape[1]))

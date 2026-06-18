@@ -5,7 +5,7 @@ defaults:
   - data: default
   - training: default
   - classifier: default
-  - experiment: channel_dim_disjoint_csi
+  - experiment: channel_dim_disjoint_sym
   - _self_
 
 hydra:

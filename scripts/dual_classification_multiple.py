@@ -15,7 +15,7 @@ Examples
     just run-joint                              # layers sweep
     just run-joint-snr
     just run-joint-slayer
-    just run-disjoint
+    just run-disjoint-asym
     just run-joint datasets=cifar100
     just run-joint alignment=linear
 """
@@ -39,10 +39,10 @@ from semantic_alignment.evaluation.original_accuracy import run_original_accurac
 from semantic_alignment.experiments.experiment_runner import (
     run_single_disjoint_4sim_layers,
     run_single_disjoint_4sim_snr,
-    run_single_disjoint_csi_layers,
-    run_single_disjoint_csi_snr,
-    run_single_disjoint_layers,
-    run_single_disjoint_snr,
+    run_single_disjoint_asym_layers,
+    run_single_disjoint_asym_snr,
+    run_single_disjoint_sym_layers,
+    run_single_disjoint_sym_snr,
     run_single_layers_config,
     run_single_slayer_config,
     run_single_snr_config,
@@ -92,16 +92,16 @@ def _out_path(cfg: DictConfig) -> Path | None:
             / "dual_slayer"
             / f"{strategy}_seed{seed}_stx{exp.s_tx}_srx{exp.s_rx}_{ch_tag}_{tx}_{rx}.parquet"
         )
-    if name == "disjoint_layers":
+    if name == "disjoint_asym_layers":
         return (
             _RESULTS
-            / "disjoint_layers"
+            / "disjoint_asym_layers"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
-    if name == "disjoint_csi_layers":
+    if name == "disjoint_sym_layers":
         return (
             _RESULTS
-            / "disjoint_csi_layers"
+            / "disjoint_sym_layers"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_4sim_layers":
@@ -110,10 +110,10 @@ def _out_path(cfg: DictConfig) -> Path | None:
             / "disjoint_4sim_layers"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
-    if name == "disjoint_csi_snr":
+    if name == "disjoint_sym_snr":
         return (
             _RESULTS
-            / "disjoint_csi_snr"
+            / "disjoint_sym_snr"
             / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "disjoint_4sim_snr":
@@ -122,10 +122,10 @@ def _out_path(cfg: DictConfig) -> Path | None:
             / "disjoint_4sim_snr"
             / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
-    if name == "disjoint_snr":
+    if name == "disjoint_asym_snr":
         return (
             _RESULTS
-            / "disjoint_snr"
+            / "disjoint_asym_snr"
             / f"{strategy}_seed{seed}_M{M}x{M}_{ch_tag}_snr{_snr_tag(exp.snr)}_{tx}_{rx}.parquet"
         )
     if name == "channel_dim_joint":
@@ -134,16 +134,16 @@ def _out_path(cfg: DictConfig) -> Path | None:
             / "dual_channel_dim"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
-    if name == "channel_dim_disjoint":
+    if name == "channel_dim_disjoint_asym":
         return (
             _RESULTS
-            / "disjoint_channel_dim"
+            / "disjoint_asym_channel_dim"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
-    if name == "channel_dim_disjoint_csi":
+    if name == "channel_dim_disjoint_sym":
         return (
             _RESULTS
-            / "disjoint_csi_channel_dim"
+            / "disjoint_sym_channel_dim"
             / f"{strategy}_seed{seed}_L{exp.L}_M{M}x{M}_{ch_tag}_{tx}_{rx}.parquet"
         )
     if name == "channel_dim_disjoint_4sim":
@@ -223,11 +223,11 @@ def _setup(cfg: DictConfig):
     output_w, L_out, mu_out = prewhiten(output_c, device=device)
 
     _CSI_EXPERIMENTS = {
-        "disjoint_csi_layers",
-        "disjoint_csi_snr",
+        "disjoint_sym_layers",
+        "disjoint_sym_snr",
         "disjoint_4sim_layers",
         "disjoint_4sim_snr",
-        "channel_dim_disjoint_csi",
+        "channel_dim_disjoint_sym",
         "channel_dim_disjoint_4sim",
     }
 
@@ -359,16 +359,18 @@ def main(cfg: DictConfig) -> None:
             run_single_slayer_config(
                 L=exp.L, M_int=exp.M_int, s_tx=exp.s_tx, s_rx=exp.s_rx, channel_dim=ch_dim, **ctx
             )
-        case "disjoint_layers":
-            run_single_disjoint_layers(L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, **ctx)
-        case "disjoint_snr":
-            run_single_disjoint_snr(L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, **ctx)
-        case "disjoint_csi_layers":
-            run_single_disjoint_csi_layers(
+        case "disjoint_asym_layers":
+            run_single_disjoint_asym_layers(L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, **ctx)
+        case "disjoint_asym_snr":
+            run_single_disjoint_asym_snr(
+                L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, **ctx
+            )
+        case "disjoint_sym_layers":
+            run_single_disjoint_sym_layers(
                 L=exp.L, M_int=exp.M_int, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
             )
-        case "disjoint_csi_snr":
-            run_single_disjoint_csi_snr(
+        case "disjoint_sym_snr":
+            run_single_disjoint_sym_snr(
                 L=exp.L, M_int=exp.M_int, snr=snr, channel_dim=ch_dim, F_T=F_T, F_R_H=F_R_H, **ctx
             )
         case "disjoint_4sim_layers":
@@ -387,20 +389,20 @@ def main(cfg: DictConfig) -> None:
                 result_subdir="dual_channel_dim",
                 **ctx,
             )
-        case "channel_dim_disjoint":
-            run_single_disjoint_layers(
+        case "channel_dim_disjoint_asym":
+            run_single_disjoint_asym_layers(
                 L=exp.L,
                 M_int=exp.M_int,
                 channel_dim=ch_dim,
-                result_subdir="disjoint_channel_dim",
+                result_subdir="disjoint_asym_channel_dim",
                 **ctx,
             )
-        case "channel_dim_disjoint_csi":
-            run_single_disjoint_csi_layers(
+        case "channel_dim_disjoint_sym":
+            run_single_disjoint_sym_layers(
                 L=exp.L,
                 M_int=exp.M_int,
                 channel_dim=ch_dim,
-                result_subdir="disjoint_csi_channel_dim",
+                result_subdir="disjoint_sym_channel_dim",
                 F_T=F_T,
                 F_R_H=F_R_H,
                 **ctx,

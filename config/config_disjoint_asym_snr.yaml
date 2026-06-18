@@ -5,7 +5,7 @@ defaults:
   - data: default
   - training: default
   - classifier: default
-  - experiment: disjoint_csi_snr
+  - experiment: disjoint_asym_snr
   - _self_
 
 hydra:

@@ -20,7 +20,7 @@ all: format check
 #
 # Per-architecture aggregates run every sweep for that case:
 #   just joint        # = run-joint + run-joint-snr + run-joint-slayer
-#   just disjoint     # = run-disjoint + run-disjoint-snr + CSI + 4-SIM variants
+#   just disjoint     # = run-disjoint-asym + run-disjoint-sym + 4-SIM variants
 #   just mono         # = run-mono + run-mono-snr
 
 run-joint *ARGS: train-clf
@@ -35,17 +35,17 @@ run-joint-slayer *ARGS: train-clf
 # Run every joint Dual-SIM sweep: layers + SNR + slayer + channel-dim
 joint: run-joint run-joint-snr run-joint-slayer run-joint-channel-dim
 
-run-disjoint *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_layers {{ARGS}}
+run-disjoint-asym *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_asym_layers {{ARGS}}
 
-run-disjoint-snr *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_snr {{ARGS}}
+run-disjoint-asym-snr *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_asym_snr {{ARGS}}
 
-run-disjoint-csi *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_layers {{ARGS}}
+run-disjoint-sym *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_sym_layers {{ARGS}}
 
-run-disjoint-csi-snr *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_snr {{ARGS}}
+run-disjoint-sym-snr *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_sym_snr {{ARGS}}
 
 run-disjoint-4sim *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_layers {{ARGS}}
@@ -53,31 +53,31 @@ run-disjoint-4sim *ARGS: train-clf
 run-disjoint-4sim-snr *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_snr {{ARGS}}
 
-# Aggregate: CSI disjoint (layers + SNR + channel-dim)
-disjoint-csi: run-disjoint-csi run-disjoint-csi-snr run-disjoint-csi-channel-dim
+# Aggregate: symmetric disjoint (layers + SNR + channel-dim)
+disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
 
 # Aggregate: 4-SIM disjoint (layers + SNR + channel-dim)
 disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
 
 # Run every disjoint Dual-SIM sweep: all variants
-disjoint: run-disjoint run-disjoint-snr run-disjoint-csi run-disjoint-csi-snr run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-channel-dim run-disjoint-csi-channel-dim run-disjoint-4sim-channel-dim
+disjoint: run-disjoint-asym run-disjoint-asym-snr run-disjoint-sym run-disjoint-sym-snr run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-asym-channel-dim run-disjoint-sym-channel-dim run-disjoint-4sim-channel-dim
 
 # ── Channel-dim sweep (L=10, M_int=32, channel_dim in {1,2,4,6,8,10,20,192,384}) ──
 
 run-joint-channel-dim *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_joint_channel_dim {{ARGS}}
 
-run-disjoint-channel-dim *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_channel_dim {{ARGS}}
+run-disjoint-asym-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_asym_channel_dim {{ARGS}}
 
-run-disjoint-csi-channel-dim *ARGS: train-clf
-    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_csi_channel_dim {{ARGS}}
+run-disjoint-sym-channel-dim *ARGS: train-clf
+    uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_sym_channel_dim {{ARGS}}
 
 run-disjoint-4sim-channel-dim *ARGS: train-clf
     uv run python scripts/dual_classification_multiple.py --config-name config_disjoint_4sim_channel_dim {{ARGS}}
 
 # Run all channel-dim sweeps
-channel-dim: run-joint-channel-dim run-disjoint-channel-dim run-disjoint-csi-channel-dim run-disjoint-4sim-channel-dim
+channel-dim: run-joint-channel-dim run-disjoint-asym-channel-dim run-disjoint-sym-channel-dim run-disjoint-4sim-channel-dim
 
 # Single run without multirun (useful for quick tests)
 run *ARGS: train-clf
