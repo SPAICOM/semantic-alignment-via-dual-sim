@@ -48,19 +48,44 @@ _ARCH_MARKERS = {
 
 
 def _apply_style() -> None:
+    """Apply the project's seaborn + mplstyle theme to all subsequent figures."""
     sns.set_style("whitegrid")
     if _STYLE.exists():
         plt.style.use(str(_STYLE))
 
 
-def _load_parquet_glob(pattern: str) -> pl.DataFrame | None:
-    files = list(RESULTS.glob(pattern))
-    if not files:
+_cache: pl.DataFrame | None = None
+
+
+def _load_all() -> pl.DataFrame | None:
+    """Load every result Parquet under RESULTS once and cache.
+
+    Uses ``diagonal_relaxed`` so files where ``snr=None`` (Null type) and
+    files where ``snr`` is numeric (Int64/Float64) merge without schema errors.
+    """
+    global _cache
+    if _cache is None:
+        files = [f for f in RESULTS.rglob("*.parquet") if f.parent.name != "plots"]
+        if not files:
+            return None
+        _cache = pl.concat(
+            [pl.read_parquet(f) for f in files],
+            how="diagonal_relaxed",
+        )
+    return _cache
+
+
+def _get(result_subdir: str) -> pl.DataFrame | None:
+    """Return all rows whose ``result_subdir`` column matches, or ``None``."""
+    df = _load_all()
+    if df is None:
         return None
-    return pl.read_parquet(files)
+    out = df.filter(pl.col("result_subdir") == result_subdir)
+    return out if not out.is_empty() else None
 
 
 def _save(name: str) -> None:
+    """Save the current figure as both PDF and PNG under ``IMG_PATH``, then close it."""
     from matplotlib.legend import Legend
 
     extra = plt.gcf().findobj(Legend)
@@ -103,7 +128,7 @@ def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
 
 def accuracy_vs_simlayers() -> None:
     """Accuracy vs $L$ — Joint architecture, both alignment strategies."""
-    df = _load_parquet_glob("dual_layers/*.parquet")
+    df = _get("dual_layers")
     if df is None:
         print("No layers results found.")
         return
@@ -171,13 +196,13 @@ def accuracy_vs_simlayers() -> None:
 
 def accuracy_vs_snr() -> None:
     """Accuracy vs SNR [dB] — Joint architecture."""
-    df = _load_parquet_glob("dual_snr/*.parquet")
+    df = _get("dual_snr")
     if df is None:
         print("No SNR results found.")
         return
 
     df = (
-        df.filter(pl.col("strategy").is_in(STRATEGIES) & pl.col("snr").is_not_null())
+        df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
             (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
@@ -238,7 +263,7 @@ def accuracy_vs_snr() -> None:
 
 def accuracy_vs_disjoint_asym_layers() -> None:
     """Accuracy vs $L$ — Disjoint Asym architecture."""
-    df = _load_parquet_glob("disjoint_asym_layers/*.parquet")
+    df = _get("disjoint_asym_layers")
     if df is None:
         print("No disjoint asym layers results found.")
         return
@@ -305,7 +330,7 @@ def accuracy_vs_disjoint_asym_layers() -> None:
 
 def accuracy_vs_thickness() -> None:
     """Accuracy vs $s_{\\mathrm{layer}}$ at TX, for three RX spacing values."""
-    df = _load_parquet_glob("dual_slayer/*.parquet")
+    df = _get("dual_slayer")
     if df is None:
         print("No slayer results found.")
         return
@@ -365,7 +390,7 @@ def accuracy_vs_thickness() -> None:
 
 def accuracy_vs_mono_layers() -> None:
     """Accuracy vs $L$ — Mono-SIM (TX-only, no channel)."""
-    df = _load_parquet_glob("mono/*.parquet")
+    df = _get("mono")
     if df is None:
         print("No mono-SIM results found.")
         return
@@ -430,13 +455,13 @@ def accuracy_vs_mono_layers() -> None:
 
 def accuracy_vs_mono_snr() -> None:
     """Accuracy vs SNR [dB] — Mono-SIM (TX-only) over the MIMO channel."""
-    df = _load_parquet_glob("mono_snr/*.parquet")
+    df = _get("mono_snr")
     if df is None:
         print("No mono-SIM SNR results found.")
         return
 
     df = (
-        df.filter(pl.col("strategy").is_in(STRATEGIES) & pl.col("snr").is_not_null())
+        df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
             (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
             pl.col("M_int").alias("Intermediate Atoms"),
@@ -500,13 +525,13 @@ def accuracy_vs_mono_snr() -> None:
 
 def accuracy_vs_disjoint_asym_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint Asym architecture."""
-    df = _load_parquet_glob("disjoint_asym_snr/*.parquet")
+    df = _get("disjoint_asym_snr")
     if df is None:
         print("No disjoint asym SNR results found.")
         return
 
     df = (
-        df.filter(pl.col("strategy").is_in(STRATEGIES) & pl.col("snr").is_not_null())
+        df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
             (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
@@ -566,7 +591,7 @@ def accuracy_vs_disjoint_asym_snr() -> None:
 
 def accuracy_vs_disjoint_sym_layers() -> None:
     """Accuracy vs $L$ — Disjoint Sym architecture (PPFE only)."""
-    df = _load_parquet_glob("disjoint_sym_layers/*.parquet")
+    df = _get("disjoint_sym_layers")
     if df is None:
         print("No disjoint sym layers results found.")
         return
@@ -622,7 +647,7 @@ def accuracy_vs_disjoint_sym_layers() -> None:
 
 def accuracy_vs_disjoint_sym_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint Sym architecture (PPFE only)."""
-    df = _load_parquet_glob("disjoint_sym_snr/*.parquet")
+    df = _get("disjoint_sym_snr")
     if df is None:
         print("No disjoint sym SNR results found.")
         return
@@ -690,7 +715,7 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
 
     L is per-SIM depth; hardware equivalent to 2L layers in the 2-SIM case.
     """
-    df = _load_parquet_glob("disjoint_4sim_layers/*.parquet")
+    df = _get("disjoint_4sim_layers")
     if df is None:
         print("No disjoint 4-SIM layers results found.")
         return
@@ -746,7 +771,7 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
 
 def accuracy_vs_disjoint_4sim_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint 4-SIM architecture (PPFE only)."""
-    df = _load_parquet_glob("disjoint_4sim_snr/*.parquet")
+    df = _get("disjoint_4sim_snr")
     if df is None:
         print("No disjoint 4-SIM SNR results found.")
         return
@@ -818,17 +843,17 @@ def arch_comparison_layers() -> None:
     M_FILTER = "32x32"
 
     frames = {}
-    for key, pattern, arch_label in [
-        ("joint", "dual_layers/*.parquet", "Joint"),
-        ("disjoint_asym", "disjoint_asym_layers/*.parquet", "Disjoint Asym"),
-        ("disjoint_sym", "disjoint_sym_layers/*.parquet", "Disjoint Sym"),
-        ("disjoint_4sim", "disjoint_4sim_layers/*.parquet", "Disjoint 4-SIM"),
-        ("mono", "mono/*.parquet", "Mono"),
+    for key, result_subdir, arch_label in [
+        ("joint", "dual_layers", "Joint"),
+        ("disjoint_asym", "disjoint_asym_layers", "Disjoint Asym"),
+        ("disjoint_sym", "disjoint_sym_layers", "Disjoint Sym"),
+        ("disjoint_4sim", "disjoint_4sim_layers", "Disjoint 4-SIM"),
+        ("mono", "mono", "Mono"),
     ]:
-        df = _load_parquet_glob(pattern)
+        df = _get(result_subdir)
         if df is None:
             continue
-        df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
+        df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
             pl.lit(arch_label).alias("Architecture")
         )
         if key == "disjoint_4sim":
@@ -963,17 +988,17 @@ def arch_comparison_snr() -> None:
     M_FILTER = "32x32"
 
     frames = {}
-    for key, pattern, arch_label in [
-        ("joint", "dual_snr/*.parquet", "Joint"),
-        ("disjoint_asym", "disjoint_asym_snr/*.parquet", "Disjoint Asym"),
-        ("disjoint_sym", "disjoint_sym_snr/*.parquet", "Disjoint Sym"),
-        ("disjoint_4sim", "disjoint_4sim_snr/*.parquet", "Disjoint 4-SIM"),
-        ("mono", "mono_snr/*.parquet", "Mono"),
+    for key, result_subdir, arch_label in [
+        ("joint", "dual_snr", "Joint"),
+        ("disjoint_asym", "disjoint_asym_snr", "Disjoint Asym"),
+        ("disjoint_sym", "disjoint_sym_snr", "Disjoint Sym"),
+        ("disjoint_4sim", "disjoint_4sim_snr", "Disjoint 4-SIM"),
+        ("mono", "mono_snr", "Mono"),
     ]:
-        df = _load_parquet_glob(pattern)
+        df = _get(result_subdir)
         if df is None:
             continue
-        df = df.filter((pl.col("M_int") == M_FILTER) & pl.col("snr").is_not_null()).with_columns(
+        df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
             pl.lit(arch_label).alias("Architecture")
         )
         if not df.is_empty():
@@ -1106,7 +1131,7 @@ def loss_curves_dual_layers() -> None:
           cols = M_int,
           color = SIM depth L (averaged across seeds).
     """
-    df = _load_parquet_glob("dual_layers/*.parquet")
+    df = _get("dual_layers")
     if df is None:
         print("No layers results found.")
         return
@@ -1187,7 +1212,7 @@ def arch_comparison_channel_dim() -> None:
         ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
     ]:
-        df = _load_parquet_glob(f"{subdir}/*.parquet")
+        df = _get(subdir)
         if df is None:
             continue
         df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
@@ -1287,6 +1312,12 @@ def arch_comparison_channel_dim() -> None:
 
 
 def main() -> None:
+    """Generate all publication plots from the cached result Parquet files.
+
+    Applies the project style, then calls every individual plot function in
+    sequence.  Silently skips any plot whose result subdirectory has no data.
+    All output is written to ``results/plots/``.
+    """
     _apply_style()
 
     accuracy_vs_simlayers()

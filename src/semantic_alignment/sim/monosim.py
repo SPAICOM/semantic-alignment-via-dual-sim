@@ -263,12 +263,14 @@ class MonoSIMoptimizerTorch(nn.Module):
 
     @staticmethod
     def _build_optimizer(params, lr: float, optimizer: str):
+        """Construct an SGD or Adam optimizer for ``params``."""
         if optimizer == "sgd":
             return optim.SGD(params, lr=lr)
         return optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-8)
 
     @staticmethod
     def _build_scheduler(opt, scheduler: str, max_iters: int, warmup_frac: float, lr: float):
+        """Return a cosine-annealing LR scheduler with warm-up, or ``None`` for fixed LR."""
         if scheduler != "cosine":
             return None
         warmup_iters = max(1, int(max_iters * warmup_frac))
@@ -285,7 +287,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         max_iters: int = 5000,
         lr: float = 0.01,
         optimizer: str = "adam",
-        scheduler: str = "none",
+        scheduler: str | None = None,
         warmup_frac: float = 0.05,
     ):
         """Optimize phase shifts to minimise ``‖β G − A‖²_F / (n·m)``.
@@ -300,8 +302,8 @@ class MonoSIMoptimizerTorch(nn.Module):
             Learning rate.
         optimizer : str, optional
             ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
-        scheduler : str, optional
-            ``"none"`` — fixed LR (default);
+        scheduler : str or None, optional
+            ``None`` — fixed LR (default);
             ``"cosine"`` — constant LR for ``warmup_frac`` iters, then cosine → ``lr*1e-3``.
         warmup_frac : float, optional
             Fraction of ``max_iters`` kept at constant LR (only for ``scheduler="cosine"``).
@@ -366,7 +368,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         max_iters: int = 5000,
         lr: float = 0.1,
         optimizer: str = "adam",
-        scheduler: str = "none",
+        scheduler: str | None = None,
         warmup_frac: float = 0.05,
     ):
         """Optimize RX phase shifts given the effective channel ``H_eff = H · G_T``.
@@ -387,8 +389,8 @@ class MonoSIMoptimizerTorch(nn.Module):
             Learning rate.
         optimizer : str, optional
             ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
-        scheduler : str, optional
-            ``"none"`` — fixed LR (default);
+        scheduler : str or None, optional
+            ``None`` — fixed LR (default);
             ``"cosine"`` — constant LR for ``warmup_frac`` iters, then cosine → ``lr*1e-3``.
         warmup_frac : float, optional
             Fraction of ``max_iters`` kept at constant LR (only for ``scheduler="cosine"``).

@@ -3,3 +3,8 @@ L: 10
 M_int: 32
 snr: 0          # dB; swept via config_disjoint_csi_snr sweeper
 channel_dim: 20
+
+sim_type: disjoint_sym
+result_subdir: disjoint_sym_snr
+
+_target_: semantic_alignment.experiments.disjoint_sym.run_disjoint_sym

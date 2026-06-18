@@ -30,6 +30,17 @@ from semantic_alignment.evaluation.neural_classifier import (
 
 @hydra.main(version_base=None, config_path="../config", config_name="config_train_clf")
 def main(cfg: DictConfig) -> None:
+    """Train and persist a neural MLP classifier for one (dataset, rx_enc, seed) triple.
+
+    Skips training if a checkpoint already exists for this configuration.
+    Logs training metrics to Weights & Biases and writes the final checkpoint
+    to ``models/classifiers/``.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra configuration composed from ``config_train_clf``.
+    """
     seed = cfg.training.seed
     dataset = cfg.datasets.hf_name
     rx_enc = cfg.data.rx_enc

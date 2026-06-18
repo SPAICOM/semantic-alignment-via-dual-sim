@@ -486,10 +486,11 @@ class DualSIMoptimizerTorch(nn.Module):
         max_iters: int = 3000,
         lr: float = 0.1,
         warmup_frac: float = 0.05,
-        clip_value: float = 1.0,
+        clip_value: float | None = None,
+        tx_steps_per_rx: int = 1,
         rx_steps_per_tx: int = 2,
         optimizer: str = "adam",
-        scheduler: str = "none",
+        scheduler: str | None = None,
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
@@ -499,8 +500,9 @@ class DualSIMoptimizerTorch(nn.Module):
         through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
         with :class:`MonoSIMoptimizerTorch`.
 
-        RX phases are updated ``rx_steps_per_tx`` times per TX step.  Best
-        phase profiles are restored at the end.
+        Each outer iteration performs ``tx_steps_per_rx`` TX steps followed by
+        ``rx_steps_per_tx`` RX steps.  Set both to 1 for equal update frequency.
+        Best phase profiles are restored at the end.
 
         Parameters
         ----------
@@ -511,18 +513,22 @@ class DualSIMoptimizerTorch(nn.Module):
         max_iters : int, optional
             Total number of optimization iterations.
         lr : float, optional
-            Learning rate.
+            Learning rate for both TX and RX optimizers.
         warmup_frac : float, optional
             Fraction of ``max_iters`` kept at constant LR before cosine decay
             (only used when ``scheduler="cosine"``).
-        clip_value : float, optional
-            Gradient clipping norm.
+        clip_value : float or None, optional
+            Gradient clipping norm applied after each backward pass.
+            ``None`` disables gradient clipping entirely.
+        tx_steps_per_rx : int, optional
+            Number of TX gradient steps per outer iteration.
         rx_steps_per_tx : int, optional
-            Number of RX gradient steps taken per TX step.
+            Number of RX gradient steps per outer iteration.
+            Set equal to ``tx_steps_per_rx`` for symmetric updates.
         optimizer : str, optional
             ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
-        scheduler : str, optional
-            ``"none"`` — fixed LR throughout (default);
+        scheduler : str or None, optional
+            ``None`` — fixed LR throughout (default);
             ``"cosine"`` — constant LR for the first ``warmup_frac`` iterations,
             then cosine annealing down to ``lr * 1e-3``.
 
@@ -578,7 +584,8 @@ class DualSIMoptimizerTorch(nn.Module):
                 A_torch.shape[0] * A_torch.shape[1]
             )
             loss_J.backward()
-            nn.utils.clip_grad_norm_(params, max_norm=clip_value)
+            if clip_value is not None:
+                nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
             return loss_J.item(), beta_k.detach(), Z_norm.detach()
 
@@ -589,11 +596,12 @@ class DualSIMoptimizerTorch(nn.Module):
 
         bar = tqdm(range(max_iters), desc="DualSIM", leave=False, dynamic_ncols=True)
         for k in bar:
-            _step_side(opt_T, list(self.xi_T.parameters()))
-
             current_loss = 0.0
             beta_k = torch.tensor(1.0 + 0j, device=device)
             Z_norm_k = torch.tensor(1.0, device=device)
+
+            for _ in range(tx_steps_per_rx):
+                current_loss, beta_k, Z_norm_k = _step_side(opt_T, list(self.xi_T.parameters()))
             for _ in range(rx_steps_per_tx):
                 current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
 

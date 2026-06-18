@@ -1,33 +1,38 @@
-"""Experiments sub-package: single-job runner functions for parameter sweeps.
+"""Experiment runners — one entry point per SIM architecture.
 
-Each ``run_single_*`` function executes one configuration point of a sweep and
-returns a results dict suitable for aggregation by the calling script:
+Each runner's YAML config carries a ``_target_`` field; Hydra's
+``instantiate`` calls the right function automatically with no match
+statement in the calling script.
 
-- :func:`run_single_layers_config`         — dual-SIM, vary number of SIM layers
-- :func:`run_single_snr_config`            — dual-SIM, vary receive SNR
-- :func:`run_single_slayer_config`         — dual-SIM, vary the s-layer index
-- :func:`run_single_mono_layers_config`    — mono-SIM (TX only), vary layers
-- :func:`run_single_disjoint_asym_layers`  — disjoint asym TX/RX encoders, vary layers
-- :func:`run_single_disjoint_asym_snr`     — disjoint asym TX/RX encoders, vary SNR
-- :func:`run_single_rx_depth`              — vary RX encoder depth (mono-SIM)
+Runners
+-------
+- :func:`run_joint_sim`      — joint Dual-SIM (layers / SNR / s-layer sweeps)
+- :func:`run_mono_sim`       — Mono-SIM TX-only (layers / SNR sweeps)
+- :func:`run_disjoint_asym`  — disjoint asym (TX→A, RX→H†)
+- :func:`run_disjoint_sym`   — disjoint sym with full CSI
+- :func:`run_disjoint_4sim`  — disjoint 4-SIM with full CSI
+- :func:`run_disjoint_2sim`  — core 2-SIM runner (accepts pre-computed targets)
+
+Target helpers
+--------------
+- :func:`compute_asym_targets` — asymmetric TX/RX targets
+- :func:`compute_sym_targets`  — symmetric (CSI) TX/RX targets
 """
 
-from semantic_alignment.experiments.experiment_runner import (
-    run_single_disjoint_asym_layers,
-    run_single_disjoint_asym_snr,
-    run_single_layers_config,
-    run_single_mono_layers_config,
-    run_single_rx_depth,
-    run_single_slayer_config,
-    run_single_snr_config,
-)
+from semantic_alignment.experiments.disjoint_2sim import run_disjoint_2sim
+from semantic_alignment.experiments.disjoint_4sim import run_disjoint_4sim
+from semantic_alignment.experiments.disjoint_asym import compute_asym_targets, run_disjoint_asym
+from semantic_alignment.experiments.disjoint_sym import compute_sym_targets, run_disjoint_sym
+from semantic_alignment.experiments.joint import run_joint_sim
+from semantic_alignment.experiments.mono import run_mono_sim
 
 __all__ = [
-    "run_single_layers_config",
-    "run_single_snr_config",
-    "run_single_slayer_config",
-    "run_single_mono_layers_config",
-    "run_single_disjoint_asym_layers",
-    "run_single_disjoint_asym_snr",
-    "run_single_rx_depth",
+    "run_joint_sim",
+    "run_mono_sim",
+    "run_disjoint_asym",
+    "run_disjoint_sym",
+    "run_disjoint_4sim",
+    "run_disjoint_2sim",
+    "compute_asym_targets",
+    "compute_sym_targets",
 ]

@@ -4,3 +4,8 @@ M_int: 32
 snr: 0          # dB; swept via config_disjoint_4sim_snr sweeper
 # L=5 per SIM ≈ L=10 in the 2-SIM disjoint case (hardware equivalence)
 channel_dim: 20
+
+sim_type: disjoint_4sim
+result_subdir: disjoint_4sim_snr
+
+_target_: semantic_alignment.experiments.disjoint_4sim.run_disjoint_4sim

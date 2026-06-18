@@ -2,3 +2,9 @@ name: mono_layers
 L: 10
 M_int: 32
 snr: null         # dB; null = noiseless ZF equalizer
+
+sim_type: mono
+
+_target_: semantic_alignment.experiments.mono.run_mono_sim
+
+result_subdir: mono
