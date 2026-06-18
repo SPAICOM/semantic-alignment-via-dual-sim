@@ -31,6 +31,16 @@ _STYLE = BASE_DIR / "config" / "plotting" / "plt.mplstyle"
 
 STRATEGIES = ["Linear", "PPFE"]
 
+_ARCH_ORDER = ["Joint", "Disjoint Asym", "Disjoint Sym", "Disjoint 4-SIM", "Mono"]
+_ARCH_PALETTE = dict(zip(_ARCH_ORDER, sns.color_palette("tab10", len(_ARCH_ORDER))))
+_ARCH_MARKERS = {
+    "Joint": "o",
+    "Disjoint Asym": "P",
+    "Disjoint Sym": "X",
+    "Disjoint 4-SIM": "^",
+    "Mono": "v",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -876,8 +886,12 @@ def arch_comparison_layers() -> None:
             x="L",
             y="accuracy",
             hue="Architecture",
-            markers=True,
+            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
+            palette=_ARCH_PALETTE,
+            style="Architecture",
+            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
             dashes=False,
+            markersize=12,
             ax=ax,
         )
 
@@ -908,30 +922,30 @@ def arch_comparison_layers() -> None:
             ax.get_legend().remove()
 
         ax.set_title(strategy)
-        ax.set_xlabel(r"Equivalent SIM Layers $L$ (4-SIM: $2 \times L_{\mathrm{per\,SIM}}$)")
+        ax.set_xlabel(r"SIM Layers $L$")
         ax.set_ylabel("Accuracy" if c == 0 else "")
         ax.set_xticks(ticks)
         ax.set_xticklabels(ticks)
         ax.set_xlim(min(ticks), max(ticks))
         ax.set_ylim(None, 1.0)
 
-    # Two shared figure legends
-    fig.legend(
-        list(arch_handles),
-        list(arch_handle_labels),
-        title="Architecture",
-        ncol=len(arch_labels),
-        loc="outside lower left",
-        frameon=True,
-        framealpha=1,
-    )
     bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
     bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
     fig.legend(
         [baseline_handles_dict[lbl] for lbl in bl_labels],
         bl_labels,
         ncol=len(bl_labels),
-        loc="outside lower right",
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+        frameon=True,
+        framealpha=1,
+    )
+    fig.legend(
+        list(arch_handles),
+        list(arch_handle_labels),
+        ncol=len(arch_labels),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.12),
         frameon=True,
         framealpha=1,
     )
@@ -1015,8 +1029,12 @@ def arch_comparison_snr() -> None:
             x="snr",
             y="accuracy",
             hue="Architecture",
-            markers=True,
+            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
+            palette=_ARCH_PALETTE,
+            style="Architecture",
+            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
             dashes=False,
+            markersize=12,
             ax=ax,
         )
 
@@ -1052,22 +1070,23 @@ def arch_comparison_snr() -> None:
         ax.set_xlim(min(ticks), max(ticks))
         ax.set_ylim(None, 1.0)
 
-    fig.legend(
-        list(arch_handles),
-        list(arch_handle_labels),
-        title="Architecture",
-        ncol=len(arch_labels),
-        loc="outside lower left",
-        frameon=True,
-        framealpha=1,
-    )
     bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
     bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
     fig.legend(
         [baseline_handles_dict[lbl] for lbl in bl_labels],
         bl_labels,
         ncol=len(bl_labels),
-        loc="outside lower right",
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+        frameon=True,
+        framealpha=1,
+    )
+    fig.legend(
+        list(arch_handles),
+        list(arch_handle_labels),
+        ncol=len(arch_labels),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.12),
         frameon=True,
         framealpha=1,
     )
@@ -1153,22 +1172,21 @@ def loss_curves_dual_layers() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Accuracy vs Channel Dimension
+# Architecture comparison — Channel Dimension
 # ---------------------------------------------------------------------------
 
 
-def accuracy_vs_channel_dim() -> None:
-    """Accuracy vs channel dimension C — all architectures, L=10, M_int=32×32."""
+def arch_comparison_channel_dim() -> None:
+    """Accuracy vs channel dimension $H$ — all architectures, L=10, M_int=32×32. Grid: cols = strategy."""
     M_FILTER = "32x32"
-    ARCH_SOURCES = [
-        ("dual_channel_dim", "Joint"),
-        ("disjoint_asym_channel_dim", "Disjoint Asym"),
-        ("disjoint_sym_channel_dim", "Disjoint Sym"),
-        ("disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
-    ]
 
-    frames = []
-    for subdir, arch_label in ARCH_SOURCES:
+    frames = {}
+    for key, subdir, arch_label in [
+        ("joint", "dual_channel_dim", "Joint"),
+        ("disjoint_asym", "disjoint_asym_channel_dim", "Disjoint Asym"),
+        ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym"),
+        ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
+    ]:
         df = _load_parquet_glob(f"{subdir}/*.parquet")
         if df is None:
             continue
@@ -1176,62 +1194,91 @@ def accuracy_vs_channel_dim() -> None:
             pl.lit(arch_label).alias("Architecture")
         )
         if not df.is_empty():
-            frames.append(df)
+            frames[key] = df
 
     if not frames:
         print("No channel_dim data found — run 'just channel-dim' first.")
         return
 
     acc_col = "sim_accuracy_neural"
-    if frames[0][acc_col].drop_nulls().is_empty():
+    if next(iter(frames.values()))[acc_col].drop_nulls().is_empty():
         acc_col = "sim_accuracy_probe"
 
-    df_all = (
-        pl.concat(
-            [f.select(["channel_dim", "strategy", "Architecture", acc_col]) for f in frames],
-            how="diagonal_relaxed",
-        )
-        .with_columns((pl.col(acc_col) / 100).alias("accuracy"))
-        .sort(["Architecture", "strategy"])
-    )
+    df_all = pl.concat(
+        [f.select(["channel_dim", "strategy", "Architecture", acc_col]) for f in frames.values()],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
 
     channel_dims = sorted(df_all["channel_dim"].drop_nulls().unique().to_list())
-
-    ax = sns.lineplot(
-        df_all.to_pandas(),
-        x="channel_dim",
-        y="accuracy",
-        hue="Architecture",
-        style="strategy",
-        markers=True,
-        dashes=True,
-    )
-
-    ax.set_xscale("log")
-    ax.set_xticks(channel_dims)
-    ax.set_xticklabels([str(c) for c in channel_dims], rotation=45, ha="right")
-
-    handles, labels = ax.get_legend_handles_labels()
+    strat_list = sorted(df_all["strategy"].unique().to_list())
     arch_labels = sorted(df_all["Architecture"].unique().to_list())
-    strat_labels = sorted(df_all["strategy"].unique().to_list())
 
-    def _make_legend(lbl_list, title, **kwargs):
-        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
-        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
-
-    leg1 = _make_legend(
-        strat_labels, "Alignment Type", ncol=2, loc="upper center", bbox_to_anchor=(0.37, 0.18)
+    fig, axes = plt.subplots(
+        1,
+        len(strat_list),
+        sharey=True,
+        sharex=True,
+        squeeze=False,
+        figsize=(8 * len(strat_list), 6),
+        layout="constrained",
     )
-    leg2 = _make_legend(
-        arch_labels, "Architecture", ncol=2, loc="upper center", bbox_to_anchor=(0.76, 0.18)
-    )
-    ax.add_artist(leg1)
-    ax.add_artist(leg2)
 
-    plt.xlabel(r"Channel Dimension $C$")
-    plt.ylabel("Accuracy")
-    ax.set_xlim(min(channel_dims), max(channel_dims))
-    _save("AccuracyVsChannelDim")
+    arch_handles, arch_handle_labels = [], []
+
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+
+        sns.lineplot(
+            df_s.to_pandas(),
+            x="channel_dim",
+            y="accuracy",
+            hue="Architecture",
+            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
+            palette=_ARCH_PALETTE,
+            style="Architecture",
+            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
+            dashes=False,
+            markersize=12,
+            ax=ax,
+        )
+
+        if c == 0:
+            arch_handle_labels, arch_handles = (
+                zip(
+                    *[
+                        (label, h)
+                        for h, label in zip(*ax.get_legend_handles_labels())
+                        if label in arch_labels
+                    ]
+                )
+                if arch_labels
+                else ([], [])
+            )
+
+        if ax.get_legend():
+            ax.get_legend().remove()
+
+        ax.set_title(strategy)
+        ax.set_xscale("log")
+        ax.set_xticks(channel_dims)
+        ax.set_xticklabels([str(c) for c in channel_dims])
+        ax.set_xlim(min(channel_dims), max(channel_dims))
+        ax.set_xlabel(r"$\mathbf{H}$")
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        ax.set_ylim(None, 1.0)
+
+    fig.legend(
+        list(arch_handles),
+        list(arch_handle_labels),
+        ncol=len(arch_labels),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.12),
+        frameon=True,
+        framealpha=1,
+    )
+
+    _save("ArchComparison_ChannelDim")
 
 
 # ---------------------------------------------------------------------------
@@ -1256,7 +1303,7 @@ def main() -> None:
     loss_curves_dual_layers()
     arch_comparison_layers()
     arch_comparison_snr()
-    accuracy_vs_channel_dim()
+    arch_comparison_channel_dim()
 
     print(f"\n All plots saved to {IMG_PATH}")
 
