@@ -64,6 +64,7 @@ def run_disjoint_4sim(
     F_R_H=None,
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
+    epsilon: float = 0.0,
     **_,
 ) -> None:
     """Run one disjoint 4-SIM (full CSI) job.
@@ -142,6 +143,9 @@ def run_disjoint_4sim(
         PPFE TX synthesis frame (required when ``strategy_name="PPFE"``).
     F_R_H : array-like or None, optional
         PPFE RX analysis frame (required when ``strategy_name="PPFE"``).
+    epsilon : float, optional
+        Tikhonov regularization for the symmetric channel split:
+        ``sqrt(sigma/(sigma^2+eps))`` on each inner SIM.  Defaults to ``0.0``.
     """
     if strategy_name not in ("PPFE", "Linear"):
         raise NotImplementedError(f"4-SIM disjoint not implemented for '{strategy_name}'.")
@@ -188,14 +192,9 @@ def run_disjoint_4sim(
 
     with torch.no_grad():
         U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
-        inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
-        B_T = Vh.H @ torch.diag(inv_sqrt_s)
-        B_R = torch.diag(inv_sqrt_s) @ U.H
-        I_approx = B_R @ H_torch @ B_T
-        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=H_torch.device)
-        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
-            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
-        )
+        reg_inv_sqrt_s = torch.sqrt(s / (s**2 + epsilon)).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(reg_inv_sqrt_s)
+        B_R = torch.diag(reg_inv_sqrt_s) @ U.H
 
         match strategy_name:
             case "PPFE":

@@ -1,17 +1,22 @@
 defaults:
-  - sim: default
+  - sim: joint
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: joint
   - classifier: default
-  - experiment: slayer
   - _self_
+
+sim:
+  name: joint_slayer
+  result_subdir: joint_slayer
+  s_tx: 5
+  s_rx: 5
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
       training.seed: 27,42,100
-      experiment.s_tx: 4,5,6,7,8,9,10
-      experiment.s_rx: 4,7,10
+      sim.s_tx: 4,5,6,7,8,9,10
+      sim.s_rx: 4,7,10

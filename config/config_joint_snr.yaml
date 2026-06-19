@@ -1,18 +1,22 @@
 defaults:
-  - sim: default
+  - sim: joint
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: joint
   - classifier: default
-  - experiment: snr
   - _self_
+
+sim:
+  name: joint_snr
+  result_subdir: joint_snr
+  snr: 0
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      experiment.M_int: 16,32
+      sim.M_int: 16,32
       alignment: linear,ppfe
       training.seed: 27,42,100
-      experiment.snr: -30,-20,-10,0,10,20,30
+      sim.snr: -30,-20,-10,0,10,20,30

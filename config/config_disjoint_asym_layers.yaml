@@ -1,18 +1,17 @@
 defaults:
-  - sim: default
+  - sim: disjoint_asym
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: disjoint
   - classifier: default
-  - experiment: disjoint_asym_layers
   - _self_
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      experiment.M_int: 16,32
+      sim.M_int: 16,32
       alignment: linear,ppfe
       training.seed: 27,42,100
-      experiment.L: 1,2,3,4,5,6,7,8,9,10,15,20,25
+      sim.L: 1,2,3,4,5,6,7,8,9,10,15,20,25

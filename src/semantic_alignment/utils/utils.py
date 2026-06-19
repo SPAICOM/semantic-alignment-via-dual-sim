@@ -321,7 +321,11 @@ def mmse_svd_equalizer(channel_matrix: torch.Tensor, snr_db: float = None):
     return G, F
 
 
-def get_rx_equalizer(channel_matrix: torch.Tensor, snr_db: float = None) -> torch.Tensor:
+def get_rx_equalizer(
+    channel_matrix: torch.Tensor,
+    snr_db: float = None,
+    epsilon: float = 0.0,
+) -> torch.Tensor:
     """Compute a receive-only MMSE/ZF equalizer (no TX precoding).
 
     Parameters
@@ -331,6 +335,10 @@ def get_rx_equalizer(channel_matrix: torch.Tensor, snr_db: float = None) -> torc
     snr_db : float, optional
         Operating SNR in dB for MMSE regularization.
         If ``None`` a ZF equalizer is returned.
+    epsilon : float, optional
+        Tikhonov regularization added to singular values for the ZF path
+        (``snr_db=None``): ``Q = V diag(σ/(σ²+ε)) Uᴴ``.  Ignored when
+        ``snr_db`` is set.  Defaults to ``0.0`` (pure pseudoinverse).
 
     Returns
     -------
@@ -338,10 +346,10 @@ def get_rx_equalizer(channel_matrix: torch.Tensor, snr_db: float = None) -> torc
         Receive equalizer ``Q`` of shape ``(Nt, Nr)``.
     """
     U, s, Vh = torch.linalg.svd(channel_matrix, full_matrices=False)
-    Sigma = torch.diag(s).to(channel_matrix.dtype)
     V = Vh.H
 
     if snr_db is not None:
+        Sigma = torch.diag(s).to(channel_matrix.dtype)
         snr_linear = 10 ** (snr_db / 10)
         reg = (1.0 / snr_linear) * torch.eye(
             Sigma.shape[1], dtype=channel_matrix.dtype, device=channel_matrix.device
@@ -349,8 +357,8 @@ def get_rx_equalizer(channel_matrix: torch.Tensor, snr_db: float = None) -> torc
         inv_term = torch.inverse(Sigma.H @ Sigma + reg)
         Q = V @ inv_term @ (U @ Sigma).H
     else:
-        inv_Sigma = torch.diag(1.0 / s).to(channel_matrix.dtype)
-        Q = V @ inv_Sigma @ U.H
+        reg_inv_s = (s / (s**2 + epsilon)).to(channel_matrix.dtype)
+        Q = V @ torch.diag(reg_inv_s) @ U.H
 
     return Q
 

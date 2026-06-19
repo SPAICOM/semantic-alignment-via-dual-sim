@@ -10,11 +10,12 @@ def compute_asym_targets(
     H_mimo: torch.Tensor,
     ch_dim: int,
     device,
+    epsilon: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute (target_tx, target_rx) for the asymmetric disjoint strategy.
 
     TX-SIM emulates A (or its truncated SVD factor when the channel is a
-    bottleneck), RX-SIM emulates Q = H† (zero-forcing equalizer).
+    bottleneck), RX-SIM emulates Q = V diag(σ/(σ²+ε)) Uᴴ (regularized ZF).
 
     Parameters
     ----------
@@ -27,6 +28,9 @@ def compute_asym_targets(
         the alignment matrix is split via truncated SVD.
     device :
         Target device for the returned tensors.
+    epsilon : float, optional
+        Tikhonov regularization for the ZF equalizer: ``Q = V diag(σ/(σ²+ε)) Uᴴ``.
+        Defaults to ``0.0`` (pure pseudoinverse).
 
     Returns
     -------
@@ -37,7 +41,7 @@ def compute_asym_targets(
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     with torch.no_grad():
-        Q = get_rx_equalizer(H_torch, snr_db=None)
+        Q = get_rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
         if ch_dim < A_target.shape[0]:
             U_svd, s_svd, Vh_svd = torch.linalg.svd(A_torch, full_matrices=False)
             k = min(ch_dim, s_svd.shape[0])
@@ -85,11 +89,12 @@ def run_disjoint_asym(
     n_clusters: int | None = None,
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
+    epsilon: float = 0.0,
     **_,
 ) -> None:
     """Entry point for the asymmetric disjoint Dual-SIM experiment.
 
-    Computes TX/RX targets via :func:`compute_asym_targets` (TX→A, RX→H†),
+    Computes TX/RX targets via :func:`compute_asym_targets` (TX→A, RX→regularized ZF),
     then delegates to
     :func:`~semantic_alignment.experiments.disjoint_2sim.run_disjoint_2sim`.
     Accepts ``**_`` so unknown YAML metadata fields (``name``, ``sim_type``,
@@ -149,11 +154,14 @@ def run_disjoint_asym(
         Meta-atom spacing (metres).
     snr : float or None, optional
         AWGN SNR in dB; ``None`` means noiseless.
+    epsilon : float, optional
+        Tikhonov regularization for the RX-SIM ZF equalizer target:
+        ``Q = V diag(σ/(σ²+ε)) Uᴴ``.  Defaults to ``0.0``.
     """
     from semantic_alignment.experiments.disjoint_2sim import run_disjoint_2sim
 
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
-    target_tx, target_rx = compute_asym_targets(A_target, H_mimo, ch_dim, device)
+    target_tx, target_rx = compute_asym_targets(A_target, H_mimo, ch_dim, device, epsilon=epsilon)
     run_disjoint_2sim(
         target_tx,
         target_rx,

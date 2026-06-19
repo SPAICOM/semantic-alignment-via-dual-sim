@@ -1,12 +1,15 @@
 defaults:
-  - sim: default
+  - sim: mono
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: mono
   - classifier: default
-  - experiment: n_proto_mono
   - _self_
+
+sim:
+  name: n_proto_mono
+  result_subdir: n_proto_mono
 
 hydra:
   mode: MULTIRUN

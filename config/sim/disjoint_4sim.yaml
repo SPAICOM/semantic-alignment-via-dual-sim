@@ -1,0 +1,15 @@
+_target_: semantic_alignment.experiments.disjoint_4sim.run_disjoint_4sim
+sim_type: disjoint_4sim
+
+wavelength: 0.005
+slayer_multiplier: 5
+spacing_divisor: 2
+epsilon: 1.0e-6
+
+L: 5              # layers per SIM; hardware equivalent to 2*L in the 2-SIM case
+M_int: 32
+channel_dim: 20
+snr: null
+
+name: disjoint_4sim_layers
+result_subdir: disjoint_4sim_layers

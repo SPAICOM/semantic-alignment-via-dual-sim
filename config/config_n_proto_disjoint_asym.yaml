@@ -1,12 +1,15 @@
 defaults:
-  - sim: default
+  - sim: disjoint_asym
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: disjoint
   - classifier: default
-  - experiment: n_proto_disjoint_asym
   - _self_
+
+sim:
+  name: n_proto_disjoint_asym
+  result_subdir: n_proto_disjoint_asym
 
 hydra:
   mode: MULTIRUN

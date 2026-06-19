@@ -1,12 +1,15 @@
 defaults:
-  - sim: default
+  - sim: joint
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: joint
   - classifier: default
-  - experiment: n_proto_joint
   - _self_
+
+sim:
+  name: n_proto_joint
+  result_subdir: n_proto_joint
 
 hydra:
   mode: MULTIRUN

@@ -57,8 +57,8 @@ def _snr_tag(snr) -> str:
 
 def _out_path(cfg: DictConfig) -> Path | None:
     """Return the output Parquet path for this job from cfg alone — no data needed."""
-    exp = cfg.experiment
-    result_subdir = exp.get("result_subdir", None)
+    sim = cfg.sim
+    result_subdir = sim.get("result_subdir", None)
     if result_subdir is None:
         return None
 
@@ -66,18 +66,18 @@ def _out_path(cfg: DictConfig) -> Path | None:
     strategy = cfg.alignment.type
     tx = cfg.data.tx_enc
     rx = cfg.data.rx_enc
-    M = exp.M_int
-    ch_dim = exp.get("channel_dim", None)
-    snr_raw = exp.get("snr", None)
+    M = sim.M_int
+    ch_dim = sim.get("channel_dim", None)
+    snr_raw = sim.get("snr", None)
     snr = None if str(snr_raw) == "null" else snr_raw
-    s_tx = exp.get("s_tx", None)
-    s_rx = exp.get("s_rx", None)
+    s_tx = sim.get("s_tx", None)
+    s_rx = sim.get("s_rx", None)
     n_clusters = cfg.alignment.get("n_clusters", None) if strategy == "PPFE" else None
 
     return (
         _RESULTS
         / result_subdir
-        / make_fname(strategy, seed, exp.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
+        / make_fname(strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
     )
 
 
@@ -220,11 +220,11 @@ def _setup(cfg: DictConfig) -> dict:
         A_target = ridge_regression(input_w, output_w, lmb=cfg.alignment.lmb)
         F_T, F_R_H = None, None
     else:
-        is_csi = cfg.experiment.sim_type in ("disjoint_sym", "disjoint_4sim")
+        is_csi = cfg.sim.sim_type in ("disjoint_sym", "disjoint_4sim")
         if is_csi:
             # n_clusters must equal channel_dim so F_T and F_R_H are dimensionally
             # consistent with B_T and B_R (both live in the ch_dim space).
-            ch_dim_cfg = cfg.experiment.get("channel_dim", None)
+            ch_dim_cfg = cfg.sim.get("channel_dim", None)
             n_k = (
                 int(ch_dim_cfg)
                 if ch_dim_cfg is not None
@@ -275,7 +275,7 @@ def _setup(cfg: DictConfig) -> dict:
         if clf_neural is not None
         else None
     )
-    ch_dim_cfg = cfg.experiment.get("channel_dim", None)
+    ch_dim_cfg = cfg.sim.get("channel_dim", None)
     h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
     H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
 
@@ -331,16 +331,13 @@ def main(cfg: DictConfig) -> None:
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
-    exp = cfg.experiment
-    exp_name = exp.name
-
     out = _out_path(cfg)
     if out is not None and out.exists():
         print(f" Already done: {out.name} — skipping.")
         return
 
     print(
-        f" seed={cfg.training.seed} | exp={exp_name} | "
+        f" seed={cfg.training.seed} | sim={cfg.sim.name} | "
         f"dataset={cfg.datasets.hf_name} | align={cfg.alignment.type}"
     )
 
@@ -354,9 +351,8 @@ def main(cfg: DictConfig) -> None:
     n_clusters = cfg.alignment.get("n_clusters", None) if cfg.alignment.type == "PPFE" else None
 
     instantiate(
-        cfg.experiment,
+        cfg.sim,
         _recursive_=False,
-        wavelength=cfg.sim.wavelength,
         slayer=cfg.sim.wavelength * cfg.sim.slayer_multiplier,
         dx=cfg.sim.wavelength / cfg.sim.spacing_divisor,
         clip_value=clip_value,

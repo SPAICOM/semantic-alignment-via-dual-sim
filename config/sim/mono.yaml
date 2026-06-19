@@ -1,0 +1,13 @@
+_target_: semantic_alignment.experiments.mono.run_mono_sim
+sim_type: mono
+
+wavelength: 0.005
+slayer_multiplier: 5
+spacing_divisor: 2
+
+L: 10
+M_int: 32
+snr: null
+
+name: mono
+result_subdir: mono

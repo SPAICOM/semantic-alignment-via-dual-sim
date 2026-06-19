@@ -1,17 +1,20 @@
 defaults:
-  - sim: default
+  - sim: disjoint_asym
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: disjoint
   - classifier: default
-  - experiment: channel_dim_disjoint_asym
   - _self_
+
+sim:
+  name: channel_dim_disjoint_asym
+  result_subdir: disjoint_asym_channel_dim
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      experiment.channel_dim: 1,2,4,6,8,10,20,192,384
+      sim.channel_dim: 1,2,4,6,8,10,20,192,384
       alignment: linear,ppfe
       training.seed: 27,42,100

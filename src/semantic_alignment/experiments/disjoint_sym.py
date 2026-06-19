@@ -11,18 +11,21 @@ def compute_sym_targets(
     device,
     F_T=None,
     F_R_H=None,
+    epsilon: float = 0.0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute (target_tx, target_rx) for the symmetric CSI disjoint strategy.
 
-    Both SIMs exploit the SVD of H to invert the channel:
-    ``B_T = V Σ^{-1/2}`` and ``B_R = Σ^{-1/2} Uᴴ`` so that ``B_R H B_T = I``.
+    Both SIMs exploit the SVD of H via a symmetric regularized split:
+    ``B_T = V diag(sqrt(sigma/(sigma^2+eps)))`` and
+    ``B_R = diag(sqrt(sigma/(sigma^2+eps))) U^H``,
+    so that ``B_R H B_T = diag(sigma^2/(sigma^2+eps)) -> I`` as ``eps -> 0``.
 
     Targets are strategy-specific:
 
     - **PPFE**: ``target_tx = B_T @ F_T``, ``target_rx = F_R^H @ B_R``
       (requires pre-computed PPFE frames ``F_T`` and ``F_R_H``).
-    - **Linear**: ``target_tx = B_T @ Σ_A^{1/2} V_A^H``,
-      ``target_rx = U_A Σ_A^{1/2} @ B_R`` (from SVD of A).
+    - **Linear**: ``target_tx = B_T @ Sigma_A^{1/2} V_A^H``,
+      ``target_rx = U_A Sigma_A^{1/2} @ B_R`` (from SVD of A).
 
     Parameters
     ----------
@@ -40,6 +43,11 @@ def compute_sym_targets(
         PPFE TX synthesis frame (required when ``strategy_name="PPFE"``).
     F_R_H : array-like or None
         PPFE RX analysis frame (required when ``strategy_name="PPFE"``).
+    epsilon : float, optional
+        Tikhonov regularization: each side applies ``sqrt(sigma/(sigma^2+eps))``
+        instead of ``1/sqrt(sigma)``.  Together they yield
+        ``sigma^2/(sigma^2+eps)`` on the cascade diagonal.
+        Defaults to ``0.0`` (pure square-root inversion).
 
     Returns
     -------
@@ -51,14 +59,9 @@ def compute_sym_targets(
 
     with torch.no_grad():
         U, s, Vh = torch.linalg.svd(H_torch, full_matrices=False)
-        inv_sqrt_s = (1.0 / torch.sqrt(s)).to(H_torch.dtype)
-        B_T = Vh.H @ torch.diag(inv_sqrt_s)
-        B_R = torch.diag(inv_sqrt_s) @ U.H
-        I_approx = B_R @ H_torch @ B_T
-        I_ref = torch.eye(H_torch.shape[0], dtype=H_torch.dtype, device=device)
-        assert torch.allclose(I_approx, I_ref, atol=1e-4), (
-            f"B_R @ H @ B_T ≉ I, max err={(I_approx - I_ref).abs().max():.2e}"
-        )
+        reg_inv_sqrt_s = torch.sqrt(s / (s**2 + epsilon)).to(H_torch.dtype)
+        B_T = Vh.H @ torch.diag(reg_inv_sqrt_s)
+        B_R = torch.diag(reg_inv_sqrt_s) @ U.H
 
         if ch_dim < B_T.shape[0]:
             B_T = B_T[:ch_dim, :ch_dim]
@@ -78,7 +81,7 @@ def compute_sym_targets(
             case "Linear":
                 if ch_dim > min(A_torch.shape):
                     raise ValueError(
-                        f"Linear CSI requires channel_dim ≤ {min(A_torch.shape)}, got {ch_dim}"
+                        f"Linear CSI requires channel_dim <= {min(A_torch.shape)}, got {ch_dim}"
                     )
                 U_A, s_A, Vh_A = torch.linalg.svd(A_torch, full_matrices=False)
                 sqrt_sA = torch.sqrt(s_A[:ch_dim]).to(A_torch.dtype)
@@ -129,12 +132,13 @@ def run_disjoint_sym(
     F_R_H=None,
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
+    epsilon: float = 0.0,
     **_,
 ) -> None:
     """Entry point for the symmetric (full-CSI) disjoint Dual-SIM experiment.
 
     Computes TX/RX targets via :func:`compute_sym_targets` (SVD-based channel
-    inversion), then delegates to
+    inversion with symmetric regularized split), then delegates to
     :func:`~semantic_alignment.experiments.disjoint_2sim.run_disjoint_2sim`.
     Accepts ``**_`` so unknown YAML metadata fields are silently ignored.
 
@@ -185,7 +189,7 @@ def run_disjoint_sym(
     channel_dim : int or None, optional
         Physical channel dimension override; defaults to ``max(A_target.shape)``.
     wavelength : float, optional
-        Operating wavelength λ (metres).
+        Operating wavelength lambda (metres).
     slayer : float, optional
         Default inter-layer spacing in wavelengths.
     dx : float, optional
@@ -196,12 +200,15 @@ def run_disjoint_sym(
         PPFE TX synthesis frame (required when ``strategy_name="PPFE"``).
     F_R_H : array-like or None, optional
         PPFE RX analysis frame (required when ``strategy_name="PPFE"``).
+    epsilon : float, optional
+        Tikhonov regularization for the symmetric channel split:
+        ``sqrt(sigma/(sigma^2+eps))`` on each side.  Defaults to ``0.0``.
     """
     from semantic_alignment.experiments.disjoint_2sim import run_disjoint_2sim
 
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     target_tx, target_rx = compute_sym_targets(
-        A_target, H_mimo, ch_dim, strategy_name, device, F_T=F_T, F_R_H=F_R_H
+        A_target, H_mimo, ch_dim, strategy_name, device, F_T=F_T, F_R_H=F_R_H, epsilon=epsilon
     )
     run_disjoint_2sim(
         target_tx,

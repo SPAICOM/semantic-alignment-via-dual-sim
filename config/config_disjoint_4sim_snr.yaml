@@ -1,17 +1,21 @@
 defaults:
-  - sim: default
+  - sim: disjoint_4sim
   - alignment: ppfe
   - datasets: cifar10
   - data: default
   - training: disjoint
   - classifier: default
-  - experiment: disjoint_4sim_snr
   - _self_
+
+sim:
+  name: disjoint_4sim_snr
+  result_subdir: disjoint_4sim_snr
+  snr: 0
 
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      experiment.M_int: 16,32
+      sim.M_int: 16,32
       training.seed: 27,42,100
-      experiment.snr: -30,-20,-10,0,10,20,30
+      sim.snr: -30,-20,-10,0,10,20,30
