@@ -67,7 +67,6 @@ def run_disjoint_asym(
     strategy_name: str = "Linear",
     seed: int = 42,
     max_iters: int = 3000,
-    lr: float = 0.1,
     clf_neural=None,
     no_mismatch_neural: float | None = None,
     no_mismatch_probe: float = 0.0,
@@ -83,6 +82,9 @@ def run_disjoint_asym(
     slayer: float = 0.025,
     dx: float = 0.0025,
     snr: float | None = None,
+    n_clusters: int | None = None,
+    lr_tx: float = 0.1,
+    lr_rx: float = 0.1,
     **_,
 ) -> None:
     """Entry point for the asymmetric disjoint Dual-SIM experiment.
@@ -119,8 +121,10 @@ def run_disjoint_asym(
         Global random seed.
     max_iters : int, optional
         Optimization iterations per SIM.
-    lr : float, optional
-        Learning rate.
+    lr_tx : float, optional
+        TX-SIM learning rate.
+    lr_rx : float, optional
+        RX-SIM learning rate.
     clf_neural : optional
         Optional neural classifier.
     no_mismatch_neural, no_mismatch_probe : float or None, optional
@@ -168,7 +172,6 @@ def run_disjoint_asym(
         strategy_name=strategy_name,
         seed=seed,
         max_iters=max_iters,
-        lr=lr,
         clf_neural=clf_neural,
         no_mismatch_neural=no_mismatch_neural,
         no_mismatch_probe=no_mismatch_probe,
@@ -184,4 +187,15 @@ def run_disjoint_asym(
         slayer=slayer,
         dx=dx,
         snr=snr,
+        n_clusters=n_clusters,
+        lr_tx=lr_tx,
+        lr_rx=lr_rx,
+    )
+
+
+if __name__ == "__main__":
+    print("run_disjoint_asym: asymmetric disjoint Dual-SIM runner (TX→A, RX→H†).")
+    print("Invoke via: just run-disjoint-asym")
+    print(
+        "         or: uv run python scripts/classification.py --config-name config_disjoint_asym_layers"
     )

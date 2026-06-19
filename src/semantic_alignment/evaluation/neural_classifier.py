@@ -349,3 +349,14 @@ def train_neural_classifier(
         module = NeuralClassifierModule.load_from_checkpoint(best_ckpt)
 
     return module.model.eval()
+
+
+if __name__ == "__main__":
+    import torch
+
+    model = NeuralClassifier(input_dim=16, hidden_dim=64, num_classes=10)
+    x = torch.randn(8, 16)
+    logits = model(x)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"NeuralClassifier : input={x.shape} → logits={logits.shape}")
+    print(f"Parameters       : {n_params:,}")

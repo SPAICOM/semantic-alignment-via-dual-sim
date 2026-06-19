@@ -10,6 +10,13 @@ The training procedure trains TX-SIM and RX-SIM independently (each with
 cascade ``G_R H G_T`` with :func:`run_evaluation_disjoint_fixed`.
 """
 
+import sys as _sys
+from pathlib import Path as _Path
+
+if __name__ == "__main__" and __package__ is None:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
+    __package__ = "semantic_alignment.experiments"
+
 import gc
 import random
 
@@ -40,7 +47,6 @@ def run_disjoint_2sim(
     strategy_name: str = "Linear",
     seed: int = 42,
     max_iters: int = 3000,
-    lr: float = 0.1,
     clf_neural=None,
     no_mismatch_neural: float | None = None,
     no_mismatch_probe: float = 0.0,
@@ -56,6 +62,9 @@ def run_disjoint_2sim(
     slayer: float = 0.025,
     dx: float = 0.0025,
     snr: float | None = None,
+    n_clusters: int | None = None,
+    lr_tx: float = 0.1,
+    lr_rx: float = 0.1,
     **_,
 ) -> None:
     """Run one disjoint 2-SIM job given pre-computed TX and RX target matrices.
@@ -98,8 +107,10 @@ def run_disjoint_2sim(
         Global random seed.
     max_iters : int, optional
         Optimization iterations per SIM.
-    lr : float, optional
-        Learning rate.
+    lr_tx : float, optional
+        TX-SIM learning rate.
+    lr_rx : float, optional
+        RX-SIM learning rate.
     clf_neural : optional
         Optional neural classifier.
     no_mismatch_neural, no_mismatch_probe : float or None, optional
@@ -130,7 +141,9 @@ def run_disjoint_2sim(
     tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
-    fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc)
+    fname = make_fname(
+        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
+    )
     out_path = RESULTS_DIR / result_subdir / fname
     if out_path.exists():
         print(f"Skipping {out_path.name}.")
@@ -167,15 +180,15 @@ def run_disjoint_2sim(
     tx_model = MonoSIMoptimizerTorch(tx_cpu).to(device)
     rx_model = MonoSIMoptimizerTorch(rx_cpu).to(device)
 
-    sim_kw = dict(
-        max_iters=max_iters,
-        lr=lr,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        warmup_frac=warmup_frac,
+    sim_kw_base = dict(
+        optimizer=optimizer, scheduler=scheduler, warmup_frac=warmup_frac, max_iters=max_iters
     )
-    tx_loss_history, beta_T = tx_model.optimize_sim(target_matrix=target_tx, **sim_kw)
-    rx_loss_history, beta_R = rx_model.optimize_sim(target_matrix=target_rx, **sim_kw)
+    tx_loss_history, beta_T = tx_model.optimize_sim(
+        target_matrix=target_tx, lr=lr_tx, **sim_kw_base
+    )
+    rx_loss_history, beta_R = rx_model.optimize_sim(
+        target_matrix=target_rx, lr=lr_rx, **sim_kw_base
+    )
 
     beta_bar = complex(beta_T) * complex(beta_R)
     beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
@@ -240,7 +253,8 @@ def run_disjoint_2sim(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": pct(sim_neural),
-            "lr": lr,
+            "lr_tx": lr_tx,
+            "lr_rx": lr_rx,
             "beta_T": abs(beta_T),
             "beta_R": abs(beta_R),
             "loss": tx_loss_history[-1] if tx_loss_history else 0.0,
@@ -248,8 +262,14 @@ def run_disjoint_2sim(
             "rx_loss": rx_loss_history[-1] if rx_loss_history else 0.0,
             "rx_loss_history": rx_loss_history,
             "channel_dim": ch_dim,
+            "n_clusters": n_clusters,
         },
     )
     del tx_model, rx_model
     gc.collect()
     torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    print("run_disjoint_2sim: core 2-SIM disjoint runner (accepts pre-computed TX/RX targets).")
+    print("Not called directly from YAML — invoked by run_disjoint_asym and run_disjoint_sym.")

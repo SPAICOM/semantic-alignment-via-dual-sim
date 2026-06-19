@@ -353,3 +353,20 @@ def get_rx_equalizer(channel_matrix: torch.Tensor, snr_db: float = None) -> torc
         Q = V @ inv_Sigma @ U.H
 
     return Q
+
+
+if __name__ == "__main__":
+    import torch
+
+    H = complex_gaussian_matrix(0, 1, (4, 4))
+    X = complex_gaussian_matrix(0, 1, (4, 200))
+    sig = sigma_given_snr(20.0, X)
+    noise = awgn(sig, X.shape)
+    print(f"complex_gaussian_matrix : {H.shape} {H.dtype}")
+    print(f"SNR                     : {snr(X, noise):.1f} dB  (target 20 dB)")
+    Xw, L_chol, mu = prewhiten(X)
+    print(f"prewhiten               : {Xw.shape}, mean ≈ {Xw.mean().abs().item():.2e}")
+    Q_mmse, P_mmse = mmse_svd_equalizer(H, snr_db=10.0)
+    print(f"mmse_svd_equalizer      : Q={Q_mmse.shape}, P={P_mmse.shape}")
+    Q_zf = get_rx_equalizer(H, snr_db=None)
+    print(f"get_rx_equalizer (ZF)   : Q={Q_zf.shape}")

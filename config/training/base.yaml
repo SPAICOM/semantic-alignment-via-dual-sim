@@ -1,0 +1,14 @@
+# Training settings shared across all SIM architectures
+
+max_iters: 5000
+seed: 42
+
+# Optimizer: sgd | adam (default)
+optimizer: adam
+
+# LR scheduler: null (fixed LR) | cosine (warmup then cosine → lr*1e-3)
+scheduler: null
+warmup_frac: 0.05   # fraction of max_iters at constant LR (scheduler=cosine only)
+
+# GPU index (null = let PyTorch pick)
+gpu: null

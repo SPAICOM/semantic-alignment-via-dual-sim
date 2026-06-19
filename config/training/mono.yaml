@@ -1,0 +1,5 @@
+defaults:
+  - base
+
+# Single-SIM learning rate
+lr: 0.1

@@ -214,3 +214,14 @@ def select_pilots(
     # Shuffle final pilot set to remove per-class ordering before use in solvers
     idx_all = idx_all[torch.randperm(len(idx_all))]
     return SplitData(z_tx=z_tx[idx_all], z_rx=z_rx[idx_all], labels=labels[idx_all])
+
+
+if __name__ == "__main__":
+    import torch
+
+    z = torch.randn(50, 8)
+    labels = torch.arange(50) % 5
+    split = SplitData(z_tx=z, z_rx=z, labels=labels)
+    pilots = select_pilots(split, train_label_size=3)
+    print(f"SplitData      : z_tx={split.z_tx.shape}, labels={split.labels.shape}")
+    print(f"select_pilots  : z_tx={pilots.z_tx.shape} (3 per class × 5 classes)")

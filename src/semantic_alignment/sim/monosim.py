@@ -450,3 +450,24 @@ class MonoSIMoptimizerTorch(nn.Module):
             beta_f = torch.sum(torch.conj(Z_f) * A_t) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
 
         return loss_history, beta_f.item()
+
+
+if __name__ == "__main__":
+    import torch
+
+    cpu = MonoSIMoptimizer(
+        num_layers=2,
+        num_meta_atoms_in_x=2,
+        num_meta_atoms_in_y=2,
+        num_meta_atoms_out_x=2,
+        num_meta_atoms_out_y=2,
+        num_meta_atoms_int_x=2,
+        num_meta_atoms_int_y=2,
+        thickness=0.05,
+        wavelength=0.005,
+        side="tx",
+    )
+    model = MonoSIMoptimizerTorch(cpu)
+    G = model.get_cascade()
+    print(f"MonoSIMoptimizer      : W[0]={cpu.W[0].shape}")
+    print(f"MonoSIMoptimizerTorch : cascade={G.shape}, dtype={G.dtype}")

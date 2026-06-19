@@ -73,3 +73,9 @@ def run_original_accuracy(
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels_batch.numpy())
     return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+if __name__ == "__main__":
+    print("original_accuracy.py — run_original_accuracy:")
+    print("  Evaluates the *Original* baseline: alignment A applied to TX embeddings,")
+    print("  no SIM and no MIMO channel. Called automatically by scripts/classification.py.")

@@ -103,17 +103,21 @@ def make_fname(
     rx_enc: str,
     s_tx: int | None = None,
     s_rx: int | None = None,
+    n_clusters: int | None = None,
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
 
     All fields are always present; ``None`` values use ``"none"`` for s-layer
     and ``"inf"`` for SNR so filenames are self-documenting without branching.
+    When ``n_clusters`` is provided (PPFE n-clusters sweep), ``_k{n_clusters}``
+    is appended before the encoder suffix.
     """
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
+    k_tag = f"_k{n_clusters}" if n_clusters is not None else ""
     return (
         f"{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
-        f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}"
+        f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}"
         f"_{tx_enc}_{rx_enc}.parquet"
     )
 
@@ -150,3 +154,15 @@ def neural_str(label: str, acc_pct: float | None) -> str:
     the caller does not need to branch.
     """
     return f" {label}={acc_pct:.2f}%" if acc_pct is not None else ""
+
+
+if __name__ == "__main__":
+    print(
+        f"make_fname example : {make_fname('PPFE', 42, 10, 32, 20, None, 'vit_b16', 'vit_b16', n_clusters=20)}"
+    )
+    print(f"ch_dims(20)        : {ch_dims(20)}")
+    print(f"ch_dims(192)       : {ch_dims(192)}")
+    print(f"snr_tag(None)      : {snr_tag(None)!r}")
+    print(f"pct(0.875)         : {pct(0.875)}")
+    print(f"neural_str('acc', 92.3) : {neural_str('acc', 92.3)!r}")
+    print(f"neural_str('acc', None) : {neural_str('acc', None)!r}")

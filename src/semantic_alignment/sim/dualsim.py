@@ -484,7 +484,8 @@ class DualSIMoptimizerTorch(nn.Module):
         A_target,
         H_mimo,
         max_iters: int = 3000,
-        lr: float = 0.1,
+        lr_tx: float = 0.1,
+        lr_rx: float = 0.1,
         warmup_frac: float = 0.05,
         clip_value: float | None = None,
         tx_steps_per_rx: int = 1,
@@ -512,8 +513,10 @@ class DualSIMoptimizerTorch(nn.Module):
             MIMO channel matrix, same shape as required by the SIM.
         max_iters : int, optional
             Total number of optimization iterations.
-        lr : float, optional
-            Learning rate for both TX and RX optimizers.
+        lr_tx : float, optional
+            Learning rate for the TX (G_T) optimizer.
+        lr_rx : float, optional
+            Learning rate for the RX (G_R) optimizer.
         warmup_frac : float, optional
             Fraction of ``max_iters`` kept at constant LR before cosine decay
             (only used when ``scheduler="cosine"``).
@@ -545,28 +548,27 @@ class DualSIMoptimizerTorch(nn.Module):
         H_torch = H_torch.to(device)
 
         if optimizer == "sgd":
-            opt_T = optim.SGD(self.xi_T.parameters(), lr=lr)
-            opt_R = optim.SGD(self.xi_R.parameters(), lr=lr)
+            opt_T = optim.SGD(self.xi_T.parameters(), lr=lr_tx)
+            opt_R = optim.SGD(self.xi_R.parameters(), lr=lr_rx)
         else:
-            opt_T = optim.Adam(self.xi_T.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
-            opt_R = optim.Adam(self.xi_R.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
+            opt_T = optim.Adam(self.xi_T.parameters(), lr=lr_tx, betas=(0.9, 0.999), eps=1e-8)
+            opt_R = optim.Adam(self.xi_R.parameters(), lr=lr_rx, betas=(0.9, 0.999), eps=1e-8)
 
         if scheduler == "cosine":
             warmup_iters = max(1, int(max_iters * warmup_frac))
             cosine_iters = max(1, max_iters - warmup_iters)
-            lr_min = lr * 1e-3
 
-            def _make_schedulers(opt):
+            def _make_scheduler(opt, base_lr):
                 constant = optim.lr_scheduler.ConstantLR(opt, factor=1.0, total_iters=warmup_iters)
                 cosine = optim.lr_scheduler.CosineAnnealingLR(
-                    opt, T_max=cosine_iters, eta_min=lr_min
+                    opt, T_max=cosine_iters, eta_min=base_lr * 1e-3
                 )
                 return optim.lr_scheduler.SequentialLR(
                     opt, schedulers=[constant, cosine], milestones=[warmup_iters]
                 )
 
-            sched_T = _make_schedulers(opt_T)
-            sched_R = _make_schedulers(opt_R)
+            sched_T = _make_scheduler(opt_T, lr_tx)
+            sched_R = _make_scheduler(opt_R, lr_rx)
 
         def _step_side(opt, params):
             with torch.no_grad():
@@ -633,3 +635,33 @@ class DualSIMoptimizerTorch(nn.Module):
             pass  # accuracy printed by calling experiment_runner
 
         return loss_history
+
+
+if __name__ == "__main__":
+    import torch
+
+    cpu = DualSIMoptimizer(
+        num_layers_TX=2,
+        num_meta_atoms_TX_in_x=2,
+        num_meta_atoms_TX_in_y=2,
+        num_meta_atoms_TX_out_x=2,
+        num_meta_atoms_TX_out_y=2,
+        num_meta_atoms_TX_int_x=2,
+        num_meta_atoms_TX_int_y=2,
+        thickness_TX=0.05,
+        num_layers_RX=2,
+        num_meta_atoms_RX_in_x=2,
+        num_meta_atoms_RX_in_y=2,
+        num_meta_atoms_RX_out_x=2,
+        num_meta_atoms_RX_out_y=2,
+        num_meta_atoms_RX_int_x=2,
+        num_meta_atoms_RX_int_y=2,
+        thickness_RX=0.05,
+        wavelength=0.005,
+        verbose=False,
+    )
+    model = DualSIMoptimizerTorch(cpu)
+    H = torch.eye(4, dtype=torch.complex64)
+    Z, G_R = model.get_effective_cascade(H)
+    G_T = model.get_TX_cascade()
+    print(f"DualSIMoptimizerTorch : Z={Z.shape}, G_T={G_T.shape}, G_R={G_R.shape}, dtype={Z.dtype}")

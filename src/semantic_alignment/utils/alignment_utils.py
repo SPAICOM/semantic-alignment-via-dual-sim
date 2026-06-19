@@ -125,3 +125,15 @@ def ridge_regression(
         A = torch.linalg.solve(X @ X.H + reg, Y @ X.H, left=False)
 
     return A
+
+
+if __name__ == "__main__":
+    import torch
+
+    X = torch.randn(8, 300, dtype=torch.complex64)
+    Y = torch.randn(6, 300, dtype=torch.complex64)
+    A = ridge_regression(X, Y)
+    print(f"ridge_regression : A={A.shape}")
+    output_real = torch.randn(300, 16)
+    F_T, F_R_H = ppfe(X, Y, output_real=output_real, n_clusters=4, n_proto=20, seed=0)
+    print(f"ppfe             : F_T={F_T.shape}, F_R_H={F_R_H.shape}")

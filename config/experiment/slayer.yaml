@@ -6,6 +6,6 @@ s_rx: 5         # RX inter-layer spacing in units of lambda
 channel_dim: 20
 
 sim_type: joint
-result_subdir: dual_slayer
+result_subdir: joint_slayer
 
 _target_: semantic_alignment.experiments.joint.run_joint_sim

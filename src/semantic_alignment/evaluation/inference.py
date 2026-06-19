@@ -8,11 +8,17 @@ where L_in, μ_in come from prewhitening the TX pilots and L_out, μ_out from th
 RX pilots.  The received signal y_received is then fed to a classifier (linear
 probe or neural MLP) to obtain top-1 class predictions.
 
+**Beta placement (TX-side scaling)**
+β is applied at the transmitter: the transmitted signal is ``β · x_white``, so
+the full received signal is ``Z · (β x) + v = β Z x + v``.  Noise enters
+*after* β, so it is **not** scaled by β.  The SNR normalisation accounts for
+the β-scaled signal power automatically (σ is derived from ``β Z x``).
+
 Functions
 ---------
 run_evaluation              — joint Dual-SIM (G_R · H · G_T), optional AWGN.
 run_evaluation_mmse         — digital MMSE/ZF baseline (no SIM).
-run_evaluation_mono — TX-only SIM with MMSE equalizer at RX.
+run_evaluation_mono         — TX-only SIM with MMSE equalizer at RX.
 run_evaluation_disjoint_fixed — disjoint Dual-SIM with frozen TX and RX cascades.
 """
 
@@ -46,9 +52,9 @@ def run_evaluation(
 ) -> float:
     """Evaluate semantic accuracy for the joint Dual-SIM architecture.
 
-    Signal model: ``ŷ = β (G_R H G_T x_white + v)``.  AWGN is added after the
-    full cascade (post RX-SIM output); ``σ²`` is scaled to the cascade output
-    power at the given SNR.
+    Signal model: ``ŷ = β G_R H G_T x_white + v``.  β is applied at the
+    transmitter; AWGN enters additively after the cascade so noise is *not*
+    scaled by β.  ``σ²`` is normalised to the β-scaled cascade output power.
 
     Parameters
     ----------
@@ -97,17 +103,15 @@ def run_evaluation(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # Full cascade G_R H G_T x.  AWGN is added after the RX SIM output,
-        # so the noise model is ỹ = β(G_R H G_T x + v).
-        y_sig = G_R @ (H_mimo @ (G_T @ x_white))
+        # β applied at TX: transmitted signal is β·x, so received cascade output
+        # is β·G_R·H·G_T·x.  AWGN is added after, not scaled by β.
+        y_sig = beta_opt * (G_R @ (H_mimo @ (G_T @ x_white)))
         if snr_db is not None:
             n = y_sig.shape[1]
             sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
-            y_received = y_sig + awgn(sigma, y_sig.shape, device=device)
+            y = y_sig + awgn(sigma, y_sig.shape, device=device)
         else:
-            y_received = y_sig
-
-        y = beta_opt * y_received
+            y = y_sig
 
         z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
@@ -210,10 +214,10 @@ def run_evaluation_mono(
 ) -> float:
     """Evaluate a Mono-SIM (TX only) with MIMO channel and ZF/MMSE equalization.
 
-    Signal model: ``ŷ = β · G_eq(H) · (H · G_T · x_w + noise)`` where ``G_eq`` is
+    Signal model: ``ŷ = β · G_eq(H) · (H · G_T · x_w + v)`` where ``G_eq`` is
     a zero-forcing equalizer when ``snr_db`` is ``None`` (infinite SNR, noiseless)
     and an MMSE equalizer otherwise.  ``G_eq · H ≈ I`` so the channel is undone by
-    the equalizer alone; ``β`` only rescales the recovered alignment.
+    the equalizer alone; ``β`` is applied at the receiver after equalization.
 
     Parameters
     ----------
@@ -302,9 +306,10 @@ def run_evaluation_disjoint_fixed(
 ) -> float:
     """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.
 
-    Signal model: ``ŷ = β (G_R H G_T x_w + v)``.  AWGN is added after the full
-    cascade (post RX-SIM output); ``σ²`` is scaled to the cascade output power
-    at the given SNR.  Both ``G_T`` and ``G_R`` are computed once and held fixed.
+    Signal model: ``ŷ = β G_R H G_T x_w + v``.  β is applied at the
+    transmitter; AWGN enters additively after the cascade and is *not* scaled
+    by β.  ``σ²`` is normalised to the β-scaled cascade output power.
+    Both ``G_T`` and ``G_R`` are computed once and held fixed.
 
     Parameters
     ----------
@@ -356,17 +361,15 @@ def run_evaluation_disjoint_fixed(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # Full cascade G_R H G_T x.  AWGN is added after the RX SIM output,
-        # so the noise model is ỹ = β(G_R H G_T x + v).
-        y_sig = G_R @ (H_mimo @ (G_T @ x_white))
+        # β applied at TX: transmitted signal is β·x, so received cascade output
+        # is β·G_R·H·G_T·x.  AWGN is added after, not scaled by β.
+        y_sig = beta_global * (G_R @ (H_mimo @ (G_T @ x_white)))
         if snr_db is not None:
             n = y_sig.shape[1]
             sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
-            y_received = y_sig + awgn(sigma, y_sig.shape, device=device)
+            y = y_sig + awgn(sigma, y_sig.shape, device=device)
         else:
-            y_received = y_sig
-
-        y = beta_global * y_received
+            y = y_sig
 
         z_hat = (L_out @ y) + mu_out
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
@@ -376,3 +379,13 @@ def run_evaluation_disjoint_fixed(
         all_labels.extend(labels_batch.cpu().numpy())
 
     return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+if __name__ == "__main__":
+    print("inference.py — evaluation functions for each SIM architecture:")
+    print("  run_evaluation               : Joint Dual-SIM  (β G_R H G_T x + v, β at TX)")
+    print("  run_evaluation_mmse          : Digital MMSE baseline (no SIM)")
+    print("  run_evaluation_mono          : Mono-SIM TX-only + MMSE equalizer")
+    print("  run_evaluation_disjoint_fixed: Disjoint Dual-SIM with frozen cascades")
+    print()
+    print("Called automatically by experiment runners. Invoke via: just run-joint / run-mono / ...")

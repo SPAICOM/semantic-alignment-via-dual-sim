@@ -3,7 +3,7 @@ defaults:
   - alignment: ppfe
   - datasets: cifar10
   - data: default
-  - training: default
+  - training: disjoint
   - classifier: default
   - experiment: disjoint_sym_snr
   - _self_

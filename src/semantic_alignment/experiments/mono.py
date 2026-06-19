@@ -1,5 +1,12 @@
 """Mono-SIM (TX-only) runner — covers layers and SNR sweeps in one function."""
 
+import sys as _sys
+from pathlib import Path as _Path
+
+if __name__ == "__main__" and __package__ is None:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
+    __package__ = "semantic_alignment.experiments"
+
 import gc
 import random
 
@@ -44,6 +51,7 @@ def run_mono_sim(
     wavelength: float = 0.005,
     slayer: float = 0.025,
     dx: float = 0.0025,
+    n_clusters: int | None = None,
     **_,
 ) -> None:
     """Run one Mono-SIM (TX-only) job.
@@ -115,7 +123,9 @@ def run_mono_sim(
     tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
-    fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc)
+    fname = make_fname(
+        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
+    )
     out_path = RESULTS_DIR / subdir / fname
 
     if out_path.exists():
@@ -220,8 +230,15 @@ def run_mono_sim(
             "rx_loss": None,
             "rx_loss_history": None,
             "channel_dim": ch_dim,
+            "n_clusters": n_clusters,
         },
     )
     del tx_model
     gc.collect()
     torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    print("run_mono_sim: Mono-SIM (TX-only) runner (layers / SNR sweeps).")
+    print("Invoke via: just run-mono")
+    print("         or: uv run python scripts/classification.py --config-name config_mono_layers")

@@ -1,5 +1,12 @@
 """Joint Dual-SIM runner — covers layers, SNR, and s-layer sweeps in one function."""
 
+import sys as _sys
+from pathlib import Path as _Path
+
+if __name__ == "__main__" and __package__ is None:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
+    __package__ = "semantic_alignment.experiments"
+
 import gc
 import random
 
@@ -99,7 +106,6 @@ def run_joint_sim(
     strategy_name: str = "Linear",
     seed: int = 42,
     max_iters: int = 3000,
-    lr: float = 0.1,
     clf_neural=None,
     no_mismatch_neural: float | None = None,
     original_neural: float | None = None,
@@ -118,6 +124,9 @@ def run_joint_sim(
     snr: float | None = None,
     s_tx: int | None = None,
     s_rx: int | None = None,
+    n_clusters: int | None = None,
+    lr_tx: float = 0.1,
+    lr_rx: float = 0.2,
     **_,
 ) -> None:
     """Run one joint Dual-SIM job.
@@ -163,8 +172,10 @@ def run_joint_sim(
         Global random seed.
     max_iters : int, optional
         Number of alternating optimization iterations.
-    lr : float, optional
-        Learning rate.
+    lr_tx : float, optional
+        TX (G_T) learning rate.
+    lr_rx : float, optional
+        RX (G_R) learning rate.
     clf_neural : optional
         Optional neural classifier (``None`` skips neural accuracy logging).
     no_mismatch_neural, original_neural : float or None, optional
@@ -200,7 +211,9 @@ def run_joint_sim(
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
     is_slayer = s_tx is not None and s_rx is not None
-    fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, s_tx, s_rx)
+    fname = make_fname(
+        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, s_tx, s_rx, n_clusters
+    )
     log_prefix = (
         f"s_tx={s_tx}λ s_rx={s_rx}λ seed={seed}"
         if is_slayer
@@ -240,7 +253,8 @@ def run_joint_sim(
         A_target=A_target,
         H_mimo=H_mimo,
         max_iters=max_iters,
-        lr=lr,
+        lr_tx=lr_tx,
+        lr_rx=lr_rx,
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
@@ -290,7 +304,8 @@ def run_joint_sim(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": pct(sim_neural),
-            "lr": lr,
+            "lr_tx": lr_tx,
+            "lr_rx": lr_rx,
             "beta_T": None,
             "beta_R": None,
             "loss": loss_history[-1] if loss_history else 0.0,
@@ -298,8 +313,15 @@ def run_joint_sim(
             "rx_loss": None,
             "rx_loss_history": None,
             "channel_dim": ch_dim,
+            "n_clusters": n_clusters,
         },
     )
     del model
     gc.collect()
     torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    print("run_joint_sim: joint Dual-SIM runner (layers / SNR / s-layer sweeps).")
+    print("Invoke via: just run-joint")
+    print("         or: uv run python scripts/classification.py --config-name config_joint_layers")

@@ -110,7 +110,6 @@ def run_disjoint_sym(
     strategy_name: str = "PPFE",
     seed: int = 42,
     max_iters: int = 3000,
-    lr: float = 0.1,
     clf_neural=None,
     no_mismatch_neural: float | None = None,
     no_mismatch_probe: float = 0.0,
@@ -128,6 +127,8 @@ def run_disjoint_sym(
     snr: float | None = None,
     F_T=None,
     F_R_H=None,
+    lr_tx: float = 0.1,
+    lr_rx: float = 0.1,
     **_,
 ) -> None:
     """Entry point for the symmetric (full-CSI) disjoint Dual-SIM experiment.
@@ -163,8 +164,10 @@ def run_disjoint_sym(
         Global random seed.
     max_iters : int, optional
         Optimization iterations per SIM.
-    lr : float, optional
-        Learning rate.
+    lr_tx : float, optional
+        TX-SIM learning rate.
+    lr_rx : float, optional
+        RX-SIM learning rate.
     clf_neural : optional
         Optional neural classifier.
     no_mismatch_neural, no_mismatch_probe : float or None, optional
@@ -218,7 +221,6 @@ def run_disjoint_sym(
         strategy_name=strategy_name,
         seed=seed,
         max_iters=max_iters,
-        lr=lr,
         clf_neural=clf_neural,
         no_mismatch_neural=no_mismatch_neural,
         no_mismatch_probe=no_mismatch_probe,
@@ -234,4 +236,14 @@ def run_disjoint_sym(
         slayer=slayer,
         dx=dx,
         snr=snr,
+        lr_tx=lr_tx,
+        lr_rx=lr_rx,
+    )
+
+
+if __name__ == "__main__":
+    print("run_disjoint_sym: symmetric (full-CSI) disjoint Dual-SIM runner.")
+    print("Invoke via: just run-disjoint-sym")
+    print(
+        "         or: uv run python scripts/classification.py --config-name config_disjoint_sym_layers"
     )

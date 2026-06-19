@@ -140,3 +140,15 @@ def clf_accuracy(
         preds = clf_predict(clf, embeddings.to(device))
         return (preds == labels.to(device)).float().mean().item()
     return linear_probe_accuracy(clf, embeddings, labels)
+
+
+if __name__ == "__main__":
+    import torch
+
+    z = torch.randn(200, 16)
+    labels = torch.randint(0, 5, (200,))
+    clf = train_linear_probe(z, labels, num_classes=5)
+    preds = linear_probe_predict(clf, z)
+    acc = linear_probe_accuracy(clf, z, labels)
+    print(f"train_linear_probe : clf={clf.shape}")
+    print(f"linear_probe_accuracy (train): {acc:.3f}")

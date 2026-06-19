@@ -72,11 +72,12 @@ def _out_path(cfg: DictConfig) -> Path | None:
     snr = None if str(snr_raw) == "null" else snr_raw
     s_tx = exp.get("s_tx", None)
     s_rx = exp.get("s_rx", None)
+    n_clusters = cfg.alignment.get("n_clusters", None) if strategy == "PPFE" else None
 
     return (
         _RESULTS
         / result_subdir
-        / make_fname(strategy, seed, exp.L, M, ch_dim, snr, tx, rx, s_tx, s_rx)
+        / make_fname(strategy, seed, exp.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
     )
 
 
@@ -296,15 +297,17 @@ def _setup(cfg: DictConfig) -> dict:
         clf_neural=clf_neural,
         strategy_name=cfg.alignment.type,
         max_iters=cfg.training.max_iters,
-        lr=cfg.training.lr,
+        lr=cfg.training.get("lr", None),
+        lr_tx=cfg.training.get("lr_tx", None),
+        lr_rx=cfg.training.get("lr_rx", None),
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
         optimizer=cfg.training.get("optimizer", "adam"),
-        scheduler=cfg.training.get("scheduler", "none"),
+        scheduler=cfg.training.get("scheduler", None),
         warmup_frac=float(cfg.training.get("warmup_frac", 0.05)),
-        clip_value=cfg.training.clip_value,
+        clip_value=cfg.training.get("clip_value", None),
         tx_steps_per_rx=int(cfg.training.get("tx_steps_per_rx", 1)),
-        rx_steps_per_tx=int(cfg.training.get("rx_steps_per_tx", 2)),
+        rx_steps_per_tx=int(cfg.training.get("rx_steps_per_tx", 1)),
         F_T=F_T,
         F_R_H=F_R_H,
     )
@@ -344,9 +347,11 @@ def main(cfg: DictConfig) -> None:
     ctx = _setup(cfg)
     F_T = ctx.pop("F_T")
     F_R_H = ctx.pop("F_R_H")
-    clip_value = ctx.pop("clip_value")
-    tx_steps_per_rx = ctx.pop("tx_steps_per_rx")
-    rx_steps_per_tx = ctx.pop("rx_steps_per_tx")
+    # joint-specific params — absent in mono/disjoint training configs
+    clip_value = ctx.pop("clip_value", None)
+    tx_steps_per_rx = ctx.pop("tx_steps_per_rx", 1)
+    rx_steps_per_tx = ctx.pop("rx_steps_per_tx", 1)
+    n_clusters = cfg.alignment.get("n_clusters", None) if cfg.alignment.type == "PPFE" else None
 
     instantiate(
         cfg.experiment,
@@ -359,6 +364,7 @@ def main(cfg: DictConfig) -> None:
         rx_steps_per_tx=rx_steps_per_tx,
         F_T=F_T,
         F_R_H=F_R_H,
+        n_clusters=n_clusters,
         **ctx,
     )
 

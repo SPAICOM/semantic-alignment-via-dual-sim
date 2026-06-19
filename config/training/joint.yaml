@@ -1,0 +1,13 @@
+defaults:
+  - base
+
+# Per-SIM learning rates for alternating optimisation
+lr_tx: 0.1   # G_T (TX cascade)
+lr_rx: 0.2   # G_R (RX cascade)
+
+# Gradient clipping (null = disabled)
+clip_value: null
+
+# Alternating update ratios
+tx_steps_per_rx: 1
+rx_steps_per_tx: 1

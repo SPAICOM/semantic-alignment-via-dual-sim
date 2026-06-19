@@ -1,5 +1,12 @@
 """Disjoint 4-SIM runner (full CSI, 2 TX + 2 RX) — covers layers and SNR sweeps."""
 
+import sys as _sys
+from pathlib import Path as _Path
+
+if __name__ == "__main__" and __package__ is None:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[3]))
+    __package__ = "semantic_alignment.experiments"
+
 import gc
 import random
 
@@ -40,7 +47,6 @@ def run_disjoint_4sim(
     strategy_name: str = "PPFE",
     seed: int = 42,
     max_iters: int = 3000,
-    lr: float = 0.1,
     clf_neural=None,
     no_mismatch_neural: float | None = None,
     original_neural: float | None = None,
@@ -56,6 +62,8 @@ def run_disjoint_4sim(
     snr: float | None = None,
     F_T=None,
     F_R_H=None,
+    lr_tx: float = 0.1,
+    lr_rx: float = 0.1,
     **_,
 ) -> None:
     """Run one disjoint 4-SIM (full CSI) job.
@@ -104,8 +112,10 @@ def run_disjoint_4sim(
         Global random seed.
     max_iters : int, optional
         Optimization iterations per SIM.
-    lr : float, optional
-        Learning rate.
+    lr_tx : float, optional
+        TX-SIM learning rate.
+    lr_rx : float, optional
+        RX-SIM learning rate.
     clf_neural : optional
         Optional neural classifier.
     no_mismatch_neural, original_neural : float or None, optional
@@ -207,17 +217,13 @@ def run_disjoint_4sim(
                 A_R = U_A[:, :ch_dim] @ torch.diag(sqrt_sA)
                 T_T1, T_R1 = A_T, A_R
 
-    sim_kw = dict(
-        max_iters=max_iters,
-        lr=lr,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        warmup_frac=warmup_frac,
+    sim_kw_base = dict(
+        optimizer=optimizer, scheduler=scheduler, warmup_frac=warmup_frac, max_iters=max_iters
     )
-    t1_loss, beta_T1 = t1_model.optimize_sim(target_matrix=T_T1, **sim_kw)
-    t2_loss, beta_T2 = t2_model.optimize_sim(target_matrix=B_T, **sim_kw)
-    r2_loss, beta_R2 = r2_model.optimize_sim(target_matrix=B_R, **sim_kw)
-    r1_loss, beta_R1 = r1_model.optimize_sim(target_matrix=T_R1, **sim_kw)
+    t1_loss, beta_T1 = t1_model.optimize_sim(target_matrix=T_T1, lr=lr_tx, **sim_kw_base)
+    t2_loss, beta_T2 = t2_model.optimize_sim(target_matrix=B_T, lr=lr_tx, **sim_kw_base)
+    r2_loss, beta_R2 = r2_model.optimize_sim(target_matrix=B_R, lr=lr_rx, **sim_kw_base)
+    r1_loss, beta_R1 = r1_model.optimize_sim(target_matrix=T_R1, lr=lr_rx, **sim_kw_base)
 
     beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
     beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
@@ -292,7 +298,8 @@ def run_disjoint_4sim(
             "original_neural": original_neural,
             "sim_accuracy_probe": sim_probe * 100,
             "sim_accuracy_neural": pct(sim_neural),
-            "lr": lr,
+            "lr_tx": lr_tx,
+            "lr_rx": lr_rx,
             "beta_T": abs(beta_T1) * abs(beta_T2),
             "beta_R": abs(beta_R2) * abs(beta_R1),
             "loss": t1_loss[-1] if t1_loss else 0.0,
@@ -313,3 +320,11 @@ def run_disjoint_4sim(
     del t1_model, t2_model, r2_model, r1_model
     gc.collect()
     torch.cuda.empty_cache()
+
+
+if __name__ == "__main__":
+    print("run_disjoint_4sim: disjoint 4-SIM (full CSI, 2 TX + 2 RX) runner.")
+    print("Invoke via: just run-disjoint-4sim")
+    print(
+        "         or: uv run python scripts/classification.py --config-name config_disjoint_4sim_layers"
+    )

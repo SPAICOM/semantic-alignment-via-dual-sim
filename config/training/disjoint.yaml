@@ -1,0 +1,6 @@
+defaults:
+  - base
+
+# Per-SIM learning rates (TX and RX trained independently)
+lr_tx: 0.1
+lr_rx: 0.1

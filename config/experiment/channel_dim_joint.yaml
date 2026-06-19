@@ -4,6 +4,6 @@ M_int: 32
 channel_dim: 20   # swept via config_joint_channel_dim sweeper
 
 sim_type: joint
-result_subdir: dual_channel_dim
+result_subdir: joint_channel_dim
 
 _target_: semantic_alignment.experiments.joint.run_joint_sim

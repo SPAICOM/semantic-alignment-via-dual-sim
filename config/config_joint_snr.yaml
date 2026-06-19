@@ -3,7 +3,7 @@ defaults:
   - alignment: ppfe
   - datasets: cifar10
   - data: default
-  - training: default
+  - training: joint
   - classifier: default
   - experiment: snr
   - _self_

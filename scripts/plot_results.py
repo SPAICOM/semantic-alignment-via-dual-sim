@@ -122,13 +122,64 @@ def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Loss-curve grid helpers
+# ---------------------------------------------------------------------------
+
+
+def _setup_loss_grid(strategies, m_ints, L_values):
+    """Create figure/axes/colormap for a loss-curve grid (rows=strategies, cols=M_int)."""
+    cmap = cm.viridis
+    norm = mcolors.Normalize(vmin=min(L_values), vmax=max(L_values))
+    fig, axes = plt.subplots(
+        len(strategies),
+        len(m_ints),
+        figsize=(5 * len(m_ints), 4 * len(strategies)),
+        sharey="row",
+        sharex=True,
+        squeeze=False,
+        layout="constrained",
+    )
+    return fig, axes, cmap, norm
+
+
+def _add_loss_colorbar(fig, axes, cmap, norm, L_values):
+    """Attach a vertical colorbar for SIM layers L; ticks auto-sampled to ≤8."""
+    tick_step = max(1, len(L_values) // 8)
+    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, orientation="vertical", fraction=0.03, pad=0.02)
+    cbar.set_label(r"SIM Layers $L$")
+    cbar.set_ticks(L_values[::tick_step])
+
+
+def _plot_loss_col(ax, sub, L_values, cmap, norm, col, linestyle="-"):
+    """Plot averaged loss curves for one (strategy, M_int) cell."""
+    for L in L_values:
+        rows = sub.filter(pl.col("L") == L)
+        if rows.is_empty():
+            continue
+        valid = [list(h) for h in rows[col] if h is not None]
+        if not valid:
+            continue
+        avg = np.mean(np.array(valid), axis=0)
+        ax.plot(
+            np.arange(len(avg)),
+            avg,
+            color=cmap(norm(L)),
+            linestyle=linestyle,
+            linewidth=0.9,
+            alpha=0.85,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Accuracy vs SIM Layers
 # ---------------------------------------------------------------------------
 
 
 def accuracy_vs_simlayers() -> None:
     """Accuracy vs $L$ — Joint architecture, both alignment strategies."""
-    df = _get("dual_layers")
+    df = _get("joint_layers")
     if df is None:
         print("No layers results found.")
         return
@@ -186,7 +237,7 @@ def accuracy_vs_simlayers() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSIMLayers")
+    _save("AccuracyVsSIMLayers_Joint")
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +247,7 @@ def accuracy_vs_simlayers() -> None:
 
 def accuracy_vs_snr() -> None:
     """Accuracy vs SNR [dB] — Joint architecture."""
-    df = _get("dual_snr")
+    df = _get("joint_snr")
     if df is None:
         print("No SNR results found.")
         return
@@ -253,7 +304,7 @@ def accuracy_vs_snr() -> None:
     plt.xticks(ticks, labels=ticks)
     plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
-    _save("AccuracyVsSNR")
+    _save("AccuracyVsSNR_Joint")
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +381,7 @@ def accuracy_vs_disjoint_asym_layers() -> None:
 
 def accuracy_vs_thickness() -> None:
     """Accuracy vs $s_{\\mathrm{layer}}$ at TX, for three RX spacing values."""
-    df = _get("dual_slayer")
+    df = _get("joint_slayer")
     if df is None:
         print("No slayer results found.")
         return
@@ -844,7 +895,7 @@ def arch_comparison_layers() -> None:
 
     frames = {}
     for key, result_subdir, arch_label in [
-        ("joint", "dual_layers", "Joint"),
+        ("joint", "joint_layers", "Joint"),
         ("disjoint_asym", "disjoint_asym_layers", "Disjoint Asym"),
         ("disjoint_sym", "disjoint_sym_layers", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_layers", "Disjoint 4-SIM"),
@@ -989,7 +1040,7 @@ def arch_comparison_snr() -> None:
 
     frames = {}
     for key, result_subdir, arch_label in [
-        ("joint", "dual_snr", "Joint"),
+        ("joint", "joint_snr", "Joint"),
         ("disjoint_asym", "disjoint_asym_snr", "Disjoint Asym"),
         ("disjoint_sym", "disjoint_sym_snr", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_snr", "Disjoint 4-SIM"),
@@ -1124,76 +1175,163 @@ def arch_comparison_snr() -> None:
 # ---------------------------------------------------------------------------
 
 
-def loss_curves_dual_layers() -> None:
+def loss_curves_joint_layers() -> None:
     """Training loss curves — Joint Dual-SIM.
 
     Grid: rows = alignment strategy (Linear / PPFE),
-          cols = M_int,
-          color = SIM depth L (averaged across seeds).
+          cols = M_int, color = SIM depth L (averaged across seeds).
     """
-    df = _get("dual_layers")
+    df = _get("joint_layers")
     if df is None:
-        print("No layers results found.")
+        print("No joint_layers results found.")
         return
-
     df = df.filter(pl.col("strategy").is_in(STRATEGIES))
     if df.is_empty():
-        print("No dual_layers loss data found.")
         return
 
     m_ints = sorted(df["M_int"].unique().to_list())
     L_values = sorted(df["L"].unique().to_list())
-
-    n_rows = len(STRATEGIES)
-    n_cols = len(m_ints)
-
-    cmap = cm.viridis
-    norm = mcolors.Normalize(vmin=min(L_values), vmax=max(L_values))
-
-    fig, axes = plt.subplots(
-        n_rows,
-        n_cols,
-        figsize=(5 * n_cols, 4 * n_rows),
-        sharey=False,
-        sharex=True,
-        squeeze=False,
-        layout="constrained",
-    )
+    fig, axes, cmap, norm = _setup_loss_grid(STRATEGIES, m_ints, L_values)
 
     for r, strategy in enumerate(STRATEGIES):
         for c, m_int in enumerate(m_ints):
             ax = axes[r][c]
             sub = df.filter((pl.col("strategy") == strategy) & (pl.col("M_int") == m_int))
-
-            for L in L_values:
-                rows = sub.filter(pl.col("L") == L)
-                if rows.is_empty():
-                    continue
-                histories = [list(h) for h in rows["loss_history"]]
-                avg = np.mean(np.array(histories), axis=0)
-                ax.plot(
-                    np.arange(len(avg)),
-                    avg,
-                    color=cmap(norm(L)),
-                    linewidth=0.9,
-                    alpha=0.85,
-                )
-
-            ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            _plot_loss_col(ax, sub, L_values, cmap, norm, "loss_history")
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
             if c == 0:
                 ax.set_ylabel(f"{strategy}\nLoss")
-            if r == n_rows - 1:
+            if r == len(STRATEGIES) - 1:
                 ax.set_xlabel("Iteration")
 
-    cbar_ticks = [L for L in L_values if L in (1, 5, 10, 15, 20, 25)]
-    sm = cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, orientation="vertical", fraction=0.015, pad=0.02)
-    cbar.set_label(r"SIM Layers $L$")
-    cbar.set_ticks(cbar_ticks)
+    _add_loss_colorbar(fig, axes, cmap, norm, L_values)
+    _save("LossCurves_Joint")
 
-    fig.suptitle("Training Loss — Joint Dual-SIM")
-    _save("LossCurves_DualLayers")
+
+def loss_curves_mono_layers() -> None:
+    """Training loss curves — Mono-SIM (TX-only).
+
+    Grid: rows = alignment strategy, cols = M_int,
+          color = L (averaged across seeds).
+    """
+    df = _get("mono")
+    if df is None:
+        print("No mono results found.")
+        return
+    df = df.filter(pl.col("strategy").is_in(STRATEGIES))
+    if df.is_empty():
+        return
+
+    m_ints = sorted(df["M_int"].unique().to_list())
+    L_values = sorted(df["L"].unique().to_list())
+    fig, axes, cmap, norm = _setup_loss_grid(STRATEGIES, m_ints, L_values)
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            sub = df.filter((pl.col("strategy") == strategy) & (pl.col("M_int") == m_int))
+            _plot_loss_col(ax, sub, L_values, cmap, norm, "loss_history")
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\nLoss")
+            if r == len(STRATEGIES) - 1:
+                ax.set_xlabel("Iteration")
+
+    _add_loss_colorbar(fig, axes, cmap, norm, L_values)
+    _save("LossCurves_Mono")
+
+
+def _loss_curves_single_col(result_subdir: str, col: str, fname: str) -> None:
+    """Single-column loss grid: rows=strategies, cols=M_int, color=L."""
+    df = _get(result_subdir)
+    if df is None:
+        print(f"No {result_subdir} results found.")
+        return
+    df = df.filter(pl.col("strategy").is_in(STRATEGIES))
+    if df.is_empty():
+        return
+
+    m_ints = sorted(df["M_int"].unique().to_list())
+    L_values = sorted(df["L"].unique().to_list())
+    fig, axes, cmap, norm = _setup_loss_grid(STRATEGIES, m_ints, L_values)
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            sub = df.filter((pl.col("strategy") == strategy) & (pl.col("M_int") == m_int))
+            _plot_loss_col(ax, sub, L_values, cmap, norm, col)
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\nLoss")
+            if r == len(STRATEGIES) - 1:
+                ax.set_xlabel("Iteration")
+
+    _add_loss_colorbar(fig, axes, cmap, norm, L_values)
+    _save(fname)
+
+
+def loss_curves_disjoint_asym_layers() -> None:
+    """Training loss curves — Disjoint Asym, TX and RX as separate plots."""
+    _loss_curves_single_col("disjoint_asym_layers", "loss_history", "LossCurves_DisjointAsym_TX")
+    _loss_curves_single_col("disjoint_asym_layers", "rx_loss_history", "LossCurves_DisjointAsym_RX")
+
+
+def loss_curves_disjoint_sym_layers() -> None:
+    """Training loss curves — Disjoint Sym, TX and RX as separate plots."""
+    _loss_curves_single_col("disjoint_sym_layers", "loss_history", "LossCurves_DisjointSym_TX")
+    _loss_curves_single_col("disjoint_sym_layers", "rx_loss_history", "LossCurves_DisjointSym_RX")
+
+
+def loss_curves_disjoint_4sim_layers() -> None:
+    """Training loss curves — Disjoint 4-SIM (T1/T2/R2/R1, all separate).
+
+    Grid: rows = strategy, cols = M_int, color = L.
+    Line styles: T1 solid, T2 dotted, R2 dash-dot, R1 dashed.
+    """
+    from matplotlib.lines import Line2D
+
+    df = _get("disjoint_4sim_layers")
+    if df is None:
+        print("No disjoint_4sim_layers results found.")
+        return
+    df = df.filter(pl.col("strategy").is_in(STRATEGIES))
+    if df.is_empty():
+        return
+
+    m_ints = sorted(df["M_int"].unique().to_list())
+    L_values = sorted(df["L"].unique().to_list())
+    fig, axes, cmap, norm = _setup_loss_grid(STRATEGIES, m_ints, L_values)
+
+    curve_specs = [
+        ("loss_history", "-", "T1"),
+        ("t2_loss_history", ":", "T2"),
+        ("r2_loss_history", "-.", "R2"),
+        ("rx_loss_history", "--", "R1"),
+    ]
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            sub = df.filter((pl.col("strategy") == strategy) & (pl.col("M_int") == m_int))
+            for col, ls, _ in curve_specs:
+                if col in sub.columns:
+                    _plot_loss_col(ax, sub, L_values, cmap, norm, col, linestyle=ls)
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\nLoss")
+            if r == len(STRATEGIES) - 1:
+                ax.set_xlabel("Iteration")
+
+    legend_elems = [
+        Line2D([0], [0], color="gray", ls=ls, lw=1.5, label=label) for _, ls, label in curve_specs
+    ]
+    axes[0][0].legend(handles=legend_elems, loc="upper right", framealpha=1)
+    _add_loss_colorbar(fig, axes, cmap, norm, L_values)
+    _save("LossCurves_Disjoint4SIM")
 
 
 # ---------------------------------------------------------------------------
@@ -1207,7 +1345,7 @@ def arch_comparison_channel_dim() -> None:
 
     frames = {}
     for key, subdir, arch_label in [
-        ("joint", "dual_channel_dim", "Joint"),
+        ("joint", "joint_channel_dim", "Joint"),
         ("disjoint_asym", "disjoint_asym_channel_dim", "Disjoint Asym"),
         ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym"),
         ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
@@ -1307,6 +1445,98 @@ def arch_comparison_channel_dim() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Accuracy vs n_proto (PPFE) — Joint / Disjoint Asym / Mono
+# ---------------------------------------------------------------------------
+
+
+def accuracy_vs_n_proto() -> None:
+    """Accuracy vs PPFE n_clusters — Joint, Disjoint Asym, and Mono (PPFE only).
+
+    Fixed: L=10, M_int=32×32, channel_dim=20, no noise.
+    Architecture comparison averaged across seeds.
+    """
+    frames = {}
+    for key, subdir, arch_label in [
+        ("joint", "n_proto_joint", "Joint"),
+        ("disjoint_asym", "n_proto_disjoint_asym", "Disjoint Asym"),
+        ("mono", "n_proto_mono", "Mono"),
+    ]:
+        df = _get(subdir)
+        if df is None:
+            continue
+        df = df.with_columns(pl.lit(arch_label).alias("Architecture"))
+        if not df.is_empty():
+            frames[key] = df
+
+    if not frames:
+        print("No n_proto results found — run 'just n-proto' first.")
+        return
+
+    acc_col = "sim_accuracy_neural"
+    df_all = pl.concat(
+        [
+            f.select(
+                ["n_clusters", "Architecture", acc_col, "no_mismatch_neural", "original_neural"]
+            )
+            for f in frames.values()
+        ],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+
+    if df_all["n_clusters"].drop_nulls().is_empty():
+        print("n_clusters column missing — re-run experiments with the updated code.")
+        return
+
+    arch_labels = sorted(df_all["Architecture"].unique().to_list())
+    ticks = sorted(df_all["n_clusters"].drop_nulls().unique().to_list())
+
+    ax = sns.lineplot(
+        df_all.to_pandas(),
+        x="n_clusters",
+        y="accuracy",
+        hue="Architecture",
+        hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
+        palette=_ARCH_PALETTE,
+        style="Architecture",
+        markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
+        dashes=False,
+        markersize=10,
+    )
+    baseline_labels = _add_baseline_hlines(df_all)
+
+    handles, labels = ax.get_legend_handles_labels()
+
+    def _make_legend(lbl_list, title, **kwargs):
+        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
+        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
+
+    leg1 = _make_legend(
+        arch_labels,
+        "Architecture",
+        ncol=len(arch_labels),
+        loc="lower right",
+        bbox_to_anchor=(1.0, 0.0),
+    )
+    leg2 = _make_legend(
+        baseline_labels,
+        "",
+        ncol=len(baseline_labels),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
+    )
+    ax.add_artist(leg1)
+    ax.add_artist(leg2)
+
+    plt.xscale("log")
+    plt.xticks(ticks, labels=[str(k) for k in ticks])
+    plt.xlim(min(ticks), max(ticks))
+    plt.ylim(None, 1.0)
+    plt.xlabel(r"PPFE $n_{\rm clusters}$")
+    plt.ylabel("Accuracy")
+    _save("AccuracyVsNProto")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1331,10 +1561,15 @@ def main() -> None:
     accuracy_vs_thickness()
     accuracy_vs_mono_layers()
     accuracy_vs_mono_snr()
-    loss_curves_dual_layers()
+    loss_curves_joint_layers()
+    loss_curves_mono_layers()
+    loss_curves_disjoint_asym_layers()
+    loss_curves_disjoint_sym_layers()
+    loss_curves_disjoint_4sim_layers()
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
+    accuracy_vs_n_proto()
 
     print(f"\n All plots saved to {IMG_PATH}")
 

@@ -97,6 +97,20 @@ run-mono-snr *ARGS: train-clf
 # Run every Mono-SIM sweep: layers + SNR
 mono: run-mono run-mono-snr
 
+# ── n_proto sweep (PPFE only, L=10, M_int=32, channel_dim=20) ────────────────
+
+run-n-proto-joint *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_joint {{ARGS}}
+
+run-n-proto-mono *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_mono {{ARGS}}
+
+run-n-proto-disjoint-asym *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym {{ARGS}}
+
+# Run all three n_proto sweeps
+n-proto: run-n-proto-joint run-n-proto-mono run-n-proto-disjoint-asym
+
 # ── Neural classifier ─────────────────────────────────────────────────────────
 # Train one MLP per (dataset, rx_enc, seed) and save to models/classifiers/.
 # Sweep seeds and rx_enc models are defined in config/config_train_clf.yaml.
