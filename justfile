@@ -17,7 +17,7 @@ all: format check
 # Full sweeps use dedicated primary configs (config/config_*.yaml) with
 # hydra.mode=MULTIRUN so no -m flag is needed.
 #
-# Topology overrides (pass as extra ARGS or use dedicated recipes below):
+# Tipology overrides (pass as extra ARGS or use dedicated recipes below):
 #   sim.constructive=true           — H in loss instead of target
 #   sim.alignment_side=rx           — alignment on RX-SIM (asym only)
 #
@@ -38,10 +38,10 @@ run-joint-slayer *ARGS: train-clf
 run-joint-channel-dim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_channel_dim {{ARGS}}
 
-joint: run-joint run-joint-snr run-joint-slayer run-joint-channel-dim
+joint: run-joint run-joint-snr run-joint-channel-dim
 
 # ── Disjoint asym ─────────────────────────────────────────────────────────────
-# Topology: alignment_side ∈ {tx, rx} × constructive ∈ {false, true}
+# Tipology: alignment_side ∈ {tx, rx} × constructive ∈ {false, true}
 # Results go to results/disjoint_asym_*/tx|tx_c|rx|rx_c/
 
 run-disjoint-asym *ARGS: train-clf
@@ -93,7 +93,7 @@ disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c run-disjoi
 disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx disjoint-asym-rx-c
 
 # ── Disjoint sym ──────────────────────────────────────────────────────────────
-# Topology: constructive ∈ {false, true}
+# Tipology: constructive ∈ {false, true}
 # Results go to results/disjoint_sym_*/standard|constructive/
 
 run-disjoint-sym *ARGS: train-clf
@@ -120,7 +120,7 @@ disjoint-sym-c: run-disjoint-sym-c run-disjoint-sym-snr-c run-disjoint-sym-chann
 disjoint-sym-all: disjoint-sym disjoint-sym-c
 
 # ── Disjoint 4-SIM ────────────────────────────────────────────────────────────
-# Topology: constructive ∈ {false, true}
+# Tipology: constructive ∈ {false, true}
 # Results go to results/disjoint_4sim_*/standard|constructive/
 
 run-disjoint-4sim *ARGS: train-clf
