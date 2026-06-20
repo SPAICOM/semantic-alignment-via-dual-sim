@@ -120,7 +120,16 @@ def run_disjoint_asym(
     """
     from semantic_alignment.experiments.disjoint_2sim import run_disjoint_2sim
 
-    ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
+    match alignment_side:
+        case "rx":
+            ch_dim = int(A_target.shape[1])  # tx latent dim — G_R must approximate A
+
+        case "tx":
+            ch_dim = int(A_target.shape[0])  # rx latent dim — G_T must approximate A
+
+        case _:
+            raise ValueError(f"Unknown alignment_side '{alignment_side}'. Expected 'tx' or 'rx'.")
+
     target_tx, tx_left, tx_right, target_rx, rx_left, rx_right = compute_asym_targets(
         A_target,
         H_mimo,

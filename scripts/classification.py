@@ -68,6 +68,9 @@ def _out_path(cfg: DictConfig) -> Path | None:
     rx = cfg.data.rx_enc
     M = sim.M_int
     ch_dim = sim.get("channel_dim", None)
+    if ch_dim is None:
+        # ch_dim is computed from A_target at runtime — can't determine path statically
+        return None
     snr_raw = sim.get("snr", None)
     snr = None if str(snr_raw) == "null" else snr_raw
     s_tx = sim.get("s_tx", None)
@@ -277,8 +280,12 @@ def _setup(cfg: DictConfig) -> dict:
         if clf_neural is not None
         else None
     )
-    ch_dim_cfg = cfg.sim.get("channel_dim", None)
-    h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
+    if cfg.sim.get("sim_type", "") == "disjoint_asym":
+        alignment_side = cfg.sim.get("alignment_side", "tx")
+        h_dim = int(A_target.shape[0]) if alignment_side == "tx" else int(A_target.shape[1])
+    else:
+        ch_dim_cfg = cfg.sim.get("channel_dim", None)
+        h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
     H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
 
     return dict(
