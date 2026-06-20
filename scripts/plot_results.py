@@ -60,42 +60,32 @@ _ARCH_COMPARE_VARIANTS = [
     ("joint", None, "Joint", True, "joint_layers", "joint_snr", "joint_channel_dim", False),
     (
         "disjoint_asym",
-        "tx",
+        "equalized/tx",
         "Disjoint Asym TX",
         False,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
-        "disjoint_asym_channel_dim",
+        None,
         False,
     ),
     (
         "disjoint_asym",
-        "tx_c",
+        "constructive/tx",
         "Disjoint Asym TX",
         True,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
-        "disjoint_asym_channel_dim",
+        None,
         False,
     ),
     (
         "disjoint_asym",
-        "rx",
-        "Disjoint Asym RX",
-        False,
-        "disjoint_asym_layers",
-        "disjoint_asym_snr",
-        "disjoint_asym_channel_dim",
-        False,
-    ),
-    (
-        "disjoint_asym",
-        "rx_c",
+        "constructive/rx",
         "Disjoint Asym RX",
         True,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
-        "disjoint_asym_channel_dim",
+        None,
         False,
     ),
     (
@@ -146,8 +136,8 @@ _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
 # Variants for the asym-vs-sym comparison plots.
 # Each entry: (arch_key, tipology, display_label, marker, color, linestyle)
 _DISJOINT_COMPARE = [
-    ("disjoint_asym", "tx", "Disjoint Asym", "P", "#1f77b4", "-"),
-    ("disjoint_asym", "tx_c", "Disjoint Asym", "P", "#1f77b4", "--"),
+    ("disjoint_asym", "equalized/tx", "Disjoint Asym", "P", "#1f77b4", "-"),
+    ("disjoint_asym", "constructive/tx", "Disjoint Asym", "P", "#1f77b4", "--"),
     ("disjoint_sym", "equalized", "Disjoint Sym", "X", "#ff7f0e", "-"),
     ("disjoint_sym", "constructive", "Disjoint Sym", "X", "#ff7f0e", "--"),
 ]
@@ -447,7 +437,7 @@ def accuracy_vs_snr() -> None:
 
 def accuracy_vs_disjoint_asym_layers() -> None:
     """Accuracy vs $L$ — Disjoint Asym architecture, standard tipology (tx)."""
-    df = _get_tipology("disjoint_asym_layers", "tx")
+    df = _get_tipology("disjoint_asym_layers", "equalized/tx")
     if df is None:
         print("No disjoint asym layers results found.")
         return
@@ -709,7 +699,7 @@ def accuracy_vs_mono_snr() -> None:
 
 def accuracy_vs_disjoint_asym_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint Asym architecture, standard tipology (tx)."""
-    df = _get_tipology("disjoint_asym_snr", "tx")
+    df = _get_tipology("disjoint_asym_snr", "equalized/tx")
     if df is None:
         print("No disjoint asym SNR results found.")
         return
@@ -1425,8 +1415,8 @@ def arch_comparison_channel_dim() -> None:
 # (subdir, tipology_filter, family, is_constructive, x_col)
 _N_PROTO_VARIANTS = [
     ("n_proto_joint", None, "Joint", True, "n_clusters"),
-    ("n_proto_disjoint_asym", "tx", "Disjoint Asym TX", False, "n_clusters"),
-    ("n_proto_disjoint_asym", "tx_c", "Disjoint Asym TX", True, "n_clusters"),
+    ("n_proto_disjoint_asym", "equalized/tx", "Disjoint Asym TX", False, "n_clusters"),
+    ("n_proto_disjoint_asym", "constructive/tx", "Disjoint Asym TX", True, "n_clusters"),
     ("n_proto_mono", "equalized", "Mono", False, "n_clusters"),
     ("n_proto_mono", "constructive", "Mono", True, "n_clusters"),
     ("n_proto_disjoint_sym", "equalized", "Disjoint Sym", False, "channel_dim"),

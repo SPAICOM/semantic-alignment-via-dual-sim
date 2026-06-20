@@ -88,15 +88,15 @@ def tipology_tag(
 ) -> str:
     """Return the tipology subfolder name for an experiment variant.
 
-    - ``disjoint_asym``: ``"tx"``, ``"tx_c"``, ``"rx"``, ``"rx_c"``
-      (alignment side + ``_c`` suffix when constructive).
+    - ``disjoint_asym``: ``"{equalized|constructive}/{tx|rx}"``
     - ``disjoint_sym`` / ``disjoint_4sim`` / ``mono``:
       ``"equalized"`` or ``"constructive"``.
     - ``joint``: ``""`` — no tipology subfolder.
     """
     if sim_type == "disjoint_asym":
         side = alignment_side or "tx"
-        return f"{side}_c" if constructive else side
+        prefix = "constructive" if constructive else "equalized"
+        return f"{prefix}/{side}"
     if sim_type in ("disjoint_sym", "disjoint_4sim", "mono"):
         return "constructive" if constructive else "equalized"
     return ""

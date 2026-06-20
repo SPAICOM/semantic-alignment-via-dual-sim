@@ -37,19 +37,17 @@ def compute_asym_targets(
     - ``False`` — H inverted analytically and baked into the target (H†)
     - ``True``  — H placed as left/right matrix in the loss (gradient flows through H)
 
-    The resulting 2×2 combinations:
+    Supported combinations (rx equalized is not implemented):
 
-    +----------------+------------------+-------------------------------------------+
-    | alignment_side | constructive     | TX (T,L,R) / RX (T,L,R)                  |
-    +================+==================+===========================================+
-    | tx             | False (standard) | (A,I,I) / (H†,I,I)                       |
-    +----------------+------------------+-------------------------------------------+
-    | tx             | True             | (A,I,I) / (I,I,H)  ← ‖β G_R H − I‖²     |
-    +----------------+------------------+-------------------------------------------+
-    | rx             | False            | (H†,I,I) / (A,I,I)                       |
-    +----------------+------------------+-------------------------------------------+
-    | rx             | True             | (I,H,I) / (A,I,I)  ← ‖β H G_T − I‖²     |
-    +----------------+------------------+-------------------------------------------+
+    +----------------+------------------+----------------------------------------------+
+    | alignment_side | constructive     | TX loss / RX loss                            |
+    +================+==================+==============================================+
+    | tx             | False (standard) | ‖β G_T − A‖²      / ‖β G_R − H†‖²          |
+    +----------------+------------------+----------------------------------------------+
+    | tx             | True             | ‖β G_T − A‖²      / ‖β G_R H − I‖²         |
+    +----------------+------------------+----------------------------------------------+
+    | rx             | True             | ‖β H G_T − I‖²    / ‖β G_R − A‖²           |
+    +----------------+------------------+----------------------------------------------+
     """
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
@@ -58,19 +56,14 @@ def compute_asym_targets(
         I_ch = torch.eye(ch_dim, dtype=torch.complex64, device=device)
 
         if not constructive:
+            if alignment_side == "rx":
+                raise NotImplementedError(
+                    "Disjoint Asym RX equalized (non-constructive) is not supported. "
+                    "Use alignment_side='rx' with constructive=True instead."
+                )
+            # TX: ‖β G_T − A‖²,  RX: ‖β G_R − H†‖²
             Q = get_rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
-            if alignment_side == "tx":
-                if ch_dim < A_target.shape[0]:
-                    U_s, s_s, Vh_s = torch.linalg.svd(A_torch, full_matrices=False)
-                    k = min(ch_dim, s_s.shape[0])
-                    sqrt_s = torch.sqrt(s_s[:k]).to(torch.complex64)
-                    t_tx = torch.diag(sqrt_s) @ Vh_s[:k, :]
-                    t_rx = U_s[:, :k] @ torch.diag(sqrt_s) @ Q
-                else:
-                    t_tx, t_rx = A_torch, Q
-            else:  # alignment_side == "rx"
-                t_tx, t_rx = Q, A_torch
-            return t_tx, None, None, t_rx, None, None
+            return A_torch, None, None, Q, None, None
 
         # constructive=True: H lives in the loss, target is I on the equalization side
         if alignment_side == "tx":

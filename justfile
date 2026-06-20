@@ -50,28 +50,12 @@ run-disjoint-asym *ARGS: train-clf
 run-disjoint-asym-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr {{ARGS}}
 
-run-disjoint-asym-channel-dim *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim {{ARGS}}
-
 # constructive=true, alignment_side=tx  →  tipology: tx_c
 run-disjoint-asym-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_layers sim.constructive=true {{ARGS}}
 
 run-disjoint-asym-snr-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.constructive=true {{ARGS}}
-
-run-disjoint-asym-channel-dim-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.constructive=true {{ARGS}}
-
-# constructive=false, alignment_side=rx  →  tipology: rx
-run-disjoint-asym-rx *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_layers sim.alignment_side=rx {{ARGS}}
-
-run-disjoint-asym-snr-rx *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.alignment_side=rx {{ARGS}}
-
-run-disjoint-asym-channel-dim-rx *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.alignment_side=rx {{ARGS}}
 
 # constructive=true, alignment_side=rx  →  tipology: rx_c
 run-disjoint-asym-rx-c *ARGS: train-clf
@@ -80,16 +64,11 @@ run-disjoint-asym-rx-c *ARGS: train-clf
 run-disjoint-asym-snr-rx-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.constructive=true sim.alignment_side=rx {{ARGS}}
 
-run-disjoint-asym-channel-dim-rx-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.constructive=true sim.alignment_side=rx {{ARGS}}
-
 # Aggregates
-disjoint-asym: run-disjoint-asym run-disjoint-asym-snr run-disjoint-asym-channel-dim
-disjoint-asym-c: run-disjoint-asym-c run-disjoint-asym-snr-c run-disjoint-asym-channel-dim-c
-disjoint-asym-rx: run-disjoint-asym-rx run-disjoint-asym-snr-rx run-disjoint-asym-channel-dim-rx
-disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c run-disjoint-asym-channel-dim-rx-c
+disjoint-asym: run-disjoint-asym run-disjoint-asym-snr
+disjoint-asym-c: run-disjoint-asym-c run-disjoint-asym-snr-c
+disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c
 
-# All 4 asym topologies
 disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 
 # ── Disjoint sym ──────────────────────────────────────────────────────────────
