@@ -143,6 +143,7 @@ def run_disjoint_sym(
         rx_left=rx_left,
         rx_right=rx_right,
         tipology_subdir=tipology_tag("disjoint_sym", constructive),
+        constructive=constructive,
         L=L,
         M_int=M_int,
         A_target=A_target,

@@ -41,6 +41,108 @@ _ARCH_MARKERS = {
     "Mono": "v",
 }
 
+# ── Arch comparison (all tipologies) ─────────────────────────────────────────
+# Families: color encodes arch, linestyle encodes constructive (solid) vs standard (dashed).
+# Joint is constructive by design. Asym TX and Asym RX are separate families.
+_ARCH_FAMILIES = ["Joint", "Asym TX", "Asym RX", "Sym", "4-SIM", "Mono"]
+_ARCH_FAMILY_COLORS = dict(zip(_ARCH_FAMILIES, sns.color_palette("tab10", len(_ARCH_FAMILIES))))
+_ARCH_FAMILY_MARKERS = {
+    "Joint": "o",
+    "Asym TX": "P",
+    "Asym RX": "s",
+    "Sym": "X",
+    "4-SIM": "^",
+    "Mono": "v",
+}
+
+# Each entry: (arch_key, tipology, family, constructive, subdir_layers, subdir_snr, subdir_ch, double_L)
+_ARCH_COMPARE_VARIANTS = [
+    ("joint", None, "Joint", True, "joint_layers", "joint_snr", "joint_channel_dim", False),
+    (
+        "disjoint_asym",
+        "tx",
+        "Asym TX",
+        False,
+        "disjoint_asym_layers",
+        "disjoint_asym_snr",
+        "disjoint_asym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_asym",
+        "tx_c",
+        "Asym TX",
+        True,
+        "disjoint_asym_layers",
+        "disjoint_asym_snr",
+        "disjoint_asym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_asym",
+        "rx",
+        "Asym RX",
+        False,
+        "disjoint_asym_layers",
+        "disjoint_asym_snr",
+        "disjoint_asym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_asym",
+        "rx_c",
+        "Asym RX",
+        True,
+        "disjoint_asym_layers",
+        "disjoint_asym_snr",
+        "disjoint_asym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_sym",
+        "standard",
+        "Sym",
+        False,
+        "disjoint_sym_layers",
+        "disjoint_sym_snr",
+        "disjoint_sym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_sym",
+        "constructive",
+        "Sym",
+        True,
+        "disjoint_sym_layers",
+        "disjoint_sym_snr",
+        "disjoint_sym_channel_dim",
+        False,
+    ),
+    (
+        "disjoint_4sim",
+        "standard",
+        "4-SIM",
+        False,
+        "disjoint_4sim_layers",
+        "disjoint_4sim_snr",
+        "disjoint_4sim_channel_dim",
+        True,
+    ),
+    (
+        "disjoint_4sim",
+        "constructive",
+        "4-SIM",
+        True,
+        "disjoint_4sim_layers",
+        "disjoint_4sim_snr",
+        "disjoint_4sim_channel_dim",
+        True,
+    ),
+    ("mono", "standard", "Mono", False, "mono", "mono_snr", None, False),
+    ("mono", "constructive", "Mono", True, "mono", "mono_snr", None, False),
+]
+_SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
+
 # Variants for the asym-vs-sym comparison plots.
 # Each entry: (arch_key, tipology, display_label, marker, color, linestyle)
 _DISJOINT_COMPARE = [
@@ -913,60 +1015,61 @@ def accuracy_vs_disjoint_4sim_snr() -> None:
 # ---------------------------------------------------------------------------
 
 
-def arch_comparison_layers() -> None:
-    """Accuracy vs $L$ — all architectures, M_int=32×32. Grid: cols = strategy.
+def _arch_comparison_generic(
+    sweep: str,
+    x_col: str,
+    x_label: str,
+    fname: str,
+    M_FILTER: str = "32x32",
+    x_log: bool = False,
+) -> None:
+    """Generic arch comparison: color=family, solid=constructive, dashed=standard.
 
-    4-SIM L values are multiplied by 2 to match hardware-equivalent depth
-    (each 4-SIM run uses L layers per SIM = 2L total layers per side).
+    ``sweep`` ∈ ``{"layers", "snr", "channel_dim"}``.
     """
-    M_FILTER = "32x32"
-
-    frames = {}
-    for key, result_subdir, arch_label, topo in [
-        ("joint", "joint_layers", "Joint", None),
-        ("disjoint_asym", "disjoint_asym_layers", "Disjoint Asym", "tx"),
-        ("disjoint_sym", "disjoint_sym_layers", "Disjoint Sym", "standard"),
-        ("disjoint_4sim", "disjoint_4sim_layers", "Disjoint 4-SIM", "standard"),
-        ("mono", "mono", "Mono", "standard"),
-    ]:
-        df = _get_tipology(result_subdir, topo) if topo else _get(result_subdir)
-        if df is None:
-            continue
-        df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
-            pl.lit(arch_label).alias("Architecture")
-        )
-        if key == "disjoint_4sim":
-            df = df.with_columns((pl.col("L") * 2).alias("L"))
-        if not df.is_empty():
-            frames[key] = df
-
-    if not frames:
-        print("No layers data found for architecture comparison.")
-        return
+    from matplotlib.lines import Line2D
 
     acc_col = "sim_accuracy_neural"
+    sweep_idx = {"layers": 4, "snr": 5, "channel_dim": 6}[sweep]
+
+    frames = []
+    for arch_key, tipology, family, is_constructive, *subdirs, double_L in _ARCH_COMPARE_VARIANTS:
+        subdir = subdirs[sweep_idx - 4]
+        if subdir is None:
+            continue
+        df = _get_tipology(subdir, tipology) if tipology is not None else _get(subdir)
+        if df is None:
+            continue
+        df = df.filter(pl.col("M_int") == M_FILTER)
+        if double_L and "L" in df.columns:
+            df = df.with_columns((pl.col("L") * 2).alias("L"))
+        if df.is_empty():
+            continue
+        df = df.with_columns(
+            pl.lit(family).alias("_family"),
+            pl.lit(is_constructive).alias("_constructive"),
+        )
+        frames.append(df)
+
+    if not frames:
+        print(f"No data for arch comparison sweep='{sweep}'.")
+        return
+
+    needed = [
+        x_col,
+        "strategy",
+        "_family",
+        "_constructive",
+        acc_col,
+        "no_mismatch_neural",
+        "original_neural",
+    ]
     df_all = pl.concat(
-        [
-            f.select(
-                [
-                    "L",
-                    "strategy",
-                    "Architecture",
-                    acc_col,
-                    "no_mismatch_probe",
-                    "no_mismatch_neural",
-                    "original_probe",
-                    "original_neural",
-                ]
-            )
-            for f in frames.values()
-        ],
+        [f.select([c for c in needed if c in f.columns]) for f in frames],
         how="diagonal_relaxed",
     ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
 
-    ticks = df_all["L"].unique().sort().to_list()
     strat_list = sorted(df_all["strategy"].unique().to_list())
-    arch_labels = sorted(df_all["Architecture"].unique().to_list())
 
     fig, axes = plt.subplots(
         1,
@@ -978,83 +1081,108 @@ def arch_comparison_layers() -> None:
         layout="constrained",
     )
 
-    arch_handles, arch_handle_labels = [], []
+    family_handles: dict[str, object] = {}
     baseline_handles_dict: dict[str, object] = {}
 
     for c, strategy in enumerate(strat_list):
         ax = axes[0][c]
         df_s = df_all.filter(pl.col("strategy") == strategy)
 
-        sns.lineplot(
-            df_s.to_pandas(),
-            x="L",
-            y="accuracy",
-            hue="Architecture",
-            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
-            palette=_ARCH_PALETTE,
-            style="Architecture",
-            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
-            dashes=False,
-            markersize=12,
-            ax=ax,
-        )
+        for (
+            arch_key,
+            tipology,
+            family,
+            is_constructive,
+            *subdirs,
+            double_L,
+        ) in _ARCH_COMPARE_VARIANTS:
+            color = _ARCH_FAMILY_COLORS.get(family, "gray")
+            marker = _ARCH_FAMILY_MARKERS.get(family, "o")
+            ls = "-" if is_constructive else "--"
 
-        # Capture arch handles from the first subplot only
-        if c == 0:
-            arch_handle_labels, arch_handles = (
-                zip(
-                    *[
-                        (label, h)
-                        for h, label in zip(*ax.get_legend_handles_labels())
-                        if label in arch_labels
-                    ]
-                )
-                if arch_labels
-                else ([], [])
+            subdf = df_s.filter(
+                (pl.col("_family") == family) & (pl.col("_constructive") == is_constructive)
             )
+            if subdf.is_empty():
+                continue
+
+            xs = sorted(subdf[x_col].drop_nulls().unique().to_list())
+            ys = [subdf.filter(pl.col(x_col) == x)["accuracy"].mean() for x in xs]
+            (line,) = ax.plot(
+                xs,
+                ys,
+                color=color,
+                linestyle=ls,
+                marker=marker,
+                markersize=10,
+                linewidth=1.5,
+                alpha=0.9,
+            )
+            if family not in family_handles:
+                family_handles[family] = line
 
         plt.sca(ax)
         bl_added = _add_baseline_hlines(df_s)
-
-        # Collect baseline handles (each subplot contributes its own Oracle)
         h_all, l_all = ax.get_legend_handles_labels()
         for hi, li in zip(h_all, l_all):
             if li in bl_added and li not in baseline_handles_dict:
                 baseline_handles_dict[li] = hi
 
-        if ax.get_legend():
-            ax.get_legend().remove()
-
         ax.set_title(strategy)
-        ax.set_xlabel(r"SIM Layers $L$")
+        ax.set_xlabel(x_label)
         ax.set_ylabel("Accuracy" if c == 0 else "")
+        if x_log:
+            ax.set_xscale("log")
+        ticks = sorted(df_s[x_col].drop_nulls().unique().to_list())
         ax.set_xticks(ticks)
-        ax.set_xticklabels(ticks)
+        ax.set_xticklabels([str(t) for t in ticks])
         ax.set_xlim(min(ticks), max(ticks))
         ax.set_ylim(None, 1.0)
 
+    # Baseline legend (top)
     bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
     bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+    if bl_labels:
+        fig.legend(
+            [baseline_handles_dict[lbl] for lbl in bl_labels],
+            bl_labels,
+            ncol=len(bl_labels),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+            frameon=True,
+            framealpha=1,
+        )
+
+    # Family legend (bottom)
+    ordered_families = [f for f in _ARCH_FAMILIES if f in family_handles]
     fig.legend(
-        [baseline_handles_dict[lbl] for lbl in bl_labels],
-        bl_labels,
-        ncol=len(bl_labels),
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.12),
-        frameon=True,
-        framealpha=1,
-    )
-    fig.legend(
-        list(arch_handles),
-        list(arch_handle_labels),
-        ncol=len(arch_labels),
+        [family_handles[f] for f in ordered_families],
+        ordered_families,
+        ncol=len(ordered_families),
         loc="lower center",
         bbox_to_anchor=(0.5, -0.12),
         frameon=True,
         framealpha=1,
     )
 
-    _save("ArchComparison_Layers_M32")
+    # Linestyle legend (constructive vs non constructive)
+    ls_handles = [
+        Line2D([0], [0], color="gray", ls="-", lw=1.5, label="Constructive"),
+        Line2D([0], [0], color="gray", ls="--", lw=1.5, label="Non Constructive"),
+    ]
+    axes[0][-1].legend(handles=ls_handles, loc="lower right", framealpha=1)
+
+    _save(fname)
+
+
+def arch_comparison_layers() -> None:
+    """Accuracy vs $L$ — all architectures and tipologies, M_int=32×32."""
+    _arch_comparison_generic(
+        sweep="layers",
+        x_col="L",
+        x_label=r"SIM Layers $L$",
+        fname="ArchComparison_Layers_M32",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1063,139 +1191,13 @@ def arch_comparison_layers() -> None:
 
 
 def arch_comparison_snr() -> None:
-    """Accuracy vs SNR — all architectures, M_int=32×32. Grid: cols = strategy."""
-    M_FILTER = "32x32"
-
-    frames = {}
-    for key, result_subdir, arch_label, topo in [
-        ("joint", "joint_snr", "Joint", None),
-        ("disjoint_asym", "disjoint_asym_snr", "Disjoint Asym", "tx"),
-        ("disjoint_sym", "disjoint_sym_snr", "Disjoint Sym", "standard"),
-        ("disjoint_4sim", "disjoint_4sim_snr", "Disjoint 4-SIM", "standard"),
-        ("mono", "mono_snr", "Mono", "standard"),
-    ]:
-        df = _get_tipology(result_subdir, topo) if topo else _get(result_subdir)
-        if df is None:
-            continue
-        df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
-            pl.lit(arch_label).alias("Architecture")
-        )
-        if not df.is_empty():
-            frames[key] = df
-
-    if not frames:
-        print("No SNR data found for architecture comparison.")
-        return
-
-    acc_col = "sim_accuracy_neural"
-    df_all = pl.concat(
-        [
-            f.select(
-                [
-                    "snr",
-                    "strategy",
-                    "Architecture",
-                    acc_col,
-                    "no_mismatch_probe",
-                    "no_mismatch_neural",
-                    "original_probe",
-                    "original_neural",
-                ]
-            )
-            for f in frames.values()
-        ],
-        how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
-
-    ticks = df_all["snr"].unique().sort().to_list()
-    strat_list = sorted(df_all["strategy"].unique().to_list())
-    arch_labels = sorted(df_all["Architecture"].unique().to_list())
-
-    fig, axes = plt.subplots(
-        1,
-        len(strat_list),
-        sharey=True,
-        sharex=True,
-        squeeze=False,
-        figsize=(8 * len(strat_list), 6),
-        layout="constrained",
+    """Accuracy vs SNR — all architectures and tipologies, M_int=32×32."""
+    _arch_comparison_generic(
+        sweep="snr",
+        x_col="snr",
+        x_label=r"Signal-to-Noise Ratio [dB]",
+        fname="ArchComparison_SNR_M32",
     )
-
-    arch_handles, arch_handle_labels = [], []
-    baseline_handles_dict: dict[str, object] = {}
-
-    for c, strategy in enumerate(strat_list):
-        ax = axes[0][c]
-        df_s = df_all.filter(pl.col("strategy") == strategy)
-
-        sns.lineplot(
-            df_s.to_pandas(),
-            x="snr",
-            y="accuracy",
-            hue="Architecture",
-            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
-            palette=_ARCH_PALETTE,
-            style="Architecture",
-            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
-            dashes=False,
-            markersize=12,
-            ax=ax,
-        )
-
-        if c == 0:
-            arch_handle_labels, arch_handles = (
-                zip(
-                    *[
-                        (lbl, h)
-                        for h, lbl in zip(*ax.get_legend_handles_labels())
-                        if lbl in arch_labels
-                    ]
-                )
-                if arch_labels
-                else ([], [])
-            )
-
-        plt.sca(ax)
-        bl_added = _add_baseline_hlines(df_s)
-
-        h_all, l_all = ax.get_legend_handles_labels()
-        for hi, li in zip(h_all, l_all):
-            if li in bl_added and li not in baseline_handles_dict:
-                baseline_handles_dict[li] = hi
-
-        if ax.get_legend():
-            ax.get_legend().remove()
-
-        ax.set_title(strategy)
-        ax.set_xlabel(r"Signal-to-Noise Ratio [dB]")
-        ax.set_ylabel("Accuracy" if c == 0 else "")
-        ax.set_xticks(ticks)
-        ax.set_xticklabels(ticks)
-        ax.set_xlim(min(ticks), max(ticks))
-        ax.set_ylim(None, 1.0)
-
-    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
-    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
-    fig.legend(
-        [baseline_handles_dict[lbl] for lbl in bl_labels],
-        bl_labels,
-        ncol=len(bl_labels),
-        loc="upper center",
-        bbox_to_anchor=(0.5, 1.12),
-        frameon=True,
-        framealpha=1,
-    )
-    fig.legend(
-        list(arch_handles),
-        list(arch_handle_labels),
-        ncol=len(arch_labels),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.12),
-        frameon=True,
-        framealpha=1,
-    )
-
-    _save("ArchComparison_SNR_M32")
 
 
 # ---------------------------------------------------------------------------
@@ -1368,108 +1370,14 @@ def loss_curves_disjoint_4sim_layers() -> None:
 
 
 def arch_comparison_channel_dim() -> None:
-    """Accuracy vs channel dimension $H$ — all architectures, L=10, M_int=32×32. Grid: cols = strategy."""
-    M_FILTER = "32x32"
-
-    frames = {}
-    for key, subdir, arch_label, topo in [
-        ("joint", "joint_channel_dim", "Joint", None),
-        ("disjoint_asym", "disjoint_asym_channel_dim", "Disjoint Asym", "tx"),
-        ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym", "standard"),
-        ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM", "standard"),
-    ]:
-        df = _get_tipology(subdir, topo) if topo else _get(subdir)
-        if df is None:
-            continue
-        df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
-            pl.lit(arch_label).alias("Architecture")
-        )
-        if not df.is_empty():
-            frames[key] = df
-
-    if not frames:
-        print("No channel_dim data found — run 'just channel-dim' first.")
-        return
-
-    acc_col = "sim_accuracy_neural"
-    if next(iter(frames.values()))[acc_col].drop_nulls().is_empty():
-        acc_col = "sim_accuracy_probe"
-
-    df_all = pl.concat(
-        [f.select(["channel_dim", "strategy", "Architecture", acc_col]) for f in frames.values()],
-        how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
-
-    channel_dims = sorted(df_all["channel_dim"].drop_nulls().unique().to_list())
-    strat_list = sorted(df_all["strategy"].unique().to_list())
-    arch_labels = sorted(df_all["Architecture"].unique().to_list())
-
-    fig, axes = plt.subplots(
-        1,
-        len(strat_list),
-        sharey=True,
-        sharex=True,
-        squeeze=False,
-        figsize=(8 * len(strat_list), 6),
-        layout="constrained",
+    """Accuracy vs channel dimension — all architectures and tipologies, M_int=32×32."""
+    _arch_comparison_generic(
+        sweep="channel_dim",
+        x_col="channel_dim",
+        x_label=r"Channel dimension $d_H$",
+        fname="ArchComparison_ChannelDim",
+        x_log=True,
     )
-
-    arch_handles, arch_handle_labels = [], []
-
-    for c, strategy in enumerate(strat_list):
-        ax = axes[0][c]
-        df_s = df_all.filter(pl.col("strategy") == strategy)
-
-        sns.lineplot(
-            df_s.to_pandas(),
-            x="channel_dim",
-            y="accuracy",
-            hue="Architecture",
-            hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
-            palette=_ARCH_PALETTE,
-            style="Architecture",
-            markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
-            dashes=False,
-            markersize=12,
-            ax=ax,
-        )
-
-        if c == 0:
-            arch_handle_labels, arch_handles = (
-                zip(
-                    *[
-                        (label, h)
-                        for h, label in zip(*ax.get_legend_handles_labels())
-                        if label in arch_labels
-                    ]
-                )
-                if arch_labels
-                else ([], [])
-            )
-
-        if ax.get_legend():
-            ax.get_legend().remove()
-
-        ax.set_title(strategy)
-        ax.set_xscale("log")
-        ax.set_xticks(channel_dims)
-        ax.set_xticklabels([str(c) for c in channel_dims])
-        ax.set_xlim(min(channel_dims), max(channel_dims))
-        ax.set_xlabel(r"$\mathbf{H}$")
-        ax.set_ylabel("Accuracy" if c == 0 else "")
-        ax.set_ylim(None, 1.0)
-
-    fig.legend(
-        list(arch_handles),
-        list(arch_handle_labels),
-        ncol=len(arch_labels),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.12),
-        frameon=True,
-        framealpha=1,
-    )
-
-    _save("ArchComparison_ChannelDim")
 
 
 # ---------------------------------------------------------------------------

@@ -78,6 +78,8 @@ def run_disjoint_2sim(
     rx_left=None,
     rx_right=None,
     tipology_subdir: str = "",
+    constructive: bool = False,
+    alignment_side: str | None = None,
     **_,
 ) -> None:
     """Run one disjoint 2-SIM job given pre-computed TX and RX target matrices.
@@ -281,6 +283,8 @@ def run_disjoint_2sim(
             "channel_dim": ch_dim,
             "n_clusters": n_clusters,
             "tipology": tipology_subdir,
+            "constructive": constructive,
+            "alignment_side": alignment_side,
         },
     )
     del tx_model, rx_model

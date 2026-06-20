@@ -145,6 +145,8 @@ def run_disjoint_asym(
         rx_left=rx_left,
         rx_right=rx_right,
         tipology_subdir=tipology_tag("disjoint_asym", constructive, alignment_side),
+        constructive=constructive,
+        alignment_side=alignment_side,
         L=L,
         M_int=M_int,
         A_target=A_target,

@@ -176,6 +176,7 @@ def run_mono_sim(
             "channel_dim": ch_dim,
             "n_clusters": n_clusters,
             "tipology": tipo,
+            "constructive": constructive,
         },
     )
     del tx_model

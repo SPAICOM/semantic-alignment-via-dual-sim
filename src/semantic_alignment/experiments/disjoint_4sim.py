@@ -159,9 +159,9 @@ def run_disjoint_4sim(
 
     fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc)
     log_prefix = f"Disjoint4SIM L={L} M={M_int} snr={snr_tag(snr)} seed={seed}"
-    topo = tipology_tag("disjoint_4sim", constructive)
+    tipo = tipology_tag("disjoint_4sim", constructive)
     out_path = (
-        RESULTS_DIR / result_subdir / topo / fname if topo else RESULTS_DIR / result_subdir / fname
+        RESULTS_DIR / result_subdir / tipo / fname if tipo else RESULTS_DIR / result_subdir / fname
     )
     if out_path.exists():
         print(f"Skipping {out_path.name}.")
@@ -336,7 +336,8 @@ def run_disjoint_4sim(
             "r2_loss": r2_loss[-1] if r2_loss else 0.0,
             "r2_loss_history": r2_loss,
             "channel_dim": ch_dim,
-            "tipology": topo,
+            "tipology": tipo,
+            "constructive": constructive,
         },
     )
     del t1_model, t2_model, r2_model, r1_model
