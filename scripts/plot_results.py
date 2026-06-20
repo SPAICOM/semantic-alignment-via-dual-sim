@@ -100,7 +100,7 @@ _ARCH_COMPARE_VARIANTS = [
     ),
     (
         "disjoint_sym",
-        "standard",
+        "equalized",
         "Disjoint Sym",
         False,
         "disjoint_sym_layers",
@@ -120,7 +120,7 @@ _ARCH_COMPARE_VARIANTS = [
     ),
     (
         "disjoint_4sim",
-        "standard",
+        "equalized",
         "4-SIM",
         False,
         "disjoint_4sim_layers",
@@ -138,7 +138,7 @@ _ARCH_COMPARE_VARIANTS = [
         "disjoint_4sim_channel_dim",
         True,
     ),
-    ("mono", "standard", "Mono", False, "mono", "mono_snr", None, False),
+    ("mono", "equalized", "Mono", False, "mono", "mono_snr", None, False),
     ("mono", "constructive", "Mono", True, "mono", "mono_snr", None, False),
 ]
 _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
@@ -148,15 +148,15 @@ _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
 _DISJOINT_COMPARE = [
     ("disjoint_asym", "tx", "Disjoint Asym", "P", "#1f77b4", "-"),
     ("disjoint_asym", "tx_c", "Disjoint Asym", "P", "#1f77b4", "--"),
-    ("disjoint_sym", "standard", "Disjoint Sym", "X", "#ff7f0e", "-"),
+    ("disjoint_sym", "equalized", "Disjoint Sym", "X", "#ff7f0e", "-"),
     ("disjoint_sym", "constructive", "Disjoint Sym", "X", "#ff7f0e", "--"),
 ]
 
 # Default tipology per sim_type for single-arch plots
 _DEFAULT_TIPOLOGY = {
     "disjoint_asym": "tx",
-    "disjoint_sym": "standard",
-    "disjoint_4sim": "standard",
+    "disjoint_sym": "equalized",
+    "disjoint_4sim": "equalized",
 }
 
 
@@ -574,7 +574,7 @@ def accuracy_vs_thickness() -> None:
 
 def accuracy_vs_mono_layers() -> None:
     """Accuracy vs $L$ — Mono-SIM, standard tipology."""
-    df = _get_tipology("mono", "standard")
+    df = _get_tipology("mono", "equalized")
     if df is None:
         print("No mono-SIM results found.")
         return
@@ -639,7 +639,7 @@ def accuracy_vs_mono_layers() -> None:
 
 def accuracy_vs_mono_snr() -> None:
     """Accuracy vs SNR [dB] — Mono-SIM, standard tipology."""
-    df = _get_tipology("mono_snr", "standard")
+    df = _get_tipology("mono_snr", "equalized")
     if df is None:
         print("No mono-SIM SNR results found.")
         return
@@ -775,7 +775,7 @@ def accuracy_vs_disjoint_asym_snr() -> None:
 
 def accuracy_vs_disjoint_sym_layers() -> None:
     """Accuracy vs $L$ — Disjoint Sym architecture, standard tipology."""
-    df = _get_tipology("disjoint_sym_layers", "standard")
+    df = _get_tipology("disjoint_sym_layers", "equalized")
     if df is None:
         print("No disjoint sym layers results found.")
         return
@@ -831,7 +831,7 @@ def accuracy_vs_disjoint_sym_layers() -> None:
 
 def accuracy_vs_disjoint_sym_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint Sym architecture, standard tipology."""
-    df = _get_tipology("disjoint_sym_snr", "standard")
+    df = _get_tipology("disjoint_sym_snr", "equalized")
     if df is None:
         print("No disjoint sym SNR results found.")
         return
@@ -896,7 +896,7 @@ def accuracy_vs_disjoint_sym_snr() -> None:
 
 def accuracy_vs_disjoint_4sim_layers() -> None:
     """Accuracy vs $L$ — Disjoint 4-SIM architecture, standard tipology."""
-    df = _get_tipology("disjoint_4sim_layers", "standard")
+    df = _get_tipology("disjoint_4sim_layers", "equalized")
     if df is None:
         print("No disjoint 4-SIM layers results found.")
         return
@@ -952,7 +952,7 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
 
 def accuracy_vs_disjoint_4sim_snr() -> None:
     """Accuracy vs SNR [dB] — Disjoint 4-SIM architecture, standard tipology."""
-    df = _get_tipology("disjoint_4sim_snr", "standard")
+    df = _get_tipology("disjoint_4sim_snr", "equalized")
     if df is None:
         print("No disjoint 4-SIM SNR results found.")
         return
@@ -1200,7 +1200,7 @@ def _arch_comparison_generic(
     ]
     fig.legend(
         ls_handles,
-        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Non Constructive"],
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
         loc="lower right",
         bbox_to_anchor=(1.0, -0.12),
@@ -1516,7 +1516,7 @@ def accuracy_vs_n_proto() -> None:
 
 # Sym: color=L, linestyle=tipology
 _SYM_TOPO_STYLES = [
-    ("standard", "-", "standard"),
+    ("equalized", "-", "equalized"),
     ("constructive", "--", "constructive"),
 ]
 
@@ -1824,7 +1824,7 @@ def _arch_comparison_asym_vs_sym(
     ]
     fig.legend(
         ls_handles,
-        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Non Constructive"],
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
         loc="lower right",
         bbox_to_anchor=(1.0, -0.14),

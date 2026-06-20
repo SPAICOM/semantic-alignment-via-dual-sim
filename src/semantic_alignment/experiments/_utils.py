@@ -91,14 +91,14 @@ def tipology_tag(
     - ``disjoint_asym``: ``"tx"``, ``"tx_c"``, ``"rx"``, ``"rx_c"``
       (alignment side + ``_c`` suffix when constructive).
     - ``disjoint_sym`` / ``disjoint_4sim`` / ``mono``:
-      ``"standard"`` or ``"constructive"``.
+      ``"equalized"`` or ``"constructive"``.
     - ``joint``: ``""`` — no tipology subfolder.
     """
     if sim_type == "disjoint_asym":
         side = alignment_side or "tx"
         return f"{side}_c" if constructive else side
     if sim_type in ("disjoint_sym", "disjoint_4sim", "mono"):
-        return "constructive" if constructive else "standard"
+        return "constructive" if constructive else "equalized"
     return ""
 
 
