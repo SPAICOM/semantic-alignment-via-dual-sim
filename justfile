@@ -90,7 +90,7 @@ disjoint-asym-rx: run-disjoint-asym-rx run-disjoint-asym-snr-rx run-disjoint-asy
 disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c run-disjoint-asym-channel-dim-rx-c
 
 # All 4 asym topologies
-disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx disjoint-asym-rx-c
+disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 
 # ── Disjoint sym ──────────────────────────────────────────────────────────────
 # Tipology: constructive ∈ {false, true}
