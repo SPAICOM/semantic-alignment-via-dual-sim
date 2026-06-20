@@ -44,13 +44,13 @@ _ARCH_MARKERS = {
 # ── Arch comparison (all tipologies) ─────────────────────────────────────────
 # Families: color encodes arch, linestyle encodes constructive (solid) vs standard (dashed).
 # Joint is constructive by design. Asym TX and Asym RX are separate families.
-_ARCH_FAMILIES = ["Joint", "Asym TX", "Asym RX", "Sym", "4-SIM", "Mono"]
+_ARCH_FAMILIES = ["Joint", "Disjoint Asym TX", "Disjoint Asym RX", "Disjoint Sym", "4-SIM", "Mono"]
 _ARCH_FAMILY_COLORS = dict(zip(_ARCH_FAMILIES, sns.color_palette("tab10", len(_ARCH_FAMILIES))))
 _ARCH_FAMILY_MARKERS = {
     "Joint": "o",
-    "Asym TX": "P",
-    "Asym RX": "s",
-    "Sym": "X",
+    "Disjoint Asym TX": "P",
+    "Disjoint Asym RX": "s",
+    "Disjoint Sym": "X",
     "4-SIM": "^",
     "Mono": "v",
 }
@@ -61,7 +61,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_asym",
         "tx",
-        "Asym TX",
+        "Disjoint Asym TX",
         False,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
@@ -71,7 +71,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_asym",
         "tx_c",
-        "Asym TX",
+        "Disjoint Asym TX",
         True,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
@@ -81,7 +81,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_asym",
         "rx",
-        "Asym RX",
+        "Disjoint Asym RX",
         False,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
@@ -91,7 +91,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_asym",
         "rx_c",
-        "Asym RX",
+        "Disjoint Asym RX",
         True,
         "disjoint_asym_layers",
         "disjoint_asym_snr",
@@ -101,7 +101,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_sym",
         "standard",
-        "Sym",
+        "Disjoint Sym",
         False,
         "disjoint_sym_layers",
         "disjoint_sym_snr",
@@ -111,7 +111,7 @@ _ARCH_COMPARE_VARIANTS = [
     (
         "disjoint_sym",
         "constructive",
-        "Sym",
+        "Disjoint Sym",
         True,
         "disjoint_sym_layers",
         "disjoint_sym_snr",
@@ -146,10 +146,10 @@ _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
 # Variants for the asym-vs-sym comparison plots.
 # Each entry: (arch_key, tipology, display_label, marker, color, linestyle)
 _DISJOINT_COMPARE = [
-    ("disjoint_asym", "tx", "Asym", "P", "#1f77b4", "-"),
-    ("disjoint_asym", "tx_c", "Asym (C)", "P", "#aec7e8", "--"),
-    ("disjoint_sym", "standard", "Sym", "X", "#ff7f0e", "-"),
-    ("disjoint_sym", "constructive", "Sym (C)", "X", "#ffbb78", "--"),
+    ("disjoint_asym", "tx", "Disjoint Asym", "P", "#1f77b4", "-"),
+    ("disjoint_asym", "tx_c", "Disjoint Asym", "P", "#1f77b4", "--"),
+    ("disjoint_sym", "standard", "Disjoint Sym", "X", "#ff7f0e", "-"),
+    ("disjoint_sym", "constructive", "Disjoint Sym", "X", "#ff7f0e", "--"),
 ]
 
 # Default tipology per sim_type for single-arch plots
@@ -1022,6 +1022,8 @@ def _arch_comparison_generic(
     fname: str,
     M_FILTER: str = "32x32",
     x_log: bool = False,
+    show_baselines: bool = True,
+    y_min: float | None = None,
 ) -> None:
     """Generic arch comparison: color=family, solid=constructive, dashed=standard.
 
@@ -1107,7 +1109,12 @@ def _arch_comparison_generic(
                 continue
 
             xs = sorted(subdf[x_col].drop_nulls().unique().to_list())
-            ys = [subdf.filter(pl.col(x_col) == x)["accuracy"].mean() for x in xs]
+            ys, ys_se = [], []
+            for x in xs:
+                col_vals = subdf.filter(pl.col(x_col) == x)["accuracy"]
+                n = col_vals.len()
+                ys.append(col_vals.mean())
+                ys_se.append(col_vals.std() / (n**0.5) if n > 1 else 0.0)
             (line,) = ax.plot(
                 xs,
                 ys,
@@ -1118,15 +1125,23 @@ def _arch_comparison_generic(
                 linewidth=1.5,
                 alpha=0.9,
             )
+            ax.fill_between(
+                xs,
+                [y - 1.96 * se for y, se in zip(ys, ys_se)],
+                [y + 1.96 * se for y, se in zip(ys, ys_se)],
+                color=color,
+                alpha=0.12,
+            )
             if family not in family_handles:
                 family_handles[family] = line
 
-        plt.sca(ax)
-        bl_added = _add_baseline_hlines(df_s)
-        h_all, l_all = ax.get_legend_handles_labels()
-        for hi, li in zip(h_all, l_all):
-            if li in bl_added and li not in baseline_handles_dict:
-                baseline_handles_dict[li] = hi
+        if show_baselines:
+            plt.sca(ax)
+            bl_added = _add_baseline_hlines(df_s)
+            h_all, l_all = ax.get_legend_handles_labels()
+            for hi, li in zip(h_all, l_all):
+                if li in bl_added and li not in baseline_handles_dict:
+                    baseline_handles_dict[li] = hi
 
         ax.set_title(strategy)
         ax.set_xlabel(x_label)
@@ -1137,40 +1152,61 @@ def _arch_comparison_generic(
         ax.set_xticks(ticks)
         ax.set_xticklabels([str(t) for t in ticks])
         ax.set_xlim(min(ticks), max(ticks))
-        ax.set_ylim(None, 1.0)
+        ax.set_ylim(y_min, 1.0)
 
     # Baseline legend (top)
-    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
-    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
-    if bl_labels:
-        fig.legend(
-            [baseline_handles_dict[lbl] for lbl in bl_labels],
-            bl_labels,
-            ncol=len(bl_labels),
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.12),
-            frameon=True,
-            framealpha=1,
-        )
+    if show_baselines:
+        bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+        bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+        if bl_labels:
+            fig.legend(
+                [baseline_handles_dict[lbl] for lbl in bl_labels],
+                bl_labels,
+                ncol=len(bl_labels),
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.12),
+                frameon=True,
+                framealpha=1,
+            )
 
-    # Family legend (bottom)
+    # Family legend (bottom-left): color + marker with solid line, no linestyle encoding
     ordered_families = [f for f in _ARCH_FAMILIES if f in family_handles]
+    family_legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=_ARCH_FAMILY_COLORS[f],
+            marker=_ARCH_FAMILY_MARKERS[f],
+            ls="none",
+            markersize=10,
+        )
+        for f in ordered_families
+    ]
     fig.legend(
-        [family_handles[f] for f in ordered_families],
+        family_legend_handles,
         ordered_families,
         ncol=len(ordered_families),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.12),
+        loc="lower left",
+        bbox_to_anchor=(0.0, -0.12),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
+
+    ls_handles = [
+        Line2D([0], [0], color="gray", ls="-", lw=1.5),
+        Line2D([0], [0], color="gray", ls="--", lw=1.5),
+    ]
+    fig.legend(
+        ls_handles,
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Non Constructive"],
+        ncol=2,
+        loc="lower right",
+        bbox_to_anchor=(1.0, -0.12),
         frameon=True,
         framealpha=1,
     )
-
-    # Linestyle legend (constructive vs non constructive)
-    ls_handles = [
-        Line2D([0], [0], color="gray", ls="-", lw=1.5, label="Constructive"),
-        Line2D([0], [0], color="gray", ls="--", lw=1.5, label="Non Constructive"),
-    ]
-    axes[0][-1].legend(handles=ls_handles, loc="lower right", framealpha=1)
 
     _save(fname)
 
@@ -1377,6 +1413,8 @@ def arch_comparison_channel_dim() -> None:
         x_label=r"Channel dimension $d_H$",
         fname="ArchComparison_ChannelDim",
         x_log=True,
+        show_baselines=False,
+        y_min=0.0,
     )
 
 
@@ -1635,12 +1673,16 @@ def _arch_comparison_asym_vs_sym(
     fname_suffix: str,
     M_FILTER: str = "32x32",
     x_log: bool = False,
+    show_baselines: bool = True,
+    y_min: float | None = None,
 ) -> None:
     """Generic asym-vs-sym comparison across tipology variants.
 
     ``sweep`` is the result_subdir suffix, e.g. ``"layers"`` → loads
     ``disjoint_asym_layers`` and ``disjoint_sym_layers``.
     """
+    from matplotlib.lines import Line2D
+
     frames = []
     for arch_key, topo, label, marker, color, ls in _DISJOINT_COMPARE:
         subdir = f"{arch_key}_{sweep}"
@@ -1706,18 +1748,32 @@ def _arch_comparison_asym_vs_sym(
             grp = sub_pd.groupby(x_col)["accuracy"]
             xs = sorted(grp.groups.keys())
             ys = [grp.get_group(x).mean() for x in xs]
+            ys_se = [
+                grp.get_group(x).std() / (len(grp.get_group(x)) ** 0.5)
+                if len(grp.get_group(x)) > 1
+                else 0.0
+                for x in xs
+            ]
             (line,) = ax.plot(
                 xs, ys, color=color, linestyle=ls, marker=marker, markersize=10, label=label
+            )
+            ax.fill_between(
+                xs,
+                [y - 1.96 * se for y, se in zip(ys, ys_se)],
+                [y + 1.96 * se for y, se in zip(ys, ys_se)],
+                color=color,
+                alpha=0.12,
             )
             if label not in variant_handles:
                 variant_handles[label] = line
 
-        plt.sca(ax)
-        bl_added = _add_baseline_hlines(df_s)
-        h_all, l_all = ax.get_legend_handles_labels()
-        for hi, li in zip(h_all, l_all):
-            if li in bl_added and li not in baseline_handles_dict:
-                baseline_handles_dict[li] = hi
+        if show_baselines:
+            plt.sca(ax)
+            bl_added = _add_baseline_hlines(df_s)
+            h_all, l_all = ax.get_legend_handles_labels()
+            for hi, li in zip(h_all, l_all):
+                if li in bl_added and li not in baseline_handles_dict:
+                    baseline_handles_dict[li] = hi
 
         if ax.get_legend():
             ax.get_legend().remove()
@@ -1731,27 +1787,47 @@ def _arch_comparison_asym_vs_sym(
         ax.set_xticks(ticks)
         ax.set_xticklabels([str(t) for t in ticks])
         ax.set_xlim(min(ticks), max(ticks))
-        ax.set_ylim(None, 1.0)
+        ax.set_ylim(y_min, 1.0)
 
-    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
-    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
-    if bl_labels:
-        fig.legend(
-            [baseline_handles_dict[lbl] for lbl in bl_labels],
-            bl_labels,
-            ncol=len(bl_labels),
-            loc="upper center",
-            bbox_to_anchor=(0.5, 1.12),
-            frameon=True,
-            framealpha=1,
-        )
-    ordered_variants = [v[2] for v in _DISJOINT_COMPARE if v[2] in variant_handles]
+    if show_baselines:
+        bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+        bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+        if bl_labels:
+            fig.legend(
+                [baseline_handles_dict[lbl] for lbl in bl_labels],
+                bl_labels,
+                ncol=len(bl_labels),
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.12),
+                frameon=True,
+                framealpha=1,
+            )
+    ordered_variants = sorted(
+        set(v[2] for v in _DISJOINT_COMPARE if v[2] in variant_handles),
+        key=lambda v: [x[2] for x in _DISJOINT_COMPARE].index(v),
+    )
     fig.legend(
         [variant_handles[v] for v in ordered_variants],
         ordered_variants,
         ncol=len(ordered_variants),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.14),
+        loc="lower left",
+        bbox_to_anchor=(0.0, -0.14),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
+
+    ls_handles = [
+        Line2D([0], [0], color="gray", ls="-", lw=1.5),
+        Line2D([0], [0], color="gray", ls="--", lw=1.5),
+    ]
+    fig.legend(
+        ls_handles,
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Non Constructive"],
+        ncol=2,
+        loc="lower right",
+        bbox_to_anchor=(1.0, -0.14),
         frameon=True,
         framealpha=1,
     )
@@ -1787,6 +1863,8 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
         x_label=r"Channel dimension $d_H$",
         fname_suffix="ChannelDim",
         x_log=True,
+        show_baselines=False,
+        y_min=0.0,
     )
 
 

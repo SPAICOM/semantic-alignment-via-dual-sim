@@ -266,15 +266,13 @@ def run_evaluation_mono(
         x_c = complex_compressed_tensor(x_real_batch.T, device=device)
         x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
 
-        y = H_mimo @ (G_T @ x_w)
+        y = H_mimo @ (beta_opt * G_T @ x_w)
 
         if sigma is not None:
             y = y + awgn(sigma, y.shape, device=device)
 
         if use_equalizer:
             y = G_eq @ y
-
-        y = beta_opt * y
 
         z = (L_out.to(G_T.dtype) @ y) + mu_out.to(G_T.dtype)
         y_hat = decompress_complex_tensor(z, device=device).T
