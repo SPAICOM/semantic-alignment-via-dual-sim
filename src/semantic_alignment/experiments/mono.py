@@ -17,7 +17,7 @@ from semantic_alignment.evaluation.inference import run_evaluation_mono
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
 from semantic_alignment.utils.utils import complex_gaussian_matrix
 
-from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result
+from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, tipology_tag
 
 
 def run_mono_sim(
@@ -52,71 +52,17 @@ def run_mono_sim(
     slayer: float = 0.025,
     dx: float = 0.0025,
     n_clusters: int | None = None,
+    constructive: bool = False,
     **_,
 ) -> None:
     """Run one Mono-SIM (TX-only) job.
 
-    Sweep mode is selected by ``snr``:
+    ``constructive`` selects the training loss and inference path:
 
-    - ``snr=None``: ZF equalizer, no noise → ``results/mono/``
-    - ``snr`` finite: MMSE equalizer + AWGN → ``results/mono_snr/``
-
-    A new square MIMO channel of dimension ``A_target.shape[0]`` is always
-    generated here because the TX and RX embedding spaces may have different
-    dimensions.  The job is skipped if the output Parquet file already exists.
-
-    Parameters
-    ----------
-    L : int
-        Number of metasurface layers in the TX-SIM.
-    M_int : int
-        Side length of the square intermediate aperture.
-    no_mismatch_probe : float
-        No-mismatch baseline accuracy from the linear probe, in percent.
-    original_probe : float
-        Oracle linear-alignment accuracy (no SIM, no channel), in percent.
-    A_target : array-like
-        Target alignment matrix.
-    test_loader : DataLoader
-        Test set yielding ``(z_tx, labels)`` pairs.
-    clf :
-        Linear probe weight matrix.
-    L_in, mu_in, L_out, mu_out : torch.Tensor
-        Whitening statistics (Cholesky factor and mean for TX and RX).
-    device : torch.device
-        Inference and optimization device.
-    strategy_name : str, optional
-        Alignment strategy label (``"Linear"`` or ``"PPFE"``).
-    seed : int, optional
-        Global random seed.
-    max_iters : int, optional
-        Number of optimization iterations.
-    lr : float, optional
-        Learning rate.
-    H_mimo : array-like or None, optional
-        Ignored; a fresh channel is always drawn inside this function.
-    snr : float or None, optional
-        AWGN SNR in dB; ``None`` means noiseless with ZF equalizer.
-    clf_neural : optional
-        Optional neural classifier.
-    no_mismatch_neural, original_neural : float or None, optional
-        Neural-classifier baselines.
-    tx_enc, rx_enc : str, optional
-        Encoder names embedded in the output filename.
-    optimizer : str, optional
-        ``"adam"`` or ``"sgd"``.
-    scheduler : str, optional
-        ``"none"`` or ``"cosine"``.
-    warmup_frac : float, optional
-        Cosine-scheduler warm-up fraction.
-    channel_dim : int or None, optional
-        Physical channel dimension override.
-    wavelength : float, optional
-        Operating wavelength λ (metres).
-    slayer : float, optional
-        Default inter-layer spacing in wavelengths.
-    dx : float, optional
-        Meta-atom spacing (metres).
+    - ``False`` (standard): loss ``‖β G_T − A‖²``, inference
+      ``ẑ = β · G_eq · H · G_T · x`` (G_eq = ZF/MMSE inverts H analytically).
+    - ``True``: loss ``‖β H G_T − A‖²`` (H in the loss; SIM learns pre-coding),
+      inference ``ẑ = β · (H · G_T · x + noise)`` — no G_eq, noise not mitigated.
     """
     subdir = "mono_snr" if snr is not None else "mono"
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
@@ -126,7 +72,8 @@ def run_mono_sim(
     fname = make_fname(
         strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
     )
-    out_path = RESULTS_DIR / subdir / fname
+    tipo = tipology_tag("mono", constructive)
+    out_path = RESULTS_DIR / subdir / tipo / fname if tipo else RESULTS_DIR / subdir / fname
 
     if out_path.exists():
         print(f"Skipping {out_path.name}.")
@@ -136,11 +83,9 @@ def run_mono_sim(
     np.random.seed(seed)
     random.seed(seed)
 
-    # Mono uses a square channel of size = RX complex dim (A_target.shape[0]).
-    # _setup passes H_mimo sized to max(A_target.shape), which is wrong when
-    # TX and RX have different embedding dimensions — generate it here instead.
     h_dim = int(A_target.shape[0])
     H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     tx_cpu = MonoSIMoptimizer(
         num_layers=L,
@@ -165,39 +110,38 @@ def run_mono_sim(
         optimizer=optimizer,
         scheduler=scheduler,
         warmup_frac=warmup_frac,
+        left_matrix=H_torch if constructive else None,
     )
 
     with torch.no_grad():
         G_T_f = tx_model.get_cascade()
-        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
-
-        beta = torch.sum(torch.conj(G_T_f) * A_torch) / (
-            torch.sum(torch.conj(G_T_f) * G_T_f) + 1e-12
+        # β aligns the effective TX output (H G_T for constructive, G_T otherwise) to A
+        G_eff = H_torch @ G_T_f if constructive else G_T_f
+        beta = torch.sum(torch.conj(G_eff) * A_torch) / (
+            torch.sum(torch.conj(G_eff) * G_eff) + 1e-12
         )
 
-        mono_probe = run_evaluation_mono(
-            G_T_f, test_loader, H_torch, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
+        eval_kw = dict(
+            G_T=G_T_f,
+            dataloader=test_loader,
+            H_mimo=H_torch,
+            snr_db=snr,
+            beta_opt=beta,
+            L_in=L_in,
+            mu_in=mu_in,
+            L_out=L_out,
+            mu_out=mu_out,
+            device=device,
+            use_equalizer=not constructive,
         )
+        mono_probe = run_evaluation_mono(clf=clf, **eval_kw)
         mono_neural = (
-            run_evaluation_mono(
-                G_T_f,
-                test_loader,
-                H_torch,
-                snr,
-                beta,
-                L_in,
-                mu_in,
-                L_out,
-                mu_out,
-                clf_neural,
-                device,
-            )
-            if clf_neural is not None
-            else None
+            run_evaluation_mono(clf=clf_neural, **eval_kw) if clf_neural is not None else None
         )
 
     print(
         f" Mono{'(snr=' + str(snr) + ')' if snr is not None else ''} L={L} M={M_int} seed={seed}"
+        f" constructive={constructive}"
         f" | no_mismatch={no_mismatch_probe:.2f}%{neural_str('nm_neural', no_mismatch_neural)}"
         f" | orig={original_probe:.2f}%{neural_str('orig_neural', original_neural)}"
         f" | sim={mono_probe * 100:.2f}%{neural_str('sim_neural', pct(mono_neural))}"
@@ -231,6 +175,7 @@ def run_mono_sim(
             "rx_loss_history": None,
             "channel_dim": ch_dim,
             "n_clusters": n_clusters,
+            "tipology": tipo,
         },
     )
     del tx_model

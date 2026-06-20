@@ -81,6 +81,27 @@ def inter_sim_propagation(
     return torch.tensor(tmp.W[0], dtype=torch.complex64).to(device)
 
 
+def tipology_tag(
+    sim_type: str,
+    constructive: bool = False,
+    alignment_side: str | None = None,
+) -> str:
+    """Return the tipology subfolder name for an experiment variant.
+
+    - ``disjoint_asym``: ``"tx"``, ``"tx_c"``, ``"rx"``, ``"rx_c"``
+      (alignment side + ``_c`` suffix when constructive).
+    - ``disjoint_sym`` / ``disjoint_4sim`` / ``mono``:
+      ``"standard"`` or ``"constructive"``.
+    - ``joint``: ``""`` — no tipology subfolder.
+    """
+    if sim_type == "disjoint_asym":
+        side = alignment_side or "tx"
+        return f"{side}_c" if constructive else side
+    if sim_type in ("disjoint_sym", "disjoint_4sim", "mono"):
+        return "constructive" if constructive else "standard"
+    return ""
+
+
 def save_result(path: Path, row: dict) -> None:
     """Write a single result row to a Parquet file, creating parent directories as needed."""
     path.parent.mkdir(parents=True, exist_ok=True)

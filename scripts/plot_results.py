@@ -41,6 +41,22 @@ _ARCH_MARKERS = {
     "Mono": "v",
 }
 
+# Variants for the asym-vs-sym comparison plots.
+# Each entry: (arch_key, tipology, display_label, marker, color, linestyle)
+_DISJOINT_COMPARE = [
+    ("disjoint_asym", "tx", "Asym", "P", "#1f77b4", "-"),
+    ("disjoint_asym", "tx_c", "Asym (C)", "P", "#aec7e8", "--"),
+    ("disjoint_sym", "standard", "Sym", "X", "#ff7f0e", "-"),
+    ("disjoint_sym", "constructive", "Sym (C)", "X", "#ffbb78", "--"),
+]
+
+# Default tipology per sim_type for single-arch plots
+_DEFAULT_TIPOLOGY = {
+    "disjoint_asym": "tx",
+    "disjoint_sym": "standard",
+    "disjoint_4sim": "standard",
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -81,6 +97,21 @@ def _get(result_subdir: str) -> pl.DataFrame | None:
     if df is None:
         return None
     out = df.filter(pl.col("result_subdir") == result_subdir)
+    return out if not out.is_empty() else None
+
+
+def _get_tipology(result_subdir: str, tipology: str) -> pl.DataFrame | None:
+    """Return rows matching ``result_subdir`` and ``tipology``.
+
+    Falls back to all rows for that subdir when the ``tipology`` column is
+    absent (backward-compatible with results saved before tipology subfolders).
+    """
+    df = _get(result_subdir)
+    if df is None:
+        return None
+    if "tipology" not in df.columns:
+        return df
+    out = df.filter(pl.col("tipology") == tipology)
     return out if not out.is_empty() else None
 
 
@@ -313,8 +344,8 @@ def accuracy_vs_snr() -> None:
 
 
 def accuracy_vs_disjoint_asym_layers() -> None:
-    """Accuracy vs $L$ — Disjoint Asym architecture."""
-    df = _get("disjoint_asym_layers")
+    """Accuracy vs $L$ — Disjoint Asym architecture, standard tipology (tx)."""
+    df = _get_tipology("disjoint_asym_layers", "tx")
     if df is None:
         print("No disjoint asym layers results found.")
         return
@@ -440,8 +471,8 @@ def accuracy_vs_thickness() -> None:
 
 
 def accuracy_vs_mono_layers() -> None:
-    """Accuracy vs $L$ — Mono-SIM (TX-only, no channel)."""
-    df = _get("mono")
+    """Accuracy vs $L$ — Mono-SIM, standard tipology."""
+    df = _get_tipology("mono", "standard")
     if df is None:
         print("No mono-SIM results found.")
         return
@@ -505,8 +536,8 @@ def accuracy_vs_mono_layers() -> None:
 
 
 def accuracy_vs_mono_snr() -> None:
-    """Accuracy vs SNR [dB] — Mono-SIM (TX-only) over the MIMO channel."""
-    df = _get("mono_snr")
+    """Accuracy vs SNR [dB] — Mono-SIM, standard tipology."""
+    df = _get_tipology("mono_snr", "standard")
     if df is None:
         print("No mono-SIM SNR results found.")
         return
@@ -575,8 +606,8 @@ def accuracy_vs_mono_snr() -> None:
 
 
 def accuracy_vs_disjoint_asym_snr() -> None:
-    """Accuracy vs SNR [dB] — Disjoint Asym architecture."""
-    df = _get("disjoint_asym_snr")
+    """Accuracy vs SNR [dB] — Disjoint Asym architecture, standard tipology (tx)."""
+    df = _get_tipology("disjoint_asym_snr", "tx")
     if df is None:
         print("No disjoint asym SNR results found.")
         return
@@ -641,8 +672,8 @@ def accuracy_vs_disjoint_asym_snr() -> None:
 
 
 def accuracy_vs_disjoint_sym_layers() -> None:
-    """Accuracy vs $L$ — Disjoint Sym architecture (PPFE only)."""
-    df = _get("disjoint_sym_layers")
+    """Accuracy vs $L$ — Disjoint Sym architecture, standard tipology."""
+    df = _get_tipology("disjoint_sym_layers", "standard")
     if df is None:
         print("No disjoint sym layers results found.")
         return
@@ -697,8 +728,8 @@ def accuracy_vs_disjoint_sym_layers() -> None:
 
 
 def accuracy_vs_disjoint_sym_snr() -> None:
-    """Accuracy vs SNR [dB] — Disjoint Sym architecture (PPFE only)."""
-    df = _get("disjoint_sym_snr")
+    """Accuracy vs SNR [dB] — Disjoint Sym architecture, standard tipology."""
+    df = _get_tipology("disjoint_sym_snr", "standard")
     if df is None:
         print("No disjoint sym SNR results found.")
         return
@@ -762,11 +793,8 @@ def accuracy_vs_disjoint_sym_snr() -> None:
 
 
 def accuracy_vs_disjoint_4sim_layers() -> None:
-    """Accuracy vs $L$ — Disjoint 4-SIM architecture (PPFE only).
-
-    L is per-SIM depth; hardware equivalent to 2L layers in the 2-SIM case.
-    """
-    df = _get("disjoint_4sim_layers")
+    """Accuracy vs $L$ — Disjoint 4-SIM architecture, standard tipology."""
+    df = _get_tipology("disjoint_4sim_layers", "standard")
     if df is None:
         print("No disjoint 4-SIM layers results found.")
         return
@@ -821,8 +849,8 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
 
 
 def accuracy_vs_disjoint_4sim_snr() -> None:
-    """Accuracy vs SNR [dB] — Disjoint 4-SIM architecture (PPFE only)."""
-    df = _get("disjoint_4sim_snr")
+    """Accuracy vs SNR [dB] — Disjoint 4-SIM architecture, standard tipology."""
+    df = _get_tipology("disjoint_4sim_snr", "standard")
     if df is None:
         print("No disjoint 4-SIM SNR results found.")
         return
@@ -894,14 +922,14 @@ def arch_comparison_layers() -> None:
     M_FILTER = "32x32"
 
     frames = {}
-    for key, result_subdir, arch_label in [
-        ("joint", "joint_layers", "Joint"),
-        ("disjoint_asym", "disjoint_asym_layers", "Disjoint Asym"),
-        ("disjoint_sym", "disjoint_sym_layers", "Disjoint Sym"),
-        ("disjoint_4sim", "disjoint_4sim_layers", "Disjoint 4-SIM"),
-        ("mono", "mono", "Mono"),
+    for key, result_subdir, arch_label, topo in [
+        ("joint", "joint_layers", "Joint", None),
+        ("disjoint_asym", "disjoint_asym_layers", "Disjoint Asym", "tx"),
+        ("disjoint_sym", "disjoint_sym_layers", "Disjoint Sym", "standard"),
+        ("disjoint_4sim", "disjoint_4sim_layers", "Disjoint 4-SIM", "standard"),
+        ("mono", "mono", "Mono", "standard"),
     ]:
-        df = _get(result_subdir)
+        df = _get_tipology(result_subdir, topo) if topo else _get(result_subdir)
         if df is None:
             continue
         df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
@@ -1039,14 +1067,14 @@ def arch_comparison_snr() -> None:
     M_FILTER = "32x32"
 
     frames = {}
-    for key, result_subdir, arch_label in [
-        ("joint", "joint_snr", "Joint"),
-        ("disjoint_asym", "disjoint_asym_snr", "Disjoint Asym"),
-        ("disjoint_sym", "disjoint_sym_snr", "Disjoint Sym"),
-        ("disjoint_4sim", "disjoint_4sim_snr", "Disjoint 4-SIM"),
-        ("mono", "mono_snr", "Mono"),
+    for key, result_subdir, arch_label, topo in [
+        ("joint", "joint_snr", "Joint", None),
+        ("disjoint_asym", "disjoint_asym_snr", "Disjoint Asym", "tx"),
+        ("disjoint_sym", "disjoint_sym_snr", "Disjoint Sym", "standard"),
+        ("disjoint_4sim", "disjoint_4sim_snr", "Disjoint 4-SIM", "standard"),
+        ("mono", "mono_snr", "Mono", "standard"),
     ]:
-        df = _get(result_subdir)
+        df = _get_tipology(result_subdir, topo) if topo else _get(result_subdir)
         if df is None:
             continue
         df = df.filter((pl.col("M_int") == M_FILTER)).with_columns(
@@ -1274,13 +1302,13 @@ def _loss_curves_single_col(result_subdir: str, col: str, fname: str) -> None:
 
 
 def loss_curves_disjoint_asym_layers() -> None:
-    """Training loss curves — Disjoint Asym, TX and RX as separate plots."""
+    """Training loss curves — Disjoint Asym (standard tipology), TX and RX."""
     _loss_curves_single_col("disjoint_asym_layers", "loss_history", "LossCurves_DisjointAsym_TX")
     _loss_curves_single_col("disjoint_asym_layers", "rx_loss_history", "LossCurves_DisjointAsym_RX")
 
 
 def loss_curves_disjoint_sym_layers() -> None:
-    """Training loss curves — Disjoint Sym, TX and RX as separate plots."""
+    """Training loss curves — Disjoint Sym (standard tipology), TX and RX."""
     _loss_curves_single_col("disjoint_sym_layers", "loss_history", "LossCurves_DisjointSym_TX")
     _loss_curves_single_col("disjoint_sym_layers", "rx_loss_history", "LossCurves_DisjointSym_RX")
 
@@ -1344,13 +1372,13 @@ def arch_comparison_channel_dim() -> None:
     M_FILTER = "32x32"
 
     frames = {}
-    for key, subdir, arch_label in [
-        ("joint", "joint_channel_dim", "Joint"),
-        ("disjoint_asym", "disjoint_asym_channel_dim", "Disjoint Asym"),
-        ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym"),
-        ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM"),
+    for key, subdir, arch_label, topo in [
+        ("joint", "joint_channel_dim", "Joint", None),
+        ("disjoint_asym", "disjoint_asym_channel_dim", "Disjoint Asym", "tx"),
+        ("disjoint_sym", "disjoint_sym_channel_dim", "Disjoint Sym", "standard"),
+        ("disjoint_4sim", "disjoint_4sim_channel_dim", "Disjoint 4-SIM", "standard"),
     ]:
-        df = _get(subdir)
+        df = _get_tipology(subdir, topo) if topo else _get(subdir)
         if df is None:
             continue
         df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
@@ -1537,6 +1565,173 @@ def accuracy_vs_n_proto() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Asym vs Sym comparison — all tipology variants
+# ---------------------------------------------------------------------------
+
+
+def _arch_comparison_asym_vs_sym(
+    sweep: str,
+    x_col: str,
+    x_label: str,
+    fname_suffix: str,
+    M_FILTER: str = "32x32",
+    x_log: bool = False,
+) -> None:
+    """Generic asym-vs-sym comparison across tipology variants.
+
+    ``sweep`` is the result_subdir suffix, e.g. ``"layers"`` → loads
+    ``disjoint_asym_layers`` and ``disjoint_sym_layers``.
+    """
+    frames = []
+    for arch_key, topo, label, marker, color, ls in _DISJOINT_COMPARE:
+        subdir = f"{arch_key}_{sweep}"
+        df = _get_tipology(subdir, topo)
+        if df is None:
+            continue
+        df = df.filter(pl.col("M_int") == M_FILTER).with_columns(
+            pl.lit(label).alias("Variant"),
+            pl.lit(color).alias("_color"),
+            pl.lit(ls).alias("_ls"),
+            pl.lit(marker).alias("_marker"),
+        )
+        if not df.is_empty():
+            frames.append(df)
+
+    if not frames:
+        print(f"No asym/sym data found for sweep='{sweep}'.")
+        return
+
+    acc_col = "sim_accuracy_neural"
+    needed = [
+        x_col,
+        "strategy",
+        "Variant",
+        "_color",
+        "_ls",
+        "_marker",
+        acc_col,
+        "no_mismatch_probe",
+        "no_mismatch_neural",
+        "original_probe",
+        "original_neural",
+    ]
+    df_all = pl.concat(
+        [f.select([c for c in needed if c in f.columns]) for f in frames],
+        how="diagonal_relaxed",
+    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+
+    strat_list = sorted(df_all["strategy"].unique().to_list())
+
+    fig, axes = plt.subplots(
+        1,
+        len(strat_list),
+        sharey=True,
+        sharex=True,
+        squeeze=False,
+        figsize=(8 * len(strat_list), 6),
+        layout="constrained",
+    )
+
+    variant_handles: dict[str, object] = {}
+    baseline_handles_dict: dict[str, object] = {}
+
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+
+        for _, topo, label, marker, color, ls in _DISJOINT_COMPARE:
+            sub = df_s.filter(pl.col("Variant") == label)
+            if sub.is_empty():
+                continue
+            sub_pd = sub.to_pandas()
+            grp = sub_pd.groupby(x_col)["accuracy"]
+            xs = sorted(grp.groups.keys())
+            ys = [grp.get_group(x).mean() for x in xs]
+            (line,) = ax.plot(
+                xs, ys, color=color, linestyle=ls, marker=marker, markersize=10, label=label
+            )
+            if label not in variant_handles:
+                variant_handles[label] = line
+
+        plt.sca(ax)
+        bl_added = _add_baseline_hlines(df_s)
+        h_all, l_all = ax.get_legend_handles_labels()
+        for hi, li in zip(h_all, l_all):
+            if li in bl_added and li not in baseline_handles_dict:
+                baseline_handles_dict[li] = hi
+
+        if ax.get_legend():
+            ax.get_legend().remove()
+
+        ax.set_title(strategy)
+        ax.set_xlabel(x_label)
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        if x_log:
+            ax.set_xscale("log")
+        ticks = sorted(df_s[x_col].drop_nulls().unique().to_list())
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([str(t) for t in ticks])
+        ax.set_xlim(min(ticks), max(ticks))
+        ax.set_ylim(None, 1.0)
+
+    bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+    if bl_labels:
+        fig.legend(
+            [baseline_handles_dict[lbl] for lbl in bl_labels],
+            bl_labels,
+            ncol=len(bl_labels),
+            loc="upper center",
+            bbox_to_anchor=(0.5, 1.12),
+            frameon=True,
+            framealpha=1,
+        )
+    ordered_variants = [v[2] for v in _DISJOINT_COMPARE if v[2] in variant_handles]
+    fig.legend(
+        [variant_handles[v] for v in ordered_variants],
+        ordered_variants,
+        ncol=len(ordered_variants),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.14),
+        frameon=True,
+        framealpha=1,
+    )
+
+    _save(f"AsymVsSym_{fname_suffix}_M32")
+
+
+def arch_comparison_asym_vs_sym_layers() -> None:
+    """Accuracy vs $L$ — Asym vs Sym, all tipology variants, M_int=32×32."""
+    _arch_comparison_asym_vs_sym(
+        sweep="layers",
+        x_col="L",
+        x_label=r"SIM Layers $L$",
+        fname_suffix="Layers",
+    )
+
+
+def arch_comparison_asym_vs_sym_snr() -> None:
+    """Accuracy vs SNR — Asym vs Sym, all tipology variants, M_int=32×32."""
+    _arch_comparison_asym_vs_sym(
+        sweep="snr",
+        x_col="snr",
+        x_label=r"Signal-to-Noise Ratio [dB]",
+        fname_suffix="SNR",
+    )
+
+
+def arch_comparison_asym_vs_sym_channel_dim() -> None:
+    """Accuracy vs channel_dim — Asym vs Sym, all tipology variants, M_int=32×32."""
+    _arch_comparison_asym_vs_sym(
+        sweep="channel_dim",
+        x_col="channel_dim",
+        x_label=r"Channel dimension $d_H$",
+        fname_suffix="ChannelDim",
+        x_log=True,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -1569,6 +1764,9 @@ def main() -> None:
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
+    arch_comparison_asym_vs_sym_layers()
+    arch_comparison_asym_vs_sym_snr()
+    arch_comparison_asym_vs_sym_channel_dim()
     accuracy_vs_n_proto()
 
     print(f"\n All plots saved to {IMG_PATH}")

@@ -211,13 +211,17 @@ def run_evaluation_mono(
     mu_out: torch.Tensor,
     clf,
     device: torch.device,
+    use_equalizer: bool = True,
 ) -> float:
-    """Evaluate a Mono-SIM (TX only) with MIMO channel and ZF/MMSE equalization.
+    """Evaluate a Mono-SIM (TX only) over a MIMO channel.
 
-    Signal model: ``ŷ = β · G_eq(H) · (H · G_T · x_w + v)`` where ``G_eq`` is
-    a zero-forcing equalizer when ``snr_db`` is ``None`` (infinite SNR, noiseless)
-    and an MMSE equalizer otherwise.  ``G_eq · H ≈ I`` so the channel is undone by
-    the equalizer alone; ``β`` is applied at the receiver after equalization.
+    Two signal models depending on ``use_equalizer``:
+
+    - ``True`` (standard): ``ŷ = β · G_eq · (H G_T x + v)`` — channel undone
+      analytically by ZF/MMSE; ``β`` aligns ``G_T`` to the target ``A``.
+    - ``False`` (constructive): ``ŷ = β · (H G_T x + v)`` — no equalizer; the
+      TX-SIM was trained with loss ``‖β H G_T − A‖²`` so ``H G_T ≈ A/β``.
+      Noise is present but not mitigated.
 
     Parameters
     ----------
@@ -230,29 +234,27 @@ def run_evaluation_mono(
     snr_db : float or None
         AWGN SNR in dB; ``None`` means noiseless.
     beta_opt : torch.Tensor
-        Optimal scalar aligning ``G_mmse H G_T`` to the target ``A``.
-    L_in : torch.Tensor
-        Cholesky factor of the TX pilot covariance.
-    mu_in : torch.Tensor
-        TX pilot mean.
-    L_out : torch.Tensor
-        Cholesky factor of the RX pilot covariance.
-    mu_out : torch.Tensor
-        RX pilot mean.
+        Optimal scalar (``⟨H G_T, A⟩/‖H G_T‖²`` for constructive,
+        ``⟨G_T, A⟩/‖G_T‖²`` for standard).
+    L_in, mu_in : torch.Tensor
+        TX whitening statistics.
+    L_out, mu_out : torch.Tensor
+        RX whitening statistics.
     clf : torch.Tensor or nn.Module
         Linear probe or neural classifier.
     device : torch.device
         Inference device.
+    use_equalizer : bool, optional
+        If ``True`` (default) apply ZF/MMSE G_eq before β.
+        If ``False`` skip G_eq (constructive pre-coding mode).
 
     Returns
     -------
     float
         Top-1 classification accuracy in ``[0, 1]``.
     """
-    # Left-inverse equalizer: ZF when snr_db is None, MMSE otherwise.  Unlike the
-    # SVD precoder/equalizer pair, G_eq alone inverts the channel (G_eq · H ≈ I),
-    # so no transmit precoding is required by the TX-only Mono-SIM.
-    G_eq = get_rx_equalizer(H_mimo, snr_db)
+    if use_equalizer:
+        G_eq = get_rx_equalizer(H_mimo, snr_db)
 
     if snr_db is not None:
         snr_linear = 10 ** (snr_db / 10)
@@ -267,17 +269,16 @@ def run_evaluation_mono(
         x_c = complex_compressed_tensor(x_real_batch.T, device=device)
         x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
 
-        # TX SIM cascade then propagation through the MIMO channel.
         y = H_mimo @ (G_T @ x_w)
 
-        # AWGN scaled to the received signal power, only when SNR is finite.
         if snr_db is not None:
             n = y.shape[1]
             sigma = torch.sqrt((torch.trace(y @ y.H) / n) / (snr_linear * pinv_trace)).real.item()
             y = y + awgn(sigma, y.shape, device=device)
 
-        # Channel equalization, then the optimal scalar β (applied at the RX).
-        y = G_eq @ y
+        if use_equalizer:
+            y = G_eq @ y
+
         y = beta_opt * y
 
         z = (L_out.to(G_T.dtype) @ y) + mu_out.to(G_T.dtype)

@@ -39,7 +39,7 @@ from semantic_alignment.data.semasia import load_semasia, select_pilots
 from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
-from semantic_alignment.experiments._utils import make_fname
+from semantic_alignment.experiments._utils import make_fname, tipology_tag
 from semantic_alignment.utils.alignment_utils import ppfe, ridge_regression
 from semantic_alignment.utils.utils import (
     complex_compressed_tensor,
@@ -74,11 +74,13 @@ def _out_path(cfg: DictConfig) -> Path | None:
     s_rx = sim.get("s_rx", None)
     n_clusters = cfg.alignment.get("n_clusters", None) if strategy == "PPFE" else None
 
-    return (
-        _RESULTS
-        / result_subdir
-        / make_fname(strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
+    topo = tipology_tag(
+        sim.get("sim_type", ""),
+        sim.get("constructive", False),
+        sim.get("alignment_side", None),
     )
+    fname = make_fname(strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
+    return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
 
 
 def _setup(cfg: DictConfig) -> dict:

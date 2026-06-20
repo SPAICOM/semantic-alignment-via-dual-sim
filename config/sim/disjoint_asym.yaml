@@ -5,6 +5,8 @@ wavelength: 0.005
 slayer_multiplier: 5
 spacing_divisor: 2
 epsilon: 1.0e-6
+constructive: false    # false: H† in target | true: H in loss (gradient flows through H)
+alignment_side: tx     # tx: alignment on TX-SIM | rx: alignment on RX-SIM
 
 L: 10
 M_int: 32

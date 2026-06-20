@@ -16,12 +16,15 @@ all: format check
 # ── SIM experiments (all via scripts/classification.py) ──────────────────────
 # Full sweeps use dedicated primary configs (config/config_*.yaml) with
 # hydra.mode=MULTIRUN so no -m flag is needed.
-# The experiment YAML's _target_ selects the runner automatically.
 #
-# Per-architecture aggregates:
-#   just joint        # = run-joint + run-joint-snr + run-joint-slayer
-#   just disjoint     # = run-disjoint-asym + run-disjoint-sym + 4-SIM variants
-#   just mono         # = run-mono + run-mono-snr
+# Topology overrides (pass as extra ARGS or use dedicated recipes below):
+#   sim.constructive=true           — H in loss instead of target
+#   sim.alignment_side=rx           — alignment on RX-SIM (asym only)
+#
+# Example:
+#   just run-disjoint-asym sim.constructive=true sim.alignment_side=rx
+
+# ── Joint Dual-SIM ────────────────────────────────────────────────────────────
 
 run-joint *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_layers {{ARGS}}
@@ -32,8 +35,14 @@ run-joint-snr *ARGS: train-clf
 run-joint-slayer *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_slayer {{ARGS}}
 
-# Run every joint Dual-SIM sweep: layers + SNR + slayer + channel-dim
+run-joint-channel-dim *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_joint_channel_dim {{ARGS}}
+
 joint: run-joint run-joint-snr run-joint-slayer run-joint-channel-dim
+
+# ── Disjoint asym ─────────────────────────────────────────────────────────────
+# Topology: alignment_side ∈ {tx, rx} × constructive ∈ {false, true}
+# Results go to results/disjoint_asym_*/tx|tx_c|rx|rx_c/
 
 run-disjoint-asym *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_layers {{ARGS}}
@@ -41,11 +50,78 @@ run-disjoint-asym *ARGS: train-clf
 run-disjoint-asym-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr {{ARGS}}
 
+run-disjoint-asym-channel-dim *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim {{ARGS}}
+
+# constructive=true, alignment_side=tx  →  tipology: tx_c
+run-disjoint-asym-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_layers sim.constructive=true {{ARGS}}
+
+run-disjoint-asym-snr-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.constructive=true {{ARGS}}
+
+run-disjoint-asym-channel-dim-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.constructive=true {{ARGS}}
+
+# constructive=false, alignment_side=rx  →  tipology: rx
+run-disjoint-asym-rx *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_layers sim.alignment_side=rx {{ARGS}}
+
+run-disjoint-asym-snr-rx *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.alignment_side=rx {{ARGS}}
+
+run-disjoint-asym-channel-dim-rx *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.alignment_side=rx {{ARGS}}
+
+# constructive=true, alignment_side=rx  →  tipology: rx_c
+run-disjoint-asym-rx-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_layers sim.constructive=true sim.alignment_side=rx {{ARGS}}
+
+run-disjoint-asym-snr-rx-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_snr sim.constructive=true sim.alignment_side=rx {{ARGS}}
+
+run-disjoint-asym-channel-dim-rx-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim sim.constructive=true sim.alignment_side=rx {{ARGS}}
+
+# Aggregates
+disjoint-asym: run-disjoint-asym run-disjoint-asym-snr run-disjoint-asym-channel-dim
+disjoint-asym-c: run-disjoint-asym-c run-disjoint-asym-snr-c run-disjoint-asym-channel-dim-c
+disjoint-asym-rx: run-disjoint-asym-rx run-disjoint-asym-snr-rx run-disjoint-asym-channel-dim-rx
+disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c run-disjoint-asym-channel-dim-rx-c
+
+# All 4 asym topologies
+disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx disjoint-asym-rx-c
+
+# ── Disjoint sym ──────────────────────────────────────────────────────────────
+# Topology: constructive ∈ {false, true}
+# Results go to results/disjoint_sym_*/standard|constructive/
+
 run-disjoint-sym *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_layers {{ARGS}}
 
 run-disjoint-sym-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_snr {{ARGS}}
+
+run-disjoint-sym-channel-dim *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_channel_dim {{ARGS}}
+
+# constructive=true  →  tipology: constructive
+run-disjoint-sym-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_layers sim.constructive=true {{ARGS}}
+
+run-disjoint-sym-snr-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_snr sim.constructive=true {{ARGS}}
+
+run-disjoint-sym-channel-dim-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_channel_dim sim.constructive=true {{ARGS}}
+
+disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
+disjoint-sym-c: run-disjoint-sym-c run-disjoint-sym-snr-c run-disjoint-sym-channel-dim-c
+disjoint-sym-all: disjoint-sym disjoint-sym-c
+
+# ── Disjoint 4-SIM ────────────────────────────────────────────────────────────
+# Topology: constructive ∈ {false, true}
+# Results go to results/disjoint_4sim_*/standard|constructive/
 
 run-disjoint-4sim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_layers {{ARGS}}
@@ -53,40 +129,30 @@ run-disjoint-4sim *ARGS: train-clf
 run-disjoint-4sim-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_snr {{ARGS}}
 
-# ── Channel-dim sweep (L=10, M_int=32, channel_dim in {1,2,4,6,8,10,20,192,384}) ──
-
-run-joint-channel-dim *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_joint_channel_dim {{ARGS}}
-
-run-disjoint-asym-channel-dim *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_asym_channel_dim {{ARGS}}
-
-run-disjoint-sym-channel-dim *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_disjoint_sym_channel_dim {{ARGS}}
-
 run-disjoint-4sim-channel-dim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_channel_dim {{ARGS}}
 
-# Run all channel-dim sweeps
-channel-dim: run-joint-channel-dim run-disjoint-asym-channel-dim run-disjoint-sym-channel-dim run-disjoint-4sim-channel-dim
+run-disjoint-4sim-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_4sim_layers sim.constructive=true {{ARGS}}
 
-# Aggregate: asymmetric disjoint (layers + SNR + channel-dim)
-disjoint-asym: run-disjoint-asym run-disjoint-asym-snr run-disjoint-asym-channel-dim
+run-disjoint-4sim-snr-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_4sim_snr sim.constructive=true {{ARGS}}
 
-# Aggregate: symmetric disjoint (layers + SNR + channel-dim)
-disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
-
-# Aggregate: 4-SIM disjoint (layers + SNR + channel-dim)
 disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
+disjoint-4sim-c: run-disjoint-4sim-c run-disjoint-4sim-snr-c
+disjoint-4sim-all: disjoint-4sim disjoint-4sim-c
 
-# Run every disjoint Dual-SIM sweep: all variants
-disjoint: disjoint-asym disjoint-sym
+# ── Cross-architecture aggregates ─────────────────────────────────────────────
 
-# Single run without multirun (useful for quick tests)
-run *ARGS: train-clf
-    uv run python scripts/classification.py {{ARGS}}
+# All standard (non-constructive) disjoint variants
+disjoint: disjoint-asym disjoint-sym disjoint-4sim
 
-# ── Mono-SIM (TX-only ablation) — same script, different config ───────────────
+# All constructive disjoint variants
+disjoint-constructive: disjoint-asym-c disjoint-sym-c disjoint-4sim-c
+
+# ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
+# Tipology: constructive ∈ {false, true}
+# Results go to results/mono*/standard|constructive/
 
 run-mono *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_layers {{ARGS}}
@@ -94,10 +160,18 @@ run-mono *ARGS: train-clf
 run-mono-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_snr {{ARGS}}
 
-# Run every Mono-SIM sweep: layers + SNR
-mono: run-mono run-mono-snr
+# constructive=true  →  tipology: constructive (loss ‖β H G_T − A‖², no G_eq at RX)
+run-mono-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_layers sim.constructive=true {{ARGS}}
 
-# ── n_proto sweep (PPFE only, L=10, M_int=32, channel_dim=20) ────────────────
+run-mono-snr-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_snr sim.constructive=true {{ARGS}}
+
+mono: run-mono run-mono-snr
+mono-c: run-mono-c run-mono-snr-c
+mono-all: mono mono-c
+
+# ── n_proto sweep (PPFE only) ─────────────────────────────────────────────────
 
 run-n-proto-joint *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_joint {{ARGS}}
@@ -108,18 +182,19 @@ run-n-proto-mono *ARGS: train-clf
 run-n-proto-disjoint-asym *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym {{ARGS}}
 
-# Run all three n_proto sweeps
 n-proto: run-n-proto-joint run-n-proto-mono run-n-proto-disjoint-asym
 
 # ── Neural classifier ─────────────────────────────────────────────────────────
-# Train one MLP per (dataset, rx_enc, seed) and save to models/classifiers/.
-# Sweep seeds and rx_enc models are defined in config/config_train_clf.yaml.
 
 train-clf *ARGS:
     uv run python scripts/train_classifier.py {{ARGS}}
 
+# ── Single run (no multirun, useful for quick tests) ─────────────────────────
+
+run *ARGS: train-clf
+    uv run python scripts/classification.py {{ARGS}}
+
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
-# Generate all plots → results/plots/
 plot:
     uv run python scripts/plot_results.py

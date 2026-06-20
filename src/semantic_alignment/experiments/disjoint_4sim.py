@@ -26,6 +26,7 @@ from ._utils import (
     pct,
     save_result,
     snr_tag,
+    tipology_tag,
 )
 
 
@@ -65,6 +66,7 @@ def run_disjoint_4sim(
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
     epsilon: float = 0.0,
+    constructive: bool = False,
     **_,
 ) -> None:
     """Run one disjoint 4-SIM (full CSI) job.
@@ -157,7 +159,10 @@ def run_disjoint_4sim(
 
     fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc)
     log_prefix = f"Disjoint4SIM L={L} M={M_int} snr={snr_tag(snr)} seed={seed}"
-    out_path = RESULTS_DIR / result_subdir / fname
+    topo = tipology_tag("disjoint_4sim", constructive)
+    out_path = (
+        RESULTS_DIR / result_subdir / topo / fname if topo else RESULTS_DIR / result_subdir / fname
+    )
     if out_path.exists():
         print(f"Skipping {out_path.name}.")
         return
@@ -219,9 +224,26 @@ def run_disjoint_4sim(
     sim_kw_base = dict(
         optimizer=optimizer, scheduler=scheduler, warmup_frac=warmup_frac, max_iters=max_iters
     )
+
+    # constructive=True: inner SIMs (T2/R2) use SVD factors in the loss so the
+    # target is identity and the channel inversion moves into the objective.
+    I_ch = torch.eye(ch_dim, dtype=torch.complex64, device=device)
+    if constructive:
+        reg_inv_sqrt_s = torch.sqrt(s / (s**2 + epsilon)).to(H_torch.dtype)
+        t2_left = torch.diag(reg_inv_sqrt_s) @ Vh  # Σ⁻¹ᐟ² Vᴴ
+        r2_right = U @ torch.diag(reg_inv_sqrt_s)  # U Σ⁻¹ᐟ²
+        t2_tgt, r2_tgt = I_ch, I_ch
+    else:
+        t2_left, r2_right = None, None
+        t2_tgt, r2_tgt = B_T, B_R
+
     t1_loss, beta_T1 = t1_model.optimize_sim(target_matrix=T_T1, lr=lr_tx, **sim_kw_base)
-    t2_loss, beta_T2 = t2_model.optimize_sim(target_matrix=B_T, lr=lr_tx, **sim_kw_base)
-    r2_loss, beta_R2 = r2_model.optimize_sim(target_matrix=B_R, lr=lr_rx, **sim_kw_base)
+    t2_loss, beta_T2 = t2_model.optimize_sim(
+        target_matrix=t2_tgt, lr=lr_tx, left_matrix=t2_left, **sim_kw_base
+    )
+    r2_loss, beta_R2 = r2_model.optimize_sim(
+        target_matrix=r2_tgt, lr=lr_rx, right_matrix=r2_right, **sim_kw_base
+    )
     r1_loss, beta_R1 = r1_model.optimize_sim(target_matrix=T_R1, lr=lr_rx, **sim_kw_base)
 
     beta_bar = complex(beta_T1) * complex(beta_T2) * complex(beta_R2) * complex(beta_R1)
@@ -314,6 +336,7 @@ def run_disjoint_4sim(
             "r2_loss": r2_loss[-1] if r2_loss else 0.0,
             "r2_loss_history": r2_loss,
             "channel_dim": ch_dim,
+            "tipology": topo,
         },
     )
     del t1_model, t2_model, r2_model, r1_model

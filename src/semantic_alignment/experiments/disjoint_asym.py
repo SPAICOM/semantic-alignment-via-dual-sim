@@ -2,6 +2,7 @@
 
 import torch
 
+from semantic_alignment.experiments._utils import tipology_tag
 from semantic_alignment.utils.utils import get_rx_equalizer
 
 
@@ -11,48 +12,73 @@ def compute_asym_targets(
     ch_dim: int,
     device,
     epsilon: float = 0.0,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute (target_tx, target_rx) for the asymmetric disjoint strategy.
+    constructive: bool = False,
+    alignment_side: str = "tx",
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor | None,
+    torch.Tensor,
+    torch.Tensor | None,
+    torch.Tensor | None,
+]:
+    """Compute the 6 matrices for the asymmetric disjoint strategy.
 
-    TX-SIM emulates A (or its truncated SVD factor when the channel is a
-    bottleneck), RX-SIM emulates Q = V diag(σ/(σ²+ε)) Uᴴ (regularized ZF).
+    Returns ``(target_tx, tx_left, tx_right, target_rx, rx_left, rx_right)``.
+    The SIM loss for each side is ``‖β (L G R) − T‖²``; ``None`` means identity.
 
-    Parameters
-    ----------
-    A_target : torch.Tensor
-        Alignment matrix of shape ``(D_rx/2, D_tx/2)``, complex64.
-    H_mimo : torch.Tensor
-        MIMO channel matrix, complex64.
-    ch_dim : int
-        Physical channel dimension.  When smaller than ``A_target.shape[0]``
-        the alignment matrix is split via truncated SVD.
-    device :
-        Target device for the returned tensors.
-    epsilon : float, optional
-        Tikhonov regularization for the ZF equalizer: ``Q = V diag(σ/(σ²+ε)) Uᴴ``.
-        Defaults to ``0.0`` (pure pseudoinverse).
+    ``alignment_side`` chooses which SIM carries the alignment matrix A:
 
-    Returns
-    -------
-    target_tx, target_rx : torch.Tensor
-        Pre-computed complex64 target matrices for the TX and RX SIMs.
+    - ``"tx"`` — alignment on TX, channel equalization on RX
+    - ``"rx"`` — alignment on RX, channel equalization on TX
+
+    ``constructive`` determines how the channel enters:
+
+    - ``False`` — H inverted analytically and baked into the target (H†)
+    - ``True``  — H placed as left/right matrix in the loss (gradient flows through H)
+
+    The resulting 2×2 combinations:
+
+    +----------------+------------------+-------------------------------------------+
+    | alignment_side | constructive     | TX (T,L,R) / RX (T,L,R)                  |
+    +================+==================+===========================================+
+    | tx             | False (standard) | (A,I,I) / (H†,I,I)                       |
+    +----------------+------------------+-------------------------------------------+
+    | tx             | True             | (A,I,I) / (I,I,H)  ← ‖β G_R H − I‖²     |
+    +----------------+------------------+-------------------------------------------+
+    | rx             | False            | (H†,I,I) / (A,I,I)                       |
+    +----------------+------------------+-------------------------------------------+
+    | rx             | True             | (I,H,I) / (A,I,I)  ← ‖β H G_T − I‖²     |
+    +----------------+------------------+-------------------------------------------+
     """
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     with torch.no_grad():
-        Q = get_rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
-        if ch_dim < A_target.shape[0]:
-            U_svd, s_svd, Vh_svd = torch.linalg.svd(A_torch, full_matrices=False)
-            k = min(ch_dim, s_svd.shape[0])
-            sqrt_s = torch.sqrt(s_svd[:k]).to(torch.complex64)
-            target_tx = torch.diag(sqrt_s) @ Vh_svd[:k, :]
-            target_rx = U_svd[:, :k] @ torch.diag(sqrt_s) @ Q
-        else:
-            target_tx = A_torch
-            target_rx = Q
+        I_ch = torch.eye(ch_dim, dtype=torch.complex64, device=device)
 
-    return target_tx, target_rx
+        if not constructive:
+            Q = get_rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
+            if alignment_side == "tx":
+                if ch_dim < A_target.shape[0]:
+                    U_s, s_s, Vh_s = torch.linalg.svd(A_torch, full_matrices=False)
+                    k = min(ch_dim, s_s.shape[0])
+                    sqrt_s = torch.sqrt(s_s[:k]).to(torch.complex64)
+                    t_tx = torch.diag(sqrt_s) @ Vh_s[:k, :]
+                    t_rx = U_s[:, :k] @ torch.diag(sqrt_s) @ Q
+                else:
+                    t_tx, t_rx = A_torch, Q
+            else:  # alignment_side == "rx"
+                t_tx, t_rx = Q, A_torch
+            return t_tx, None, None, t_rx, None, None
+
+        # constructive=True: H lives in the loss, target is I on the equalization side
+        if alignment_side == "tx":
+            # TX: ‖β G_T − A‖²,    RX: ‖β G_R H − I‖²
+            return A_torch, None, None, I_ch, None, H_torch
+        else:
+            # TX: ‖β H G_T − I‖²,  RX: ‖β G_R − A‖²
+            return I_ch, H_torch, None, A_torch, None, None
 
 
 def run_disjoint_asym(
@@ -90,81 +116,35 @@ def run_disjoint_asym(
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
     epsilon: float = 0.0,
+    constructive: bool = False,
+    alignment_side: str = "tx",
     **_,
 ) -> None:
     """Entry point for the asymmetric disjoint Dual-SIM experiment.
 
-    Computes TX/RX targets via :func:`compute_asym_targets` (TX→A, RX→regularized ZF),
-    then delegates to
-    :func:`~semantic_alignment.experiments.disjoint_2sim.run_disjoint_2sim`.
-    Accepts ``**_`` so unknown YAML metadata fields (``name``, ``sim_type``,
-    ``_target_``, etc.) are silently ignored.
-
-    Parameters
-    ----------
-    L : int
-        Number of metasurface layers per SIM.
-    M_int : int
-        Side length of the square intermediate aperture.
-    A_target : array-like
-        Alignment matrix of shape ``(D_rx/2, D_tx/2)``.
-    H_mimo : array-like
-        MIMO channel matrix.
-    test_loader : DataLoader
-        Test set yielding ``(z_tx, labels)`` pairs.
-    clf :
-        Linear probe weight matrix.
-    L_in, mu_in, L_out, mu_out : torch.Tensor
-        Whitening statistics (Cholesky factor and mean for TX and RX).
-    device : torch.device
-        Inference and optimization device.
-    result_subdir : str
-        Subdirectory under ``results/`` where the Parquet file is written.
-    strategy_name : str, optional
-        Alignment strategy label (``"Linear"`` or ``"PPFE"``).
-    seed : int, optional
-        Global random seed.
-    max_iters : int, optional
-        Optimization iterations per SIM.
-    lr_tx : float, optional
-        TX-SIM learning rate.
-    lr_rx : float, optional
-        RX-SIM learning rate.
-    clf_neural : optional
-        Optional neural classifier.
-    no_mismatch_neural, no_mismatch_probe : float or None, optional
-        No-mismatch accuracy baselines.
-    original_neural, original_probe : float or None, optional
-        Oracle linear-alignment baselines (no SIM, no channel).
-    tx_enc, rx_enc : str, optional
-        Encoder names embedded in the output filename.
-    optimizer : str, optional
-        ``"adam"`` or ``"sgd"``.
-    scheduler : str, optional
-        ``"none"`` or ``"cosine"``.
-    warmup_frac : float, optional
-        Cosine-scheduler warm-up fraction.
-    channel_dim : int or None, optional
-        Physical channel dimension override; defaults to ``max(A_target.shape)``.
-    wavelength : float, optional
-        Operating wavelength λ (metres).
-    slayer : float, optional
-        Default inter-layer spacing in wavelengths.
-    dx : float, optional
-        Meta-atom spacing (metres).
-    snr : float or None, optional
-        AWGN SNR in dB; ``None`` means noiseless.
-    epsilon : float, optional
-        Tikhonov regularization for the RX-SIM ZF equalizer target:
-        ``Q = V diag(σ/(σ²+ε)) Uᴴ``.  Defaults to ``0.0``.
+    See :func:`compute_asym_targets` for the effect of ``constructive`` and
+    ``alignment_side``.
     """
     from semantic_alignment.experiments.disjoint_2sim import run_disjoint_2sim
 
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
-    target_tx, target_rx = compute_asym_targets(A_target, H_mimo, ch_dim, device, epsilon=epsilon)
+    target_tx, tx_left, tx_right, target_rx, rx_left, rx_right = compute_asym_targets(
+        A_target,
+        H_mimo,
+        ch_dim,
+        device,
+        epsilon=epsilon,
+        constructive=constructive,
+        alignment_side=alignment_side,
+    )
     run_disjoint_2sim(
         target_tx,
         target_rx,
+        tx_left=tx_left,
+        tx_right=tx_right,
+        rx_left=rx_left,
+        rx_right=rx_right,
+        tipology_subdir=tipology_tag("disjoint_asym", constructive, alignment_side),
         L=L,
         M_int=M_int,
         A_target=A_target,
@@ -202,7 +182,7 @@ def run_disjoint_asym(
 
 
 if __name__ == "__main__":
-    print("run_disjoint_asym: asymmetric disjoint Dual-SIM runner (TX→A, RX→H†).")
+    print("run_disjoint_asym: asymmetric disjoint Dual-SIM runner.")
     print("Invoke via: just run-disjoint-asym")
     print(
         "         or: uv run python scripts/classification.py --config-name config_disjoint_asym_layers"

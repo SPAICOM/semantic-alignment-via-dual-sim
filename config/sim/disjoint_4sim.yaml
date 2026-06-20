@@ -5,6 +5,7 @@ wavelength: 0.005
 slayer_multiplier: 5
 spacing_divisor: 2
 epsilon: 1.0e-6
+constructive: false    # false: B_T/B_R in targets | true: Σ⁻¹ᐟ² factors in loss of inner SIMs
 
 L: 5              # layers per SIM; hardware equivalent to 2*L in the 2-SIM case
 M_int: 32

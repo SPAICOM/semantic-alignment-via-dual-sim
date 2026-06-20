@@ -26,7 +26,15 @@ import torch
 from semantic_alignment.evaluation.inference import run_evaluation_disjoint_fixed
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
 
-from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, snr_tag
+from ._utils import (
+    RESULTS_DIR,
+    ch_dims,
+    make_fname,
+    neural_str,
+    pct,
+    save_result,
+    snr_tag,
+)
 
 
 def run_disjoint_2sim(
@@ -65,6 +73,11 @@ def run_disjoint_2sim(
     n_clusters: int | None = None,
     lr_tx: float = 0.1,
     lr_rx: float = 0.1,
+    tx_left=None,
+    tx_right=None,
+    rx_left=None,
+    rx_right=None,
+    tipology_subdir: str = "",
     **_,
 ) -> None:
     """Run one disjoint 2-SIM job given pre-computed TX and RX target matrices.
@@ -144,7 +157,11 @@ def run_disjoint_2sim(
     fname = make_fname(
         strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
     )
-    out_path = RESULTS_DIR / result_subdir / fname
+    out_path = (
+        RESULTS_DIR / result_subdir / tipology_subdir / fname
+        if tipology_subdir
+        else RESULTS_DIR / result_subdir / fname
+    )
     if out_path.exists():
         print(f"Skipping {out_path.name}.")
         return
@@ -184,10 +201,10 @@ def run_disjoint_2sim(
         optimizer=optimizer, scheduler=scheduler, warmup_frac=warmup_frac, max_iters=max_iters
     )
     tx_loss_history, beta_T = tx_model.optimize_sim(
-        target_matrix=target_tx, lr=lr_tx, **sim_kw_base
+        target_matrix=target_tx, lr=lr_tx, left_matrix=tx_left, right_matrix=tx_right, **sim_kw_base
     )
     rx_loss_history, beta_R = rx_model.optimize_sim(
-        target_matrix=target_rx, lr=lr_rx, **sim_kw_base
+        target_matrix=target_rx, lr=lr_rx, left_matrix=rx_left, right_matrix=rx_right, **sim_kw_base
     )
 
     beta_bar = complex(beta_T) * complex(beta_R)
@@ -263,6 +280,7 @@ def run_disjoint_2sim(
             "rx_loss_history": rx_loss_history,
             "channel_dim": ch_dim,
             "n_clusters": n_clusters,
+            "tipology": tipology_subdir,
         },
     )
     del tx_model, rx_model

@@ -4,6 +4,7 @@ sim_type: mono
 wavelength: 0.005
 slayer_multiplier: 5
 spacing_divisor: 2
+constructive: false    # false: G_T≈A + G_eq at RX | true: HG_T≈A loss, no G_eq at RX
 
 L: 10
 M_int: 32

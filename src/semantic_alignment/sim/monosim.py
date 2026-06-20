@@ -289,36 +289,56 @@ class MonoSIMoptimizerTorch(nn.Module):
         optimizer: str = "adam",
         scheduler: str | None = None,
         warmup_frac: float = 0.05,
+        left_matrix=None,
+        right_matrix=None,
     ):
-        """Optimize phase shifts to minimise ``‖β G − A‖²_F / (n·m)``.
+        """Optimize phase shifts to minimise ``‖β (L G R) − T‖²_F / (n·m)``.
+
+        The effective cascade used in the loss is ``G_eff = L @ G @ R`` where
+        ``L`` (``left_matrix``) and ``R`` (``right_matrix``) are optional fixed
+        complex matrices that incorporate the channel into the objective.
+        When both are ``None`` the loss reduces to the standard ``‖β G − T‖²``.
 
         Parameters
         ----------
         target_matrix : array-like or torch.Tensor
-            Target alignment matrix A, complex.
+            Target matrix T, complex.
         max_iters : int, optional
             Number of optimization steps.
         lr : float, optional
             Learning rate.
         optimizer : str, optional
-            ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
+            ``"sgd"`` or ``"adam"`` (default).
         scheduler : str or None, optional
-            ``None`` — fixed LR (default);
-            ``"cosine"`` — constant LR for ``warmup_frac`` iters, then cosine → ``lr*1e-3``.
+            ``None`` — fixed LR; ``"cosine"`` — cosine decay after warm-up.
         warmup_frac : float, optional
-            Fraction of ``max_iters`` kept at constant LR (only for ``scheduler="cosine"``).
+            Fraction of ``max_iters`` kept at constant LR (cosine only).
+        left_matrix : torch.Tensor or None, optional
+            Fixed matrix L applied on the left: loss uses ``L @ G``.
+        right_matrix : torch.Tensor or None, optional
+            Fixed matrix R applied on the right: loss uses ``G @ R``.
 
         Returns
         -------
         loss_history : list of float
-            Per-step loss values.
         beta_f : float
-            Optimal scalar β at the final iteration.
         """
+        dev = self.xi[0].device
         if isinstance(target_matrix, torch.Tensor):
-            Target = target_matrix.clone().detach().to(self.xi[0].device).to(torch.complex64)
+            Target = target_matrix.clone().detach().to(dev).to(torch.complex64)
         else:
-            Target = torch.tensor(target_matrix, dtype=torch.complex64, device=self.xi[0].device)
+            Target = torch.tensor(target_matrix, dtype=torch.complex64, device=dev)
+
+        L = left_matrix.to(dev).to(torch.complex64).detach() if left_matrix is not None else None
+        R = right_matrix.to(dev).to(torch.complex64).detach() if right_matrix is not None else None
+
+        def _eff(G):
+            G_e = G
+            if L is not None:
+                G_e = L @ G_e
+            if R is not None:
+                G_e = G_e @ R
+            return G_e
 
         opt = self._build_optimizer(self.xi.parameters(), lr, optimizer)
         sched = self._build_scheduler(opt, scheduler, max_iters, warmup_frac, lr)
@@ -331,14 +351,16 @@ class MonoSIMoptimizerTorch(nn.Module):
         )
         for k in bar:
             with torch.no_grad():
-                G_k = self.get_cascade()
-                beta_k = torch.sum(torch.conj(G_k) * Target) / (
-                    torch.sum(torch.conj(G_k) * G_k) + 1e-12
+                G_eff_k = _eff(self.get_cascade())
+                beta_k = torch.sum(torch.conj(G_eff_k) * Target) / (
+                    torch.sum(torch.conj(G_eff_k) * G_eff_k) + 1e-12
                 )
 
             opt.zero_grad()
-            G = self.get_cascade()
-            loss = torch.norm(beta_k * G - Target, p="fro") ** 2 / (G.shape[0] * G.shape[1])
+            G_eff = _eff(self.get_cascade())
+            loss = torch.norm(beta_k * G_eff - Target, p="fro") ** 2 / (
+                G_eff.shape[0] * G_eff.shape[1]
+            )
             loss.backward()
             opt.step()
             if sched is not None:
@@ -354,9 +376,9 @@ class MonoSIMoptimizerTorch(nn.Module):
         with torch.no_grad():
             for p, best in zip(self.xi, best_xi):
                 p.copy_(best)
-            G_f = self.get_cascade()
-            beta_f = torch.sum(torch.conj(G_f) * Target) / (
-                torch.sum(torch.conj(G_f) * G_f) + 1e-12
+            G_eff_f = _eff(self.get_cascade())
+            beta_f = torch.sum(torch.conj(G_eff_f) * Target) / (
+                torch.sum(torch.conj(G_eff_f) * G_eff_f) + 1e-12
             )
 
         return loss_history, beta_f.item()
