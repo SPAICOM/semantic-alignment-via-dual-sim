@@ -16,7 +16,7 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      sim.M_int: 16,32
+      sim.M_int: 32
       alignment: linear,ppfe
       training.seed: 27,42,100
       sim.snr: -30,-20,-10,0,10,20,30
