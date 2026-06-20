@@ -138,8 +138,8 @@ _ARCH_COMPARE_VARIANTS = [
         "disjoint_4sim_channel_dim",
         True,
     ),
-    ("mono", "equalized", "Mono", False, "mono", "mono_snr", None, False),
-    ("mono", "constructive", "Mono", True, "mono", "mono_snr", None, False),
+    ("mono", "equalized", "Mono", False, "mono_layers", "mono_snr", None, False),
+    ("mono", "constructive", "Mono", True, "mono_layers", "mono_snr", None, False),
 ]
 _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
 
@@ -574,7 +574,7 @@ def accuracy_vs_thickness() -> None:
 
 def accuracy_vs_mono_layers() -> None:
     """Accuracy vs $L$ — Mono-SIM, standard tipology."""
-    df = _get_tipology("mono", "equalized")
+    df = _get_tipology("mono_layers", "equalized")
     if df is None:
         print("No mono-SIM results found.")
         return
@@ -1419,94 +1419,200 @@ def arch_comparison_channel_dim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Accuracy vs n_proto (PPFE) — Joint / Disjoint Asym / Mono
+# Accuracy vs n_proto (PPFE) — all architectures
 # ---------------------------------------------------------------------------
+
+# (subdir, tipology_filter, family, is_constructive, x_col)
+_N_PROTO_VARIANTS = [
+    ("n_proto_joint", None, "Joint", True, "n_clusters"),
+    ("n_proto_disjoint_asym", "tx", "Disjoint Asym TX", False, "n_clusters"),
+    ("n_proto_disjoint_asym", "tx_c", "Disjoint Asym TX", True, "n_clusters"),
+    ("n_proto_mono", "equalized", "Mono", False, "n_clusters"),
+    ("n_proto_mono", "constructive", "Mono", True, "n_clusters"),
+    ("n_proto_disjoint_sym", "equalized", "Disjoint Sym", False, "channel_dim"),
+    ("n_proto_disjoint_sym", "constructive", "Disjoint Sym", True, "channel_dim"),
+]
 
 
 def accuracy_vs_n_proto() -> None:
-    """Accuracy vs PPFE n_clusters — Joint, Disjoint Asym, and Mono (PPFE only).
+    """Accuracy vs PPFE n_clusters — all architectures, subplots per strategy.
 
-    Fixed: L=10, M_int=32×32, channel_dim=20, no noise.
-    Architecture comparison averaged across seeds.
+    SIM accuracy: color = family, linestyle = constructive (solid) / equalized (dashed).
+    Oracle: same color, dotted, no marker.
+    No Mismatch: black horizontal line.
     """
-    frames = {}
-    for key, subdir, arch_label in [
-        ("joint", "n_proto_joint", "Joint"),
-        ("disjoint_asym", "n_proto_disjoint_asym", "Disjoint Asym"),
-        ("mono", "n_proto_mono", "Mono"),
-    ]:
-        df = _get(subdir)
+    from matplotlib.lines import Line2D
+
+    acc_col = "sim_accuracy_neural"
+    oracle_col = "original_neural"
+
+    frames = []
+    for subdir, topo, family, is_constructive, x_col in _N_PROTO_VARIANTS:
+        df = _get_tipology(subdir, topo) if topo is not None else _get(subdir)
         if df is None:
             continue
-        df = df.with_columns(pl.lit(arch_label).alias("Architecture"))
-        if not df.is_empty():
-            frames[key] = df
+        df = df.with_columns(
+            pl.col(x_col).alias("_n_proto"),
+            pl.lit(family).alias("_family"),
+            pl.lit(is_constructive).alias("_constructive"),
+        )
+        frames.append(df)
 
     if not frames:
         print("No n_proto results found — run 'just n-proto' first.")
         return
 
-    acc_col = "sim_accuracy_neural"
+    needed = [
+        "_n_proto",
+        "strategy",
+        "_family",
+        "_constructive",
+        acc_col,
+        oracle_col,
+        "no_mismatch_neural",
+    ]
     df_all = pl.concat(
-        [
-            f.select(
-                ["n_clusters", "Architecture", acc_col, "no_mismatch_neural", "original_neural"]
-            )
-            for f in frames.values()
-        ],
+        [f.select([c for c in needed if c in f.columns]) for f in frames],
         how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
-
-    if df_all["n_clusters"].drop_nulls().is_empty():
-        print("n_clusters column missing — re-run experiments with the updated code.")
-        return
-
-    arch_labels = sorted(df_all["Architecture"].unique().to_list())
-    ticks = sorted(df_all["n_clusters"].drop_nulls().unique().to_list())
-
-    ax = sns.lineplot(
-        df_all.to_pandas(),
-        x="n_clusters",
-        y="accuracy",
-        hue="Architecture",
-        hue_order=[a for a in _ARCH_ORDER if a in arch_labels],
-        palette=_ARCH_PALETTE,
-        style="Architecture",
-        markers={a: _ARCH_MARKERS[a] for a in _ARCH_ORDER if a in arch_labels},
-        dashes=False,
-        markersize=10,
+    ).with_columns(
+        (pl.col(acc_col) / 100).alias("accuracy"),
+        (pl.col(oracle_col) / 100).alias("oracle"),
     )
-    baseline_labels = _add_baseline_hlines(df_all)
 
-    handles, labels = ax.get_legend_handles_labels()
+    strat_list = sorted(df_all["strategy"].unique().to_list())
 
-    def _make_legend(lbl_list, title, **kwargs):
-        hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
-        return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
-
-    leg1 = _make_legend(
-        arch_labels,
-        "Architecture",
-        ncol=len(arch_labels),
-        loc="lower right",
-        bbox_to_anchor=(1.0, 0.0),
+    fig, axes = plt.subplots(
+        1,
+        len(strat_list),
+        sharey=True,
+        squeeze=False,
+        figsize=(8 * len(strat_list), 6),
+        layout="constrained",
     )
-    leg2 = _make_legend(
-        baseline_labels,
-        "",
-        ncol=len(baseline_labels),
+
+    family_handles: dict[str, object] = {}
+
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df_all.filter(pl.col("strategy") == strategy)
+
+        for _, topo, family, is_constructive, _ in _N_PROTO_VARIANTS:
+            color = _ARCH_FAMILY_COLORS.get(family, "gray")
+            marker = _ARCH_FAMILY_MARKERS.get(family, "o")
+            ls = "-" if is_constructive else "--"
+
+            subdf = df_s.filter(
+                (pl.col("_family") == family) & (pl.col("_constructive") == is_constructive)
+            )
+            if subdf.is_empty():
+                continue
+
+            xs = sorted(subdf["_n_proto"].drop_nulls().unique().to_list())
+            ys, ys_se, ys_or = [], [], []
+            for x in xs:
+                vals = subdf.filter(pl.col("_n_proto") == x)["accuracy"].drop_nulls()
+                n = vals.len()
+                ys.append(vals.mean() if n > 0 else None)
+                ys_se.append(vals.std() / n**0.5 if n > 1 else 0.0)
+                ov = subdf.filter(pl.col("_n_proto") == x)["oracle"].drop_nulls()
+                ys_or.append(ov.mean() if ov.len() > 0 else None)
+
+            xs_clean = [x for x, y in zip(xs, ys) if y is not None]
+            ys_clean = [y for y in ys if y is not None]
+            se_clean = [se for y, se in zip(ys, ys_se) if y is not None]
+            if xs_clean:
+                (line,) = ax.plot(
+                    xs_clean,
+                    ys_clean,
+                    color=color,
+                    linestyle=ls,
+                    marker=marker,
+                    markersize=10,
+                    linewidth=1.5,
+                    alpha=0.9,
+                )
+                ax.fill_between(
+                    xs_clean,
+                    [y - 1.96 * se for y, se in zip(ys_clean, se_clean)],
+                    [y + 1.96 * se for y, se in zip(ys_clean, se_clean)],
+                    color=color,
+                    alpha=0.12,
+                )
+                if family not in family_handles:
+                    family_handles[family] = line
+
+            xs_or = [x for x, y in zip(xs, ys_or) if y is not None]
+            ys_or_clean = [y for y in ys_or if y is not None]
+            if xs_or:
+                ax.plot(xs_or, ys_or_clean, color=color, linestyle=":", linewidth=1.5, alpha=0.7)
+
+        nm = df_s["no_mismatch_neural"].drop_nulls().mean()
+        if nm is not None:
+            ax.axhline(y=nm / 100, color="black", linestyle="-", linewidth=2.5)
+
+        ax.set_title(strategy)
+        ax.set_xlabel(r"PPFE $n_{\rm clusters}$")
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        ax.set_xscale("log")
+        ticks = sorted(df_s["_n_proto"].drop_nulls().unique().to_list())
+        if ticks:
+            ax.set_xticks(ticks)
+            ax.set_xticklabels([str(t) for t in ticks])
+            ax.set_xlim(min(ticks), max(ticks))
+        ax.set_ylim(None, 1.0)
+
+    # No Mismatch + Oracle legend (top)
+    fig.legend(
+        [
+            Line2D([0], [0], color="black", ls="-", lw=2.5),
+            Line2D([0], [0], color="gray", ls=":", lw=1.5),
+        ],
+        ["No Mismatch", "Oracle"],
+        ncol=2,
         loc="upper center",
         bbox_to_anchor=(0.5, 1.12),
+        frameon=True,
+        framealpha=1,
     )
-    ax.add_artist(leg1)
-    ax.add_artist(leg2)
 
-    plt.xscale("log")
-    plt.xticks(ticks, labels=[str(k) for k in ticks])
-    plt.xlim(min(ticks), max(ticks))
-    plt.ylim(None, 1.0)
-    plt.xlabel(r"PPFE $n_{\rm clusters}$")
-    plt.ylabel("Accuracy")
+    # Family legend (bottom left)
+    ordered_families = [f for f in _ARCH_FAMILIES if f in family_handles]
+    fig.legend(
+        [
+            Line2D(
+                [0],
+                [0],
+                color=_ARCH_FAMILY_COLORS[f],
+                marker=_ARCH_FAMILY_MARKERS[f],
+                ls="none",
+                markersize=10,
+            )
+            for f in ordered_families
+        ],
+        ordered_families,
+        ncol=len(ordered_families),
+        loc="lower left",
+        bbox_to_anchor=(0.0, -0.12),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
+
+    # Constructive / Equalized legend (bottom right)
+    fig.legend(
+        [
+            Line2D([0], [0], color="gray", ls="-", lw=1.5),
+            Line2D([0], [0], color="gray", ls="--", lw=1.5),
+        ],
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
+        ncol=2,
+        loc="lower right",
+        bbox_to_anchor=(1.0, -0.12),
+        frameon=True,
+        framealpha=1,
+    )
+
     _save("AccuracyVsNProto")
 
 

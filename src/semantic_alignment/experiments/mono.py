@@ -53,6 +53,7 @@ def run_mono_sim(
     dx: float = 0.0025,
     n_clusters: int | None = None,
     constructive: bool = False,
+    result_subdir: str = "",
     **_,
 ) -> None:
     """Run one Mono-SIM (TX-only) job.
@@ -64,7 +65,7 @@ def run_mono_sim(
     - ``True``: loss ``‖β H G_T − A‖²`` (H in the loss; SIM learns pre-coding),
       inference ``ẑ = β · (H · G_T · x + noise)`` — no G_eq, noise not mitigated.
     """
-    subdir = "mono_snr" if snr is not None else "mono"
+    subdir = result_subdir if result_subdir else ("mono_snr" if snr is not None else "mono_layers")
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
     tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))

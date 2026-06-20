@@ -7,6 +7,10 @@ defaults:
   - classifier: default
   - _self_
 
+sim:
+  name: mono_layers
+  result_subdir: mono_layers
+
 hydra:
   mode: MULTIRUN
   sweeper:

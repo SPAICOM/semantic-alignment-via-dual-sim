@@ -182,7 +182,21 @@ run-n-proto-mono *ARGS: train-clf
 run-n-proto-disjoint-asym *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym {{ARGS}}
 
-n-proto: run-n-proto-joint run-n-proto-mono run-n-proto-disjoint-asym
+run-n-proto-disjoint-sym *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym {{ARGS}}
+
+run-n-proto-disjoint-sym-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym_c {{ARGS}}
+
+run-n-proto-disjoint-asym-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym_c {{ARGS}}
+
+run-n-proto-mono-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_mono_c {{ARGS}}
+
+n-proto: run-n-proto-joint run-n-proto-mono run-n-proto-disjoint-asym run-n-proto-disjoint-sym
+n-proto-c: run-n-proto-disjoint-sym-c run-n-proto-disjoint-asym-c run-n-proto-mono-c
+n-proto-all: n-proto n-proto-c
 
 # ── Neural classifier ─────────────────────────────────────────────────────────
 

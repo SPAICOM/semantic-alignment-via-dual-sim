@@ -1,0 +1,19 @@
+defaults:
+  - sim: disjoint_sym
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: disjoint
+  - classifier: default
+  - _self_
+
+sim:
+  name: n_proto_disjoint_sym
+  result_subdir: n_proto_disjoint_sym
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.channel_dim: 2,5,10,15,20,50,100,200
+      training.seed: 27,42,100
