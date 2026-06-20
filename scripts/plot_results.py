@@ -1565,6 +1565,157 @@ def accuracy_vs_n_proto() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Loss curves by tipology
+# ---------------------------------------------------------------------------
+
+# Sym: color=L, linestyle=tipology
+_SYM_TOPO_STYLES = [
+    ("standard", "-", "standard"),
+    ("constructive", "--", "constructive"),
+]
+
+# Asym: color=tipology-family, linestyle=constructive flag
+_ASYM_TOPO_STYLES = [
+    ("tx", "#1f77b4", "-", "tx"),
+    ("tx_c", "#aec7e8", "--", "tx (C)"),
+    ("rx", "#ff7f0e", "-", "rx"),
+    ("rx_c", "#ffbb78", "--", "rx (C)"),
+]
+
+
+def _loss_curves_sym_tipology(col: str, loss_label: str, fname: str) -> None:
+    """Loss curves for Disjoint Sym — standard vs constructive.
+
+    Grid: rows = strategies, cols = M_int.
+    Color = L (viridis colorbar), linestyle = tipology (solid=standard, dashed=constructive).
+    """
+    from matplotlib.lines import Line2D
+
+    frames = {}
+    for topo, ls, label in _SYM_TOPO_STYLES:
+        df = _get_tipology("disjoint_sym_layers", topo)
+        if df is not None and not df.is_empty():
+            frames[topo] = df.filter(pl.col("strategy").is_in(STRATEGIES))
+
+    if not frames:
+        print(f"No disjoint_sym data for loss curves ({loss_label}).")
+        return
+
+    all_df = pl.concat(list(frames.values()), how="diagonal_relaxed")
+    m_ints = sorted(all_df["M_int"].unique().to_list())
+    L_values = sorted(all_df["L"].unique().to_list())
+    fig, axes, cmap, norm = _setup_loss_grid(STRATEGIES, m_ints, L_values)
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            for topo, ls, _ in _SYM_TOPO_STYLES:
+                if topo not in frames:
+                    continue
+                sub = frames[topo].filter(
+                    (pl.col("strategy") == strategy) & (pl.col("M_int") == m_int)
+                )
+                _plot_loss_col(ax, sub, L_values, cmap, norm, col, linestyle=ls)
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\n{loss_label}")
+            if r == len(STRATEGIES) - 1:
+                ax.set_xlabel("Iteration")
+
+    topo_legend = [
+        Line2D([0], [0], color="gray", ls=ls, lw=1.5, label=label)
+        for _, ls, label in _SYM_TOPO_STYLES
+    ]
+    axes[0][0].legend(handles=topo_legend, loc="upper right", framealpha=1, title="Tipology")
+    _add_loss_colorbar(fig, axes, cmap, norm, L_values)
+    _save(fname)
+
+
+def loss_curves_disjoint_sym_tipology() -> None:
+    """TX and RX loss curves — Disjoint Sym, standard vs constructive."""
+    _loss_curves_sym_tipology("loss_history", "TX Loss", "LossCurves_DisjointSym_Tipology_TX")
+    _loss_curves_sym_tipology("rx_loss_history", "RX Loss", "LossCurves_DisjointSym_Tipology_RX")
+
+
+def _loss_curves_asym_tipology(col: str, loss_label: str, fname: str) -> None:
+    """Loss curves for Disjoint Asym — all 4 tipologies (tx, tx_c, rx, rx_c).
+
+    Grid: rows = strategies, cols = M_int.
+    Curves are averaged over seeds; color and linestyle encode tipology.
+    L dimension is averaged to keep the plot readable.
+    """
+    from matplotlib.lines import Line2D
+
+    frames = {}
+    for topo, color, ls, label in _ASYM_TOPO_STYLES:
+        df = _get_tipology("disjoint_asym_layers", topo)
+        if df is not None and not df.is_empty():
+            frames[topo] = df.filter(pl.col("strategy").is_in(STRATEGIES))
+
+    if not frames:
+        print(f"No disjoint_asym data for loss curves ({loss_label}).")
+        return
+
+    all_df = pl.concat(list(frames.values()), how="diagonal_relaxed")
+    m_ints = sorted(all_df["M_int"].unique().to_list())
+
+    fig, axes = plt.subplots(
+        len(STRATEGIES),
+        len(m_ints),
+        figsize=(5 * len(m_ints), 4 * len(STRATEGIES)),
+        sharey="row",
+        sharex=True,
+        squeeze=False,
+        layout="constrained",
+    )
+
+    for r, strategy in enumerate(STRATEGIES):
+        for c, m_int in enumerate(m_ints):
+            ax = axes[r][c]
+            for topo, color, ls, label in _ASYM_TOPO_STYLES:
+                if topo not in frames:
+                    continue
+                sub = frames[topo].filter(
+                    (pl.col("strategy") == strategy) & (pl.col("M_int") == m_int)
+                )
+                if sub.is_empty():
+                    continue
+                valid = [list(h) for h in sub[col] if h is not None]
+                if not valid:
+                    continue
+                avg = np.mean(np.array(valid), axis=0)
+                ax.plot(
+                    np.arange(len(avg)),
+                    avg,
+                    color=color,
+                    linestyle=ls,
+                    linewidth=1.2,
+                    alpha=0.9,
+                    label=label,
+                )
+            if r == 0:
+                ax.set_title(rf"$M_{{\rm int}}$ = {m_int}")
+            if c == 0:
+                ax.set_ylabel(f"{strategy}\n{loss_label}")
+            if r == len(STRATEGIES) - 1:
+                ax.set_xlabel("Iteration")
+
+    topo_legend = [
+        Line2D([0], [0], color=color, ls=ls, lw=1.5, label=label)
+        for _, color, ls, label in _ASYM_TOPO_STYLES
+    ]
+    axes[0][0].legend(handles=topo_legend, loc="upper right", framealpha=1, title="Tipology")
+    _save(fname)
+
+
+def loss_curves_disjoint_asym_tipology() -> None:
+    """TX and RX loss curves — Disjoint Asym, all 4 tipologies."""
+    _loss_curves_asym_tipology("loss_history", "TX Loss", "LossCurves_DisjointAsym_Tipology_TX")
+    _loss_curves_asym_tipology("rx_loss_history", "RX Loss", "LossCurves_DisjointAsym_Tipology_RX")
+
+
+# ---------------------------------------------------------------------------
 # Asym vs Sym comparison — all tipology variants
 # ---------------------------------------------------------------------------
 
@@ -1761,6 +1912,8 @@ def main() -> None:
     loss_curves_disjoint_asym_layers()
     loss_curves_disjoint_sym_layers()
     loss_curves_disjoint_4sim_layers()
+    loss_curves_disjoint_sym_tipology()
+    loss_curves_disjoint_asym_tipology()
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()

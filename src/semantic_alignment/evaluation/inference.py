@@ -4,23 +4,23 @@ All functions share the same whitening convention:
     x_white = L_in⁻¹ (x_complex − μ_in)
     ŷ       = L_out · y_received + μ_out
 
-where L_in, μ_in come from prewhitening the TX pilots and L_out, μ_out from the
-RX pilots.  The received signal y_received is then fed to a classifier (linear
-probe or neural MLP) to obtain top-1 class predictions.
+**Noise power convention**
+AWGN sigma is defined relative to the *transmitted* signal power, which equals 1
+because the TX embeddings are whitened.  Therefore:
 
-**Beta placement (TX-side scaling)**
-β is applied at the transmitter: the transmitted signal is ``β · x_white``, so
-the full received signal is ``Z · (β x) + v = β Z x + v``.  Noise enters
-*after* β, so it is **not** scaled by β.  The SNR normalisation accounts for
-the β-scaled signal power automatically (σ is derived from ``β Z x``).
+    σ = 1 / √SNR_linear
+
+This is computed once outside the batch loop and is the same for every batch.
 
 Functions
 ---------
 run_evaluation              — joint Dual-SIM (G_R · H · G_T), optional AWGN.
 run_evaluation_mmse         — digital MMSE/ZF baseline (no SIM).
-run_evaluation_mono         — TX-only SIM with MMSE equalizer at RX.
+run_evaluation_mono         — TX-only SIM with optional MMSE equalizer at RX.
 run_evaluation_disjoint_fixed — disjoint Dual-SIM with frozen TX and RX cascades.
 """
+
+import math
 
 import numpy as np
 import torch
@@ -33,7 +33,6 @@ from semantic_alignment.utils.utils import (
     complex_compressed_tensor,
     decompress_complex_tensor,
     get_rx_equalizer,
-    sigma_given_snr,
 )
 
 
@@ -93,8 +92,8 @@ def run_evaluation(
         G_T = model.get_TX_cascade()
         G_R = model.get_RX_cascade()
 
-    if snr_db is not None:
-        snr_linear = 10 ** (snr_db / 10)
+    # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -103,12 +102,8 @@ def run_evaluation(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # β applied at TX: transmitted signal is β·x, so received cascade output
-        # is β·G_R·H·G_T·x.  AWGN is added after, not scaled by β.
         y_sig = beta_opt * (G_R @ (H_mimo @ (G_T @ x_white)))
-        if snr_db is not None:
-            n = y_sig.shape[1]
-            sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
+        if sigma is not None:
             y = y_sig + awgn(sigma, y_sig.shape, device=device)
         else:
             y = y_sig
@@ -170,6 +165,8 @@ def run_evaluation_mmse(
     """
     all_preds, all_labels = [], []
     G_mmse = get_rx_equalizer(H_mimo, snr_db)
+    # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -184,8 +181,10 @@ def run_evaluation_mmse(
         x_padded = torch.cat([x_white, padding], dim=0)
 
         y_signal = H_mimo @ x_padded
-        sigma_v = sigma_given_snr(snr_db, y_signal)
-        y_received = y_signal + awgn(sigma_v, y_signal.shape, device=device)
+        if sigma is not None:
+            y_received = y_signal + awgn(sigma, y_signal.shape, device=device)
+        else:
+            y_received = y_signal
 
         x_recovered = (G_mmse @ y_received)[:D_tx, :]
         z_hat_complex = A_target @ x_recovered
@@ -256,10 +255,8 @@ def run_evaluation_mono(
     if use_equalizer:
         G_eq = get_rx_equalizer(H_mimo, snr_db)
 
-    if snr_db is not None:
-        snr_linear = 10 ** (snr_db / 10)
-        H_pinv = torch.linalg.pinv(H_mimo)
-        pinv_trace = torch.trace(H_pinv.H @ H_pinv)
+    # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
     all_preds, all_labels = [], []
     for x_real_batch, labels_batch in dataloader:
@@ -271,9 +268,7 @@ def run_evaluation_mono(
 
         y = H_mimo @ (G_T @ x_w)
 
-        if snr_db is not None:
-            n = y.shape[1]
-            sigma = torch.sqrt((torch.trace(y @ y.H) / n) / (snr_linear * pinv_trace)).real.item()
+        if sigma is not None:
             y = y + awgn(sigma, y.shape, device=device)
 
         if use_equalizer:
@@ -352,8 +347,8 @@ def run_evaluation_disjoint_fixed(
         G_T = tx_model.get_cascade()
         G_R = rx_model.get_cascade()
 
-    if snr_db is not None:
-        snr_linear = 10 ** (snr_db / 10)
+    # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
@@ -362,12 +357,8 @@ def run_evaluation_disjoint_fixed(
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
 
-        # β applied at TX: transmitted signal is β·x, so received cascade output
-        # is β·G_R·H·G_T·x.  AWGN is added after, not scaled by β.
         y_sig = beta_global * (G_R @ (H_mimo @ (G_T @ x_white)))
-        if snr_db is not None:
-            n = y_sig.shape[1]
-            sigma = torch.sqrt((torch.trace(y_sig @ y_sig.H) / n) / snr_linear).real.item()
+        if sigma is not None:
             y = y_sig + awgn(sigma, y_sig.shape, device=device)
         else:
             y = y_sig
