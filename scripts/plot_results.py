@@ -1417,6 +1417,7 @@ _N_PROTO_VARIANTS = [
     ("n_proto_joint", None, "Joint", True, "n_clusters"),
     ("n_proto_disjoint_asym", "equalized/tx", "Disjoint Asym TX", False, "n_clusters"),
     ("n_proto_disjoint_asym", "constructive/tx", "Disjoint Asym TX", True, "n_clusters"),
+    ("n_proto_disjoint_asym", "constructive/rx", "Disjoint Asym RX", True, "n_clusters"),
     ("n_proto_mono", "equalized", "Mono", False, "n_clusters"),
     ("n_proto_mono", "constructive", "Mono", True, "n_clusters"),
     ("n_proto_disjoint_sym", "equalized", "Disjoint Sym", False, "channel_dim"),
