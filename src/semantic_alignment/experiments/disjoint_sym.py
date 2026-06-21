@@ -35,9 +35,9 @@ def compute_sym_targets(
 
     ``constructive=True``:
         Alignment-only targets; H's SVD factors sit in the loss matrices:
-        TX: ``T = T_T``, ``L = Σ⁻¹ᐟ² Vᴴ``;
-        RX: ``T = T_R``, ``R = U Σ⁻¹ᐟ²``.
-        The SIM learns a better-conditioned target (no Σ⁻¹ in the target itself).
+        TX: ``T = T_T``, ``L = Σ¹ᐟ² Vᴴ``;
+        RX: ``T = T_R``, ``R = U Σ¹ᐟ²``.
+        The SIM learns a better-conditioned target (no Σ¹ in the target itself).
     """
     A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
@@ -72,9 +72,12 @@ def compute_sym_targets(
                 B_R = B_R[:ch_dim, :ch_dim]
             return (B_T @ T_T).detach(), None, None, (T_R @ B_R).detach(), None, None
 
-        # constructive=True: Σ⁻¹ᐟ² factors in the loss, alignment-only targets
-        tx_left = torch.diag(reg_inv_sqrt_s) @ Vh  # Σ⁻¹ᐟ² Vᴴ
-        rx_right = U @ torch.diag(reg_inv_sqrt_s)  # U Σ⁻¹ᐟ²
+        # constructive=True: regularised Σ^{1/2} factors in the loss.
+        # reg_sqrt_s = sqrt(σ²/(σ+ε)) = σ/sqrt(σ+ε)  →  σ^{1/2} for large σ, 0 for σ→0.
+        # Ideal cascade: G_R H G_T = T_R Σ^{-1/2} Σ Σ^{-1/2} T_T = T_R T_T = A  ✓
+        reg_sqrt_s = torch.sqrt(s**2 / (s + epsilon)).to(H_torch.dtype)
+        tx_left = torch.diag(reg_sqrt_s) @ Vh  # Σ^{1/2} Vᴴ  (regularised)
+        rx_right = U @ torch.diag(reg_sqrt_s)  # U Σ^{1/2}   (regularised)
         return T_T.detach(), tx_left, None, T_R.detach(), None, rx_right
 
 
