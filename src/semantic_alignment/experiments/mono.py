@@ -53,6 +53,7 @@ def run_mono_sim(
     dx: float = 0.0025,
     n_clusters: int | None = None,
     constructive: bool = False,
+    use_mmse: bool = False,
     result_subdir: str = "",
     **_,
 ) -> None:
@@ -61,9 +62,14 @@ def run_mono_sim(
     ``constructive`` selects the training loss and inference path:
 
     - ``False`` (standard): loss ``‖β G_T − A‖²``, inference
-      ``ẑ = β · G_eq · H · G_T · x`` (G_eq = ZF/MMSE inverts H analytically).
+      ``ẑ = β · G_eq · H · G_T · x`` (G_eq controlled by ``use_mmse``).
     - ``True``: loss ``‖β H G_T − A‖²`` (H in the loss; SIM learns pre-coding),
       inference ``ẑ = β · (H · G_T · x + noise)`` — no G_eq, noise not mitigated.
+
+    ``use_mmse`` (only active when ``constructive=False``):
+
+    - ``False`` (default): ZF equalizer — G_eq = H† (pseudoinverse).
+    - ``True``: MMSE equalizer — G_eq regularized with ``snr``.
     """
     subdir = result_subdir if result_subdir else ("mono_snr" if snr is not None else "mono_layers")
     ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
@@ -134,6 +140,7 @@ def run_mono_sim(
             mu_out=mu_out,
             device=device,
             use_equalizer=not constructive,
+            mmse=use_mmse,
         )
         mono_probe = run_evaluation_mono(clf=clf, **eval_kw)
         mono_neural = (

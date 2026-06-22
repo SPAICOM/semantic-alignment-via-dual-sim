@@ -1153,13 +1153,27 @@ def _arch_comparison_generic(
                 [baseline_handles_dict[lbl] for lbl in bl_labels],
                 bl_labels,
                 ncol=len(bl_labels),
-                loc="upper center",
-                bbox_to_anchor=(0.5, 1.12),
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.12),
                 frameon=True,
                 framealpha=1,
             )
 
-    # Family legend (bottom-left): color + marker with solid line, no linestyle encoding
+    ls_handles = [
+        Line2D([0], [0], color="gray", ls="-", lw=1.5),
+        Line2D([0], [0], color="gray", ls="--", lw=1.5),
+    ]
+    fig.legend(
+        ls_handles,
+        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
+        ncol=2,
+        loc="upper right",
+        bbox_to_anchor=(1.0, 1.12),
+        frameon=True,
+        framealpha=1,
+    )
+
+    # Family legend (bottom-center): color + marker with solid line, no linestyle encoding
     ordered_families = [f for f in _ARCH_FAMILIES if f in family_handles]
     family_legend_handles = [
         Line2D(
@@ -1176,26 +1190,12 @@ def _arch_comparison_generic(
         family_legend_handles,
         ordered_families,
         ncol=len(ordered_families),
-        loc="lower left",
-        bbox_to_anchor=(0.0, -0.12),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.12),
         frameon=True,
         framealpha=1,
         columnspacing=0.8,
         handletextpad=0.4,
-    )
-
-    ls_handles = [
-        Line2D([0], [0], color="gray", ls="-", lw=1.5),
-        Line2D([0], [0], color="gray", ls="--", lw=1.5),
-    ]
-    fig.legend(
-        ls_handles,
-        [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
-        ncol=2,
-        loc="lower right",
-        bbox_to_anchor=(1.0, -0.12),
-        frameon=True,
-        framealpha=1,
     )
 
     _save(fname)

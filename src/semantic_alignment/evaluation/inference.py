@@ -211,6 +211,7 @@ def run_evaluation_mono(
     clf,
     device: torch.device,
     use_equalizer: bool = True,
+    mmse: bool = False,
 ) -> float:
     """Evaluate a Mono-SIM (TX only) over a MIMO channel.
 
@@ -246,6 +247,10 @@ def run_evaluation_mono(
     use_equalizer : bool, optional
         If ``True`` (default) apply ZF/MMSE G_eq before β.
         If ``False`` skip G_eq (constructive pre-coding mode).
+    mmse : bool, optional
+        Selects the RX equalizer type when ``use_equalizer=True``.
+        ``False`` (default): ZF — ``G_eq = H†`` (pseudoinverse, ignores SNR).
+        ``True``: MMSE — ``G_eq`` regularized with ``snr_db``.
 
     Returns
     -------
@@ -253,7 +258,8 @@ def run_evaluation_mono(
         Top-1 classification accuracy in ``[0, 1]``.
     """
     if use_equalizer:
-        G_eq = get_rx_equalizer(H_mimo, snr_db)
+        eq_snr = snr_db if mmse else None
+        G_eq = get_rx_equalizer(H_mimo, eq_snr)
 
     # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
     sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
