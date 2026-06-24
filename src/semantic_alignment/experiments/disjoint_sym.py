@@ -118,6 +118,7 @@ def run_disjoint_sym(
     lr_rx: float = 0.1,
     epsilon: float = 0.0,
     constructive: bool = False,
+    dataset: str = "cifar10",
     **_,
 ) -> None:
     """Entry point for the symmetric (full-CSI) disjoint Dual-SIM experiment.
@@ -179,6 +180,7 @@ def run_disjoint_sym(
         snr=snr,
         lr_tx=lr_tx,
         lr_rx=lr_rx,
+        dataset=dataset,
     )
 
 

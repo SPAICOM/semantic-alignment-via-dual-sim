@@ -125,6 +125,7 @@ def make_fname(
     s_tx: int | None = None,
     s_rx: int | None = None,
     n_clusters: int | None = None,
+    dataset: str = "cifar10",
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
 
@@ -132,12 +133,13 @@ def make_fname(
     and ``"inf"`` for SNR so filenames are self-documenting without branching.
     When ``n_clusters`` is provided (PPFE n-clusters sweep), ``_k{n_clusters}``
     is appended before the encoder suffix.
+    The filename is prefixed with ``{dataset}_``.
     """
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
     k_tag = f"_k{n_clusters}" if n_clusters is not None else ""
     return (
-        f"{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
+        f"{dataset}_{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
         f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}"
         f"_{tx_enc}_{rx_enc}.parquet"
     )

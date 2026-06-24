@@ -127,6 +127,7 @@ def run_joint_sim(
     n_clusters: int | None = None,
     lr_tx: float = 0.1,
     lr_rx: float = 0.2,
+    dataset: str = "cifar10",
     **_,
 ) -> None:
     """Run one joint Dual-SIM job.
@@ -212,7 +213,18 @@ def run_joint_sim(
 
     is_slayer = s_tx is not None and s_rx is not None
     fname = make_fname(
-        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, s_tx, s_rx, n_clusters
+        strategy_name,
+        seed,
+        L,
+        M_int,
+        ch_dim,
+        snr,
+        tx_enc,
+        rx_enc,
+        s_tx,
+        s_rx,
+        n_clusters,
+        dataset=dataset,
     )
     log_prefix = (
         f"s_tx={s_tx}λ s_rx={s_rx}λ seed={seed}"
@@ -314,6 +326,7 @@ def run_joint_sim(
             "rx_loss_history": None,
             "channel_dim": ch_dim,
             "n_clusters": n_clusters,
+            "dataset": dataset,
         },
     )
     del model

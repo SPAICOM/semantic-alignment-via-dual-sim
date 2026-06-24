@@ -54,6 +54,7 @@ def run_mono_sim(
     n_clusters: int | None = None,
     constructive: bool = False,
     use_mmse: bool = False,
+    dataset: str = "cifar10",
     result_subdir: str = "",
     **_,
 ) -> None:
@@ -77,7 +78,16 @@ def run_mono_sim(
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
     fname = make_fname(
-        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
+        strategy_name,
+        seed,
+        L,
+        M_int,
+        ch_dim,
+        snr,
+        tx_enc,
+        rx_enc,
+        n_clusters=n_clusters,
+        dataset=dataset,
     )
     tipo = tipology_tag("mono", constructive)
     out_path = RESULTS_DIR / subdir / tipo / fname if tipo else RESULTS_DIR / subdir / fname
@@ -185,6 +195,7 @@ def run_mono_sim(
             "n_clusters": n_clusters,
             "tipology": tipo,
             "constructive": constructive,
+            "dataset": dataset,
         },
     )
     del tx_model

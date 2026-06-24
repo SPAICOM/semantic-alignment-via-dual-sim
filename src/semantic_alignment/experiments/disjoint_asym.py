@@ -111,6 +111,7 @@ def run_disjoint_asym(
     epsilon: float = 0.0,
     constructive: bool = False,
     alignment_side: str = "tx",
+    dataset: str = "cifar10",
     **_,
 ) -> None:
     """Entry point for the asymmetric disjoint Dual-SIM experiment.
@@ -182,6 +183,7 @@ def run_disjoint_asym(
         n_clusters=n_clusters,
         lr_tx=lr_tx,
         lr_rx=lr_rx,
+        dataset=dataset,
     )
 
 

@@ -67,6 +67,7 @@ def run_disjoint_4sim(
     lr_rx: float = 0.1,
     epsilon: float = 0.0,
     constructive: bool = False,
+    dataset: str = "cifar10",
     **_,
 ) -> None:
     """Run one disjoint 4-SIM (full CSI) job.
@@ -157,7 +158,7 @@ def run_disjoint_4sim(
     tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
-    fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc)
+    fname = make_fname(strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, dataset=dataset)
     log_prefix = f"Disjoint4SIM L={L} M={M_int} snr={snr_tag(snr)} seed={seed}"
     tipo = tipology_tag("disjoint_4sim", constructive)
     out_path = (
@@ -338,6 +339,7 @@ def run_disjoint_4sim(
             "channel_dim": ch_dim,
             "tipology": tipo,
             "constructive": constructive,
+            "dataset": dataset,
         },
     )
     del t1_model, t2_model, r2_model, r1_model

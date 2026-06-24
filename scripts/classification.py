@@ -76,13 +76,16 @@ def _out_path(cfg: DictConfig) -> Path | None:
     s_tx = sim.get("s_tx", None)
     s_rx = sim.get("s_rx", None)
     n_clusters = cfg.alignment.get("n_clusters", None) if strategy == "PPFE" else None
+    dataset = cfg.datasets.hf_name
 
     topo = tipology_tag(
         sim.get("sim_type", ""),
         sim.get("constructive", False),
         sim.get("alignment_side", None),
     )
-    fname = make_fname(strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters)
+    fname = make_fname(
+        strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters, dataset=dataset
+    )
     return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
 
 
@@ -370,6 +373,7 @@ def main(cfg: DictConfig) -> None:
         F_T=F_T,
         F_R_H=F_R_H,
         n_clusters=n_clusters,
+        dataset=cfg.datasets.hf_name,
         **ctx,
     )
 

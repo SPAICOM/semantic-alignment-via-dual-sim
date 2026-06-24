@@ -80,6 +80,7 @@ def run_disjoint_2sim(
     tipology_subdir: str = "",
     constructive: bool = False,
     alignment_side: str | None = None,
+    dataset: str = "cifar10",
     **_,
 ) -> None:
     """Run one disjoint 2-SIM job given pre-computed TX and RX target matrices.
@@ -157,7 +158,16 @@ def run_disjoint_2sim(
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
     fname = make_fname(
-        strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, n_clusters=n_clusters
+        strategy_name,
+        seed,
+        L,
+        M_int,
+        ch_dim,
+        snr,
+        tx_enc,
+        rx_enc,
+        n_clusters=n_clusters,
+        dataset=dataset,
     )
     out_path = (
         RESULTS_DIR / result_subdir / tipology_subdir / fname
@@ -285,6 +295,7 @@ def run_disjoint_2sim(
             "tipology": tipology_subdir,
             "constructive": constructive,
             "alignment_side": alignment_side,
+            "dataset": dataset,
         },
     )
     del tx_model, rx_model
