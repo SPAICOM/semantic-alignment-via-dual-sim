@@ -24,8 +24,7 @@ import seaborn as sns
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 RESULTS = BASE_DIR / "results"
-IMG_PATH = RESULTS / "plots"
-IMG_PATH.mkdir(parents=True, exist_ok=True)
+
 
 _STYLE = BASE_DIR / "config" / "plotting" / "plt.mplstyle"
 
@@ -166,21 +165,25 @@ _cache: pl.DataFrame | None = None
 
 
 def _load_all() -> pl.DataFrame | None:
-    """Load every result Parquet under RESULTS once and cache.
+    """Load every result Parquet under RESULTS once and cache, filtered to ``_DATASET``.
 
     Uses ``diagonal_relaxed`` so files where ``snr=None`` (Null type) and
     files where ``snr`` is numeric (Int64/Float64) merge without schema errors.
+    The global ``_DATASET`` is set per-dataset run in ``main()``.
     """
     global _cache
     if _cache is None:
-        files = [f for f in RESULTS.rglob("*.parquet") if f.parent.name != "plots"]
+        files = [f for f in RESULTS.rglob("*.parquet") if "plots" not in f.parts]
         if not files:
             return None
         _cache = pl.concat(
             [pl.read_parquet(f) for f in files],
             how="diagonal_relaxed",
         )
-    return _cache
+    df = _cache
+    if "dataset" in df.columns:
+        df = df.filter(pl.col("dataset") == _DATASET)
+    return df if not df.is_empty() else None
 
 
 def _get(result_subdir: str) -> pl.DataFrame | None:
@@ -1970,15 +1973,8 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    """Generate all publication plots from the cached result Parquet files.
-
-    Applies the project style, then calls every individual plot function in
-    sequence.  Silently skips any plot whose result subdirectory has no data.
-    All output is written to ``results/plots/``.
-    """
-    _apply_style()
-
+def _plot_all() -> None:
+    """Run every plot function for the currently active ``_DATASET`` / ``IMG_PATH``."""
     accuracy_vs_simlayers()
     accuracy_vs_snr()
     accuracy_vs_disjoint_asym_layers()
@@ -2005,7 +2001,39 @@ def main() -> None:
     arch_comparison_asym_vs_sym_channel_dim()
     accuracy_vs_n_proto()
 
-    print(f"\n All plots saved to {IMG_PATH}")
+
+def main() -> None:
+    """Generate all publication plots for every dataset found in the results.
+
+    Iterates over all distinct ``dataset`` values in the Parquet files and
+    saves plots to ``results/plots/{dataset}/`` for each one.
+    Falls back to a single run with ``_DATASET="unknown"`` when the column is absent.
+    """
+    global _DATASET, IMG_PATH, _cache
+
+    _apply_style()
+
+    # Load everything once to discover which datasets are present.
+    if _cache is None:
+        files = [f for f in RESULTS.rglob("*.parquet") if "plots" not in f.parts]
+        if not files:
+            print("No result files found.")
+            return
+        _cache = pl.concat([pl.read_parquet(f) for f in files], how="diagonal_relaxed")
+    all_df = _cache
+
+    if "dataset" in all_df.columns:
+        datasets = sorted(all_df["dataset"].drop_nulls().unique().to_list())
+    else:
+        datasets = ["unknown"]
+
+    for ds in datasets:
+        _DATASET = ds
+        IMG_PATH = RESULTS / "plots" / ds
+        IMG_PATH.mkdir(parents=True, exist_ok=True)
+        print(f"\n── dataset: {ds} → {IMG_PATH.relative_to(BASE_DIR)} ──")
+        _plot_all()
+        print(f" All plots saved to {IMG_PATH}")
 
 
 if __name__ == "__main__":
