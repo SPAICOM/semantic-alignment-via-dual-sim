@@ -488,8 +488,8 @@ class DualSIMoptimizerTorch(nn.Module):
         lr_rx: float = 0.1,
         warmup_frac: float = 0.05,
         clip_value: float | None = None,
-        tx_steps_per_rx: int = 1,
-        rx_steps_per_tx: int = 2,
+        k_T: int = 100,
+        k_R: int = 100,
         optimizer: str = "adam",
         scheduler: str | None = None,
     ):
@@ -501,8 +501,8 @@ class DualSIMoptimizerTorch(nn.Module):
         through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
         with :class:`MonoSIMoptimizerTorch`.
 
-        Each outer iteration performs ``tx_steps_per_rx`` TX steps followed by
-        ``rx_steps_per_tx`` RX steps.  Set both to 1 for equal update frequency.
+        Each outer iteration (cycle) performs ``k_T`` consecutive TX-only gradient
+        steps followed by ``k_R`` consecutive RX-only gradient steps.
         Best phase profiles are restored at the end.
 
         Parameters
@@ -512,7 +512,8 @@ class DualSIMoptimizerTorch(nn.Module):
         H_mimo : array-like or torch.Tensor
             MIMO channel matrix, same shape as required by the SIM.
         max_iters : int, optional
-            Total number of optimization iterations.
+            Total gradient-step budget.  The number of TX/RX cycles run is
+            ``max_iters // (k_T + k_R)``.
         lr_tx : float, optional
             Learning rate for the TX (G_T) optimizer.
         lr_rx : float, optional
@@ -523,22 +524,21 @@ class DualSIMoptimizerTorch(nn.Module):
         clip_value : float or None, optional
             Gradient clipping norm applied after each backward pass.
             ``None`` disables gradient clipping entirely.
-        tx_steps_per_rx : int, optional
-            Number of TX gradient steps per outer iteration.
-        rx_steps_per_tx : int, optional
-            Number of RX gradient steps per outer iteration.
-            Set equal to ``tx_steps_per_rx`` for symmetric updates.
+        k_T : int, optional
+            Consecutive TX-only gradient steps per cycle.
+        k_R : int, optional
+            Consecutive RX-only gradient steps per cycle.
         optimizer : str, optional
             ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
         scheduler : str or None, optional
             ``None`` — fixed LR throughout (default);
-            ``"cosine"`` — constant LR for the first ``warmup_frac`` iterations,
+            ``"cosine"`` — constant LR for the first ``warmup_frac`` cycles,
             then cosine annealing down to ``lr * 1e-3``.
 
         Returns
         -------
         list of float
-            Per-iteration loss values ``‖β Z − A‖²_F / (n·m)``.
+            Per-cycle loss values ``‖β Z − A‖²_F / (n·m)``.
         """
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
@@ -554,9 +554,11 @@ class DualSIMoptimizerTorch(nn.Module):
             opt_T = optim.Adam(self.xi_T.parameters(), lr=lr_tx, betas=(0.9, 0.999), eps=1e-8)
             opt_R = optim.Adam(self.xi_R.parameters(), lr=lr_rx, betas=(0.9, 0.999), eps=1e-8)
 
+        n_cycles = max(1, max_iters // (k_T + k_R))
+
         if scheduler == "cosine":
-            warmup_iters = max(1, int(max_iters * warmup_frac))
-            cosine_iters = max(1, max_iters - warmup_iters)
+            warmup_iters = max(1, int(n_cycles * warmup_frac))
+            cosine_iters = max(1, n_cycles - warmup_iters)
 
             def _make_scheduler(opt, base_lr):
                 constant = optim.lr_scheduler.ConstantLR(opt, factor=1.0, total_iters=warmup_iters)
@@ -596,15 +598,15 @@ class DualSIMoptimizerTorch(nn.Module):
         best_xi_T = [p.data.clone() for p in self.xi_T]
         best_xi_R = [p.data.clone() for p in self.xi_R]
 
-        bar = tqdm(range(max_iters), desc="DualSIM", leave=False, dynamic_ncols=True)
+        bar = tqdm(range(n_cycles), desc="DualSIM", leave=False, dynamic_ncols=True)
         for k in bar:
             current_loss = 0.0
             beta_k = torch.tensor(1.0 + 0j, device=device)
             Z_norm_k = torch.tensor(1.0, device=device)
 
-            for _ in range(tx_steps_per_rx):
+            for _ in range(k_T):
                 current_loss, beta_k, Z_norm_k = _step_side(opt_T, list(self.xi_T.parameters()))
-            for _ in range(rx_steps_per_tx):
+            for _ in range(k_R):
                 current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
 
             if scheduler == "cosine":

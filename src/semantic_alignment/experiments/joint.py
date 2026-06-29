@@ -115,8 +115,8 @@ def run_joint_sim(
     scheduler: str = "none",
     warmup_frac: float = 0.05,
     clip_value: float | None = None,
-    tx_steps_per_rx: int = 1,
-    rx_steps_per_tx: int = 1,
+    k_T: int = 100,
+    k_R: int = 100,
     channel_dim: int | None = None,
     wavelength: float = 0.005,
     slayer: float = 0.025,
@@ -172,7 +172,8 @@ def run_joint_sim(
     seed : int, optional
         Global random seed.
     max_iters : int, optional
-        Number of alternating optimization iterations.
+        Total gradient-step budget.  The number of TX/RX cycles run is
+        ``max_iters // (k_T + k_R)``.
     lr_tx : float, optional
         TX (G_T) learning rate.
     lr_rx : float, optional
@@ -191,8 +192,10 @@ def run_joint_sim(
         Cosine-scheduler warm-up fraction.
     clip_value : float or None, optional
         Gradient clipping norm; ``None`` disables clipping.
-    tx_steps_per_rx, rx_steps_per_tx : int, optional
-        Alternating update ratios.
+    k_T : int, optional
+        Consecutive TX-only gradient steps per cycle.
+    k_R : int, optional
+        Consecutive RX-only gradient steps per cycle.
     channel_dim : int or None, optional
         Physical channel dimension override; defaults to ``max(A_target.shape)``.
     wavelength : float, optional
@@ -271,8 +274,8 @@ def run_joint_sim(
         scheduler=scheduler,
         warmup_frac=warmup_frac,
         clip_value=clip_value,
-        tx_steps_per_rx=tx_steps_per_rx,
-        rx_steps_per_tx=rx_steps_per_tx,
+        k_T=k_T,
+        k_R=k_R,
     )
 
     with torch.no_grad():
