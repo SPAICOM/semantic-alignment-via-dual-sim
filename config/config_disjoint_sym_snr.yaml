@@ -18,5 +18,5 @@ hydra:
     params:
       sim.M_int: 32
       alignment: linear,ppfe
-      training.seed: 27,42,100
-      sim.snr: -30,-20,-10,0,10,20,30
+      training.seed: 27,42,100,123,144,200
+      sim.snr: -10,0,10,20,30,40

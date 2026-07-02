@@ -17,4 +17,4 @@ hydra:
   sweeper:
     params:
       sim.channel_dim: 2,5,10,15,20,50,100,200
-      training.seed: 27,42,100
+      training.seed: 27,42,100,123,144,200

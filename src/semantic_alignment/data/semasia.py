@@ -4,10 +4,15 @@ URL template
 ------------
 ``hf://datasets/spaicom-lab/semasia-{name}/{split}/{model}/*.parquet``
 
+Local cache layout
+------------------
+``data/latents/{name}/{split}/{model}/data.parquet``
+
 Data flow
 ---------
-1. :func:`load_split`   — lazy Parquet scan → sort by ``id`` → collect embeddings
-   and labels as PyTorch tensors for a single (dataset, encoder, split) triple.
+1. :func:`load_split`   — checks local cache first; falls back to HF lazy scan;
+   optionally writes to disk.  Sorts by ``id`` then returns embeddings and labels
+   as PyTorch tensors for a single (dataset, encoder, split) triple.
 2. :func:`load_semasia` — calls :func:`load_split` four times (TX train, RX train,
    TX test, RX test) and packages the result into a :class:`SemaSIAData` container.
 3. :func:`select_pilots` — subsamples the training split to produce the small
@@ -15,6 +20,7 @@ Data flow
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import polars as pl
@@ -22,6 +28,7 @@ import torch
 from sklearn.cluster import KMeans
 
 _HF_BASE = "hf://datasets/spaicom-lab/semasia-{name}/{split}/{model}/*.parquet"
+_LATENTS_DIR = Path(__file__).resolve().parents[3] / "data" / "latents"
 
 
 # ---------------------------------------------------------------------------
@@ -29,8 +36,12 @@ _HF_BASE = "hf://datasets/spaicom-lab/semasia-{name}/{split}/{model}/*.parquet"
 # ---------------------------------------------------------------------------
 
 
-def _uri(hf_name: str, model: str, split: str) -> str:
+def _hf_uri(hf_name: str, model: str, split: str) -> str:
     return _HF_BASE.format(name=hf_name, split=split, model=model)
+
+
+def _local_path(hf_name: str, model: str, split: str, cache_dir: Path) -> Path:
+    return cache_dir / hf_name / split / model / "data.parquet"
 
 
 def load_split(
@@ -38,8 +49,15 @@ def load_split(
     model: str,
     split: str,
     label_col: str = "label",
+    cache_dir: Path | None = None,
+    save_to_disk: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Load embeddings and labels for one (dataset, encoder, split) from the Hub.
+    """Load embeddings and labels for one (dataset, encoder, split).
+
+    Checks ``data/latents/{hf_name}/{split}/{model}/data.parquet`` first;
+    falls back to the HuggingFace Hub if not found.  When ``save_to_disk``
+    is ``True`` and the local file did not yet exist, writes the collected
+    DataFrame to disk after downloading.
 
     Parameters
     ----------
@@ -51,6 +69,12 @@ def load_split(
         Dataset split, e.g. ``"train"`` or ``"test"``.
     label_col : str, optional
         Name of the label column in the Parquet files.
+    cache_dir : Path or None, optional
+        Root of the local cache tree.  Defaults to ``data/latents/`` in the
+        project root.
+    save_to_disk : bool, optional
+        If ``True`` and the local file is absent, write the downloaded data
+        to disk after collecting.
 
     Returns
     -------
@@ -59,12 +83,20 @@ def load_split(
     labels : torch.Tensor
         Int64 class-label tensor of shape ``(N,)``.
     """
-    df = (
-        pl.scan_parquet(_uri(hf_name, model, split))
-        .select(["id", label_col, "embedding"])
-        .sort("id")
-        .collect()
-    )
+    root = cache_dir if cache_dir is not None else _LATENTS_DIR
+    local = _local_path(hf_name, model, split, root)
+
+    if local.exists():
+        source = str(local)
+    else:
+        source = _hf_uri(hf_name, model, split)
+
+    df = pl.scan_parquet(source).select(["id", label_col, "embedding"]).sort("id").collect()
+
+    if save_to_disk and not local.exists():
+        local.parent.mkdir(parents=True, exist_ok=True)
+        df.write_parquet(local)
+
     embeddings = torch.from_numpy(np.stack(df["embedding"].to_list()))
     labels = torch.tensor(df[label_col].to_list(), dtype=torch.long)
     return embeddings, labels
@@ -112,6 +144,8 @@ def load_semasia(
     label_col: str = "label",
     train_split: str = "train",
     test_split: str = "test",
+    cache_dir: Path | None = None,
+    save_to_disk: bool = False,
 ) -> SemaSIAData:
     """Load paired TX/RX embeddings for both splits from the Semasia collection.
 
@@ -129,6 +163,13 @@ def load_semasia(
         Name of the training split directory on the Hub.
     test_split : str, optional
         Name of the test split directory on the Hub.
+    cache_dir : Path or None, optional
+        Root of the local cache tree.  Defaults to ``data/latents/`` in the
+        project root.
+    save_to_disk : bool, optional
+        If ``True``, persist each downloaded split to
+        ``data/latents/{hf_name}/{split}/{model}/data.parquet`` for future
+        runs.  Splits already present on disk are never re-downloaded.
 
     Returns
     -------
@@ -137,11 +178,13 @@ def load_semasia(
     """
     print(f"Loading {hf_name} | TX: {tx_enc} | RX: {rx_enc}")
 
-    z_tx_tr, labels_tr = load_split(hf_name, tx_enc, train_split, label_col)
-    z_rx_tr, _ = load_split(hf_name, rx_enc, train_split, label_col)
+    kw = dict(label_col=label_col, cache_dir=cache_dir, save_to_disk=save_to_disk)
 
-    z_tx_te, labels_te = load_split(hf_name, tx_enc, test_split, label_col)
-    z_rx_te, _ = load_split(hf_name, rx_enc, test_split, label_col)
+    z_tx_tr, labels_tr = load_split(hf_name, tx_enc, train_split, **kw)
+    z_rx_tr, _ = load_split(hf_name, rx_enc, train_split, **kw)
+
+    z_tx_te, labels_te = load_split(hf_name, tx_enc, test_split, **kw)
+    z_rx_te, _ = load_split(hf_name, rx_enc, test_split, **kw)
 
     return SemaSIAData(
         train=SplitData(z_tx=z_tx_tr, z_rx=z_rx_tr, labels=labels_tr),

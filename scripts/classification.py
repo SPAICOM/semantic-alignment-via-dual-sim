@@ -172,6 +172,7 @@ def _setup(cfg: DictConfig) -> dict:
         label_col=cfg.datasets.label_col,
         train_split=cfg.datasets.train_split,
         test_split=cfg.datasets.test_split,
+        save_to_disk=cfg.data.save_to_disk,
     )
     pilots = select_pilots(
         data.train,

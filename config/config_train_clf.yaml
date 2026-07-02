@@ -9,6 +9,6 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      training.seed: 27,42,100
+      training.seed: 27,42,100,123,144,200
       data.rx_enc: vit_base_patch16_224.augreg_in1k,vit_small_patch16_224.augreg_in1k
       datasets: cifar10

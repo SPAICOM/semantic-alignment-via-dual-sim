@@ -8,3 +8,5 @@ train_label_size: 4200   # semantic pilots selected per class
 method: centroid         # pilot selection: centroid | random
 grouping: label          # grouping strategy: label | proto
 batch_size: 128
+
+save_to_disk: true      # if true, cache downloaded latents to data/latents/<dataset>/<split>/<model>/
