@@ -317,7 +317,7 @@ def run_joint_sim(
             "no_mismatch_neural": no_mismatch_neural,
             "original_probe": original_probe,
             "original_neural": original_neural,
-            "sim_accuracy_probe": sim_probe * 100,
+            "sim_accuracy_probe": sim_probe,
             "sim_accuracy_neural": pct(sim_neural),
             "lr_tx": lr_tx,
             "lr_rx": lr_rx,

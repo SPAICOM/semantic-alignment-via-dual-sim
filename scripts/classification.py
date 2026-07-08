@@ -196,13 +196,10 @@ def _setup(cfg: DictConfig) -> dict:
         clf_neural = None
         print(" Neural classifier not found — run 'just train-clf' to enable neural accuracy.")
 
-    no_mismatch_probe = (
-        clf_accuracy(
-            clf_probe,
-            data.test.z_rx.to(device),
-            data.test.labels.to(device),
-        )
-        * 100
+    no_mismatch_probe = clf_accuracy(
+        clf_probe,
+        data.test.z_rx.to(device),
+        data.test.labels.to(device),
     )
     no_mismatch_neural = (
         clf_accuracy(
@@ -210,7 +207,6 @@ def _setup(cfg: DictConfig) -> dict:
             data.test.z_rx.to(device),
             data.test.labels.to(device),
         )
-        * 100
         if clf_neural is not None
         else None
     )
@@ -256,18 +252,15 @@ def _setup(cfg: DictConfig) -> dict:
             F_T, F_R_H = None, None
 
     # Original: A_target applied to TX embeddings, no SIM, no channel
-    original_probe = (
-        run_original_accuracy(
-            test_loader,
-            A_target,
-            L_in,
-            mu_in,
-            L_out,
-            mu_out,
-            clf_probe,
-            device,
-        )
-        * 100
+    original_probe = run_original_accuracy(
+        test_loader,
+        A_target,
+        L_in,
+        mu_in,
+        L_out,
+        mu_out,
+        clf_probe,
+        device,
     )
     original_neural = (
         run_original_accuracy(
@@ -280,7 +273,6 @@ def _setup(cfg: DictConfig) -> dict:
             clf_neural,
             device,
         )
-        * 100
         if clf_neural is not None
         else None
     )

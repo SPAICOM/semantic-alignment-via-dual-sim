@@ -243,3 +243,4 @@ img/
 *.pdf
 *.ckpt
 *.zip
+*.pt

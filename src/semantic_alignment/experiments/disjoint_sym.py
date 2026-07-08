@@ -5,6 +5,33 @@ import torch
 from semantic_alignment.experiments._utils import tipology_tag
 
 
+def compute_sym_alignment_targets(
+    A_target, ch_dim: int, strategy_name: str, device, F_T=None, F_R_H=None
+):
+    """Return the H-independent alignment targets (T_T, T_R) for sym disjoint.
+
+    These are the "pure alignment" matrices that do not depend on the channel H.
+    Used when training the unrolled model over batches of H so the H-dependent
+    channel-inversion factors can be applied per sample.
+    """
+    A = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+    if strategy_name == "PPFE":
+        if F_T is None or F_R_H is None:
+            raise ValueError("PPFE requires F_T and F_R_H.")
+        return (
+            torch.as_tensor(F_T, dtype=torch.complex64, device=device),
+            torch.as_tensor(F_R_H, dtype=torch.complex64, device=device),
+        )
+    elif strategy_name == "Linear":
+        U_A, s_A, Vh_A = torch.linalg.svd(A, full_matrices=False)
+        sqrt_sA = torch.sqrt(s_A[:ch_dim]).to(A.dtype)
+        T_T = torch.diag(sqrt_sA) @ Vh_A[:ch_dim, :]
+        T_R = U_A[:, :ch_dim] @ torch.diag(sqrt_sA)
+        return T_T.detach(), T_R.detach()
+    else:
+        raise NotImplementedError(f"Sym alignment targets not implemented for '{strategy_name}'.")
+
+
 def compute_sym_targets(
     A_target: torch.Tensor,
     H_mimo: torch.Tensor,

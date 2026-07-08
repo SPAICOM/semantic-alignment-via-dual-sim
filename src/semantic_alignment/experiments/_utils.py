@@ -126,6 +126,7 @@ def make_fname(
     s_rx: int | None = None,
     n_clusters: int | None = None,
     dataset: str = "cifar10",
+    preconditioner: str = "none",
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
 
@@ -134,13 +135,16 @@ def make_fname(
     When ``n_clusters`` is provided (PPFE n-clusters sweep), ``_k{n_clusters}``
     is appended before the encoder suffix.
     The filename is prefixed with ``{dataset}_``.
+    When ``preconditioner`` is not ``'none'``, ``_prec{preconditioner}`` is
+    appended before the encoder suffix.
     """
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
     k_tag = f"_k{n_clusters}" if n_clusters is not None else ""
+    prec_tag = f"_prec{preconditioner}" if preconditioner != "none" else ""
     return (
         f"{dataset}_{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
-        f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}"
+        f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}{prec_tag}"
         f"_{tx_enc}_{rx_enc}.parquet"
     )
 
@@ -166,8 +170,8 @@ def ch_dims(N: int) -> tuple[int, int]:
 
 
 def pct(v: float | None) -> float | None:
-    """Convert a fraction in ``[0, 1]`` to a percentage; pass ``None`` through unchanged."""
-    return v * 100 if v is not None else None
+    """Pass through a value in ``[0, 1]``; pass ``None`` through unchanged."""
+    return v
 
 
 def neural_str(label: str, acc_pct: float | None) -> str:

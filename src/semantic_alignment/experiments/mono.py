@@ -182,7 +182,7 @@ def run_mono_sim(
             "no_mismatch_neural": no_mismatch_neural,
             "original_probe": original_probe,
             "original_neural": original_neural,
-            "sim_accuracy_probe": mono_probe * 100,
+            "sim_accuracy_probe": mono_probe,
             "sim_accuracy_neural": pct(mono_neural),
             "lr": lr,
             "beta_T": None,

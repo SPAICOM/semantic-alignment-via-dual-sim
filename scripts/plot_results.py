@@ -230,7 +230,7 @@ def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
 
     nm = df["no_mismatch_neural"].drop_nulls().mean()
     if nm is not None:
-        plt.axhline(y=nm / 100, color="black", linestyle="-", linewidth=2.5, label="No Mismatch")
+        plt.axhline(y=nm, color="black", linestyle="-", linewidth=2.5, label="No Mismatch")
         added.append("No Mismatch")
 
     for strat, linestyle, label in [
@@ -240,7 +240,7 @@ def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
         vals = df.filter(pl.col("strategy") == strat)["original_neural"].drop_nulls()
         if vals.len() > 0:
             plt.axhline(
-                y=vals.mean() / 100, color="gray", linestyle=linestyle, linewidth=2.5, label=label
+                y=vals.mean(), color="gray", linestyle=linestyle, linewidth=2.5, label=label
             )
             added.append(label)
 
@@ -313,7 +313,7 @@ def accuracy_vs_simlayers() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy"])
@@ -381,7 +381,7 @@ def accuracy_vs_snr() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy", "snr"])
@@ -448,7 +448,7 @@ def accuracy_vs_disjoint_asym_layers() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy"])
@@ -513,7 +513,7 @@ def accuracy_vs_thickness() -> None:
         return
 
     df = df.with_columns(
-        (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+        pl.col("sim_accuracy_neural").alias("accuracy"),
         pl.col("s_rx").cast(pl.Utf8).str.concat(r"$\lambda$").alias(r"$s_{\rm RX}$"),
     ).sort([r"$s_{\rm RX}$", "s_tx"])
 
@@ -575,7 +575,7 @@ def accuracy_vs_mono_layers() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy", "L"])
@@ -640,7 +640,7 @@ def accuracy_vs_mono_snr() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy", "snr"])
@@ -710,7 +710,7 @@ def accuracy_vs_disjoint_asym_snr() -> None:
     df = (
         df.filter(pl.col("strategy").is_in(STRATEGIES))
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "strategy", "snr"])
@@ -774,7 +774,7 @@ def accuracy_vs_disjoint_sym_layers() -> None:
         return
 
     df = df.with_columns(
-        (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+        pl.col("sim_accuracy_neural").alias("accuracy"),
         pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
     ).sort(["Intermediate Atoms", "L"])
 
@@ -832,7 +832,7 @@ def accuracy_vs_disjoint_sym_snr() -> None:
     df = (
         df.filter(pl.col("snr").is_not_null())
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "snr"])
@@ -895,7 +895,7 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
         return
 
     df = df.with_columns(
-        (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+        pl.col("sim_accuracy_neural").alias("accuracy"),
         pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
     ).sort(["Intermediate Atoms", "L"])
 
@@ -953,7 +953,7 @@ def accuracy_vs_disjoint_4sim_snr() -> None:
     df = (
         df.filter(pl.col("snr").is_not_null())
         .with_columns(
-            (pl.col("sim_accuracy_neural") / 100).alias("accuracy"),
+            pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").cast(pl.Utf8).alias("Intermediate Atoms"),
         )
         .sort(["Intermediate Atoms", "snr"])
@@ -1062,7 +1062,7 @@ def _arch_comparison_generic(
     df_all = pl.concat(
         [f.select([c for c in needed if c in f.columns]) for f in frames],
         how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+    ).with_columns(pl.col(acc_col).alias("accuracy"))
 
     strat_list = sorted(df_all["strategy"].unique().to_list())
 
@@ -1469,8 +1469,8 @@ def accuracy_vs_n_proto() -> None:
         [f.select([c for c in needed if c in f.columns]) for f in frames],
         how="diagonal_relaxed",
     ).with_columns(
-        (pl.col(acc_col) / 100).alias("accuracy"),
-        (pl.col(oracle_col) / 100).alias("oracle"),
+        pl.col(acc_col).alias("accuracy"),
+        pl.col(oracle_col).alias("oracle"),
     )
 
     strat_list = sorted(df_all["strategy"].unique().to_list())
@@ -1542,7 +1542,7 @@ def accuracy_vs_n_proto() -> None:
 
         nm = df_s["no_mismatch_neural"].drop_nulls().mean()
         if nm is not None:
-            ax.axhline(y=nm / 100, color="black", linestyle="-", linewidth=2.5)
+            ax.axhline(y=nm, color="black", linestyle="-", linewidth=2.5)
 
         ax.set_title(strategy)
         ax.set_xlabel(r"PPFE $n_{\rm clusters}$")
@@ -1819,7 +1819,7 @@ def _arch_comparison_asym_vs_sym(
     df_all = pl.concat(
         [f.select([c for c in needed if c in f.columns]) for f in frames],
         how="diagonal_relaxed",
-    ).with_columns((pl.col(acc_col) / 100).alias("accuracy"))
+    ).with_columns(pl.col(acc_col).alias("accuracy"))
 
     strat_list = sorted(df_all["strategy"].unique().to_list())
 
@@ -1969,12 +1969,108 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Unrolled vs Classic — per-iteration accuracy comparison
+# ---------------------------------------------------------------------------
+
+
+def unrolled_vs_classic_iterations() -> None:
+    """Compare classic vs unrolled convergence: accuracy vs iteration.
+
+    Columns: Linear / PPFE.  Color: Mono / Joint.  Style: Classic (dashed) / Unrolled (solid).
+    Baselines: No Mismatch, Oracle.
+    """
+
+    def _iter_curve(df, col_key):
+        """Return (x, y_mean, y_low, y_hi) from a list-column."""
+        if col_key not in df.columns:
+            return None
+        exploded = df.select(
+            pl.col(col_key).explode().alias("acc"),
+            pl.int_range(0, pl.count()).over(pl.col("seed")).alias("iter"),
+        ).drop_nulls()
+        if exploded.is_empty():
+            return None
+        stats = (
+            exploded.group_by("iter")
+            .agg(
+                [
+                    pl.col("acc").mean().alias("mean"),
+                    pl.col("acc").std().alias("std"),
+                    pl.col("acc").count().alias("n"),
+                ]
+            )
+            .sort("iter")
+        )
+        x = stats["iter"].to_numpy()
+        y = stats["mean"].to_numpy()
+        ci = 1.96 * stats["std"].to_numpy() / np.sqrt(stats["n"].to_numpy())
+        return x, y, y - ci, y + ci
+
+    fig, axes = plt.subplots(
+        1, 2, sharey=True, sharex=True, figsize=(14, 5.5), layout="constrained"
+    )
+
+    baseline_drawn = [False, False]
+
+    for col, strat in enumerate(STRATEGIES):
+        ax = axes[col]
+
+        for arch, color, subdir in [
+            ("Mono", _ARCH_FAMILY_COLORS["Mono"], "compare_unrolled_mono"),
+            ("Joint", _ARCH_FAMILY_COLORS["Joint"], "compare_unrolled_joint"),
+        ]:
+            df = _get(subdir)
+            if df is None:
+                continue
+            if arch == "Mono":
+                if "constructive" not in df.columns:
+                    continue
+                df = df.filter(pl.col("constructive"))
+            df_s = df.filter(pl.col("strategy") == strat)
+            if df_s.is_empty():
+                continue
+
+            for method, ls, col_key in [
+                ("Classic", "--", "classic_acc_history_neural"),
+                ("Unrolled", "-", "unrolled_acc_history_neural"),
+            ]:
+                curve = _iter_curve(df_s, col_key)
+                if curve is None:
+                    continue
+                x, y, lo, hi = curve
+                ax.plot(x, y, ls=ls, color=color, linewidth=2, label=f"{arch} {method}")
+                ax.fill_between(x, lo, hi, alpha=0.15, color=color)
+
+            if not baseline_drawn[col]:
+                _add_baseline_hlines(df)
+                baseline_drawn[col] = True
+
+        ax.set_title(strat)
+        ax.set_xlabel("Iteration")
+
+    axes[0].set_ylabel("Neural Accuracy")
+
+    handles, labels = axes[0].get_legend_handles_labels()
+    by_label = dict(zip(labels, handles))
+    fig.legend(
+        by_label.values(),
+        by_label.keys(),
+        loc="upper center",
+        ncol=3,
+        fontsize=13,
+        frameon=True,
+    )
+    _save("UnrolledVsClassic_Iterations")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 
 def _plot_all() -> None:
     """Run every plot function for the currently active ``_DATASET`` / ``IMG_PATH``."""
+    unrolled_vs_classic_iterations()
     accuracy_vs_simlayers()
     accuracy_vs_snr()
     accuracy_vs_disjoint_asym_layers()
