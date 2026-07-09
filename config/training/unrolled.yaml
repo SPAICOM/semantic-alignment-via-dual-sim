@@ -1,0 +1,64 @@
+defaults:
+  - base
+
+# Number of unrolled gradient layers (inference iterations)
+K: 10
+
+# Learning rate for the classic-comparison Adam loop
+lr: 0.1
+lr_tx: 0.1
+lr_rx: 0.2
+
+# Training hyper-params
+batch_size: 16
+epochs: 10
+lr_w: 1.0e-2
+lr_schedule: cosine  # none | cosine
+grad_clip: 1.0
+
+# Random MIMO channel dataset
+n_channels: 1000
+train_ratio: 0.7
+val_ratio: 0.15
+
+# Wandb logging
+wandb_project: compare_unrolled
+
+# Unrolled step-size init and momentum
+init_w: 0.1
+init_mu: 0.9
+
+# Coupling: how the step-size W^k is structured.
+#   scalar   — one scalar per unrolled step (K params)
+#   diagonal — one scalar per phase coordinate per step (K × n_phases params)
+coupling:
+  - diagonal
+
+# Innovation normalisation: rms | unit | sign | none
+innovation_norm: rms
+
+# How the descent direction is computed: autograd | analytic
+innovation_mode: autograd
+
+# Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
+supervision: all
+gamma: 0.9
+first_order: false
+
+# Adam-style momentum on the innovation
+momentum: true
+
+# Learnable phase momentum S: phi^{k+1} = s * phi^k + w * g^k
+# When enabled, s is a learnable vector (1 x n_phases) initialised to 1,
+# shared across all K layers.
+learn_S: true
+reg_S: 0.01
+
+# Seeds used for the classic Adam baseline (different random channels -> averaged curve)
+classic_seeds:
+  - 27
+  - 42
+  - 100
+  - 123
+  - 144
+  - 200

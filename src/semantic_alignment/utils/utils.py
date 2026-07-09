@@ -31,13 +31,15 @@ def complex_compressed_tensor(x: torch.Tensor, device: str = "cpu") -> torch.Ten
     torch.Tensor
         Complex64 tensor of shape ``(d//2, n)``.
     """
-    d, n = x.shape
+    d = x.shape[-2]
     if d % 2 != 0:
-        x = torch.cat((x, torch.zeros((1, n), dtype=x.dtype, device=x.device)), dim=0)
+        pad = list(x.shape)
+        pad[-2] = 1
+        x = torch.cat((x, torch.zeros(pad, dtype=x.dtype, device=x.device)), dim=-2)
         d += 1
 
-    real_part = x[: d // 2, :].float()
-    imaginary_part = x[d // 2 :, :].float()
+    real_part = x[..., : d // 2, :].float()
+    imaginary_part = x[..., d // 2 :, :].float()
     return torch.view_as_complex(torch.stack((real_part, imaginary_part), dim=-1)).to(device)
 
 
@@ -57,7 +59,7 @@ def decompress_complex_tensor(x: torch.Tensor, device: str = "cpu") -> torch.Ten
         Real tensor of shape ``(d, n)`` formed by concatenating real and
         imaginary parts along the first dimension.
     """
-    return torch.cat((x.real, x.imag), dim=0).to(device)
+    return torch.cat((x.real, x.imag), dim=-2).to(device)
 
 
 def complex_tensor(x: torch.Tensor, device: str = "cpu") -> torch.Tensor:

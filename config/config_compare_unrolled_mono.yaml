@@ -1,0 +1,22 @@
+defaults:
+  - sim: mono
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: unrolled
+  - classifier: default
+  - _self_
+
+sim:
+  L: 10
+  M_int: 32
+  name: compare_unrolled_mono
+  result_subdir: compare_unrolled_mono
+  init_mode: random
+  constructive: false
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment: linear,ppfe

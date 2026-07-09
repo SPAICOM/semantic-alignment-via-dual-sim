@@ -1,0 +1,22 @@
+defaults:
+  - sim: joint
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: unrolled
+  - classifier: default
+  - _self_
+
+sim:
+  L: 10
+  M_int: 32
+  channel_dim: 20
+  name: compare_unrolled_joint
+  result_subdir: compare_unrolled_joint
+  init_mode: random
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment: linear,ppfe
