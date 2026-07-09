@@ -130,61 +130,25 @@ class MonoSIMoptimizer:
         W_list.append(self._calculate_W("intermediate", "output"))
         return W_list
 
-    def _get_2d_coords(self, linear_idx: int, num_atoms_x: int) -> tuple[int, int]:
-        """Convert a 1-based linear meta-atom index to 2-D grid coordinates.
-
-        Parameters
-        ----------
-        linear_idx : int
-            1-based flat index of the meta-atom.
-        num_atoms_x : int
-            Number of meta-atoms along the x-axis.
-
-        Returns
-        -------
-        tuple of int
-            ``(mx, my)`` grid coordinates, both 1-based.
-        """
-        my = int(np.ceil(linear_idx / num_atoms_x))
-        mx = linear_idx - (my - 1) * num_atoms_x
-        return mx, my
-
-    def _calculate_propagation_distance(
-        self, nx_from, idx_from, nx_to, idx_to, sx, sy, slayer
-    ) -> float:
-        """Compute the 3-D Euclidean distance between two meta-atom centres.
-
-        Parameters
-        ----------
-        nx_from : int
-            Number of atoms along x in the source layer.
-        idx_from : int
-            1-based flat index of the source atom.
-        nx_to : int
-            Number of atoms along x in the destination layer.
-        idx_to : int
-            1-based flat index of the destination atom.
-        sx : float
-            Inter-atom spacing in x (metres).
-        sy : float
-            Inter-atom spacing in y (metres).
-        slayer : float
-            Layer-to-layer thickness (metres).
-
-        Returns
-        -------
-        float
-            Euclidean distance d (metres).
-        """
-        x_from, y_from = self._get_2d_coords(idx_from, nx_from)
-        x_to, y_to = self._get_2d_coords(idx_to, nx_to)
-        return np.sqrt(((x_from - x_to) * sx) ** 2 + ((y_from - y_to) * sy) ** 2 + slayer**2)
-
     def _calculate_W(self, from_type: str, to_type: str) -> np.ndarray:
         """Compute the free-space propagation matrix between two adjacent meta-atom layers.
 
         Entries follow the scalar Green's function approximation:
             W[to, from] = (s_layer · A_cell / d²) · (1/(2πd) − j/λ) · exp(jκd)
+
+        Vectorised over both aperture axes at once (NumPy broadcasting).
+
+        Parameters
+        ----------
+        from_type : str
+            ``"input"``, ``"intermediate"``, or ``"output"`` — source layer.
+        to_type : str
+            ``"input"``, ``"intermediate"``, or ``"output"`` — destination layer.
+
+        Returns
+        -------
+        np.ndarray
+            Complex propagation matrix of shape ``(to_total, from_total)``.
         """
         params = {
             "input": (self.N_in, int(np.sqrt(self.N_in)), self.spacings["in"]),
@@ -194,18 +158,28 @@ class MonoSIMoptimizer:
         from_total, from_nx, from_sx = params[from_type]
         to_total, to_nx, _ = params[to_type]
         A_cell = from_sx * from_sx  # unit-cell area
+
+        from_idx = np.arange(1, from_total + 1)
+        from_my = np.ceil(from_idx / from_nx).astype(np.int64)
+        from_mx = from_idx - (from_my - 1) * from_nx
+
+        to_idx = np.arange(1, to_total + 1)
+        to_my = np.ceil(to_idx / to_nx).astype(np.int64)
+        to_mx = to_idx - (to_my - 1) * to_nx
+
+        # (to_total, from_total) pairwise distance.
+        dx = (to_mx[:, None] - from_mx[None, :]) * from_sx
+        dy = (to_my[:, None] - from_my[None, :]) * from_sx
+        d = np.sqrt(dx**2 + dy**2 + self.slayer**2)
+
         W = np.zeros((to_total, from_total), dtype=complex)
-        for to_idx in range(1, to_total + 1):
-            for from_idx in range(1, from_total + 1):
-                d = self._calculate_propagation_distance(
-                    from_nx, from_idx, to_nx, to_idx, from_sx, from_sx, self.slayer
-                )
-                if d > 0:
-                    W[to_idx - 1, from_idx - 1] = (
-                        (self.slayer * A_cell / d**2)
-                        * (1 / (2 * np.pi * d) - 1j / self.wavelength)
-                        * np.exp(1j * self.kappa * d)
-                    )
+        nonzero = d > 0
+        d_nz = d[nonzero]
+        W[nonzero] = (
+            (self.slayer * A_cell / d_nz**2)
+            * (1 / (2 * np.pi * d_nz) - 1j / self.wavelength)
+            * np.exp(1j * self.kappa * d_nz)
+        )
         return W
 
 
@@ -240,6 +214,12 @@ class MonoSIMoptimizerTorch(nn.Module):
             Phase applied at intermediate/output apertures.
         RX (``side='rx'``): G_R = W_{L-1} Υ_{L-1} … W_0 Υ_0
             Phase applied at input/intermediate apertures; signal hits Y before W.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 cascade matrix ``G`` of shape ``(N_in, N_out)`` for TX
+            or ``(N_out, N_in)`` for RX.
         """
         device = self.xi[0].device
         if self.side == "rx":
@@ -263,14 +243,47 @@ class MonoSIMoptimizerTorch(nn.Module):
 
     @staticmethod
     def _build_optimizer(params, lr: float, optimizer: str):
-        """Construct an SGD or Adam optimizer for ``params``."""
+        """Construct an SGD or Adam optimizer for ``params``.
+
+        Parameters
+        ----------
+        params : iterable of torch.Tensor
+            Parameters to optimize.
+        lr : float
+            Learning rate.
+        optimizer : str
+            ``"sgd"`` or ``"adam"``.
+
+        Returns
+        -------
+        torch.optim.Optimizer
+            Configured optimizer.
+        """
         if optimizer == "sgd":
             return optim.SGD(params, lr=lr)
         return optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-8)
 
     @staticmethod
     def _build_scheduler(opt, scheduler: str, max_iters: int, warmup_frac: float, lr: float):
-        """Return a cosine-annealing LR scheduler with warm-up, or ``None`` for fixed LR."""
+        """Return a cosine-annealing LR scheduler with warm-up, or ``None`` for fixed LR.
+
+        Parameters
+        ----------
+        opt : torch.optim.Optimizer
+            Optimizer to schedule.
+        scheduler : str or None
+            ``"cosine"`` to enable scheduling, any other value returns ``None``.
+        max_iters : int
+            Total number of training iterations.
+        warmup_frac : float
+            Fraction of ``max_iters`` held at constant LR before decay.
+        lr : float
+            Base learning rate (used for ``eta_min = lr * 1e-3``).
+
+        Returns
+        -------
+        torch.optim.lr_scheduler.SequentialLR or None
+        """
         if scheduler != "cosine":
             return None
         warmup_iters = max(1, int(max_iters * warmup_frac))

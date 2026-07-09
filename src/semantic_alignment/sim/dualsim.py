@@ -142,10 +142,26 @@ class DualSIMoptimizer:
         self.W_RX = self._build_W_list(self.L_R, "RX_input", "RX_intermediate", "RX_output")
 
     def _build_W_list(self, L: int, type_in: str, type_int: str, type_out: str) -> list:
-        """Build the list of L propagation matrices for the TX-SIM (Y·W scheme).
+        """Build the list of L propagation matrices for a SIM stack.
 
         Layer layout: input → [intermediate × (L-2)] → output.
         For L=1 the single layer maps input directly to output.
+
+        Parameters
+        ----------
+        L : int
+            Number of layers.
+        type_in : str
+            Layer-type label for the input aperture (e.g. ``"TX_input"``).
+        type_int : str
+            Layer-type label for intermediate layers (e.g. ``"TX_intermediate"``).
+        type_out : str
+            Layer-type label for the output aperture (e.g. ``"TX_output"``).
+
+        Returns
+        -------
+        list of np.ndarray
+            List of ``L`` complex propagation matrices.
         """
         W_list = []
         if L == 1:
@@ -157,56 +173,6 @@ class DualSIMoptimizer:
             W_list.append(self._calculate_W(type_int, type_out))
         return W_list
 
-    def _get_2d_coords(self, linear_idx: int, num_atoms_x: int) -> tuple[int, int]:
-        """Convert a 1-based linear meta-atom index to 2-D grid coordinates (mx, my).
-
-        Parameters
-        ----------
-        linear_idx : int
-            1-based flat index of the meta-atom.
-        num_atoms_x : int
-            Number of meta-atoms along the x-axis.
-
-        Returns
-        -------
-        tuple of int
-            ``(mx, my)`` grid coordinates, both 1-based.
-        """
-        my = int(np.ceil(linear_idx / num_atoms_x))
-        mx = linear_idx - (my - 1) * num_atoms_x
-        return mx, my
-
-    def _calculate_propagation_distance(
-        self, from_nx, from_idx, to_nx, to_idx, sx, sy, slayer
-    ) -> float:
-        """Compute the 3-D Euclidean distance between two meta-atom centres.
-
-        Parameters
-        ----------
-        from_nx : int
-            Number of atoms along x in the source layer.
-        from_idx : int
-            1-based flat index of the source atom.
-        to_nx : int
-            Number of atoms along x in the destination layer.
-        to_idx : int
-            1-based flat index of the destination atom.
-        sx : float
-            Inter-atom spacing in x (metres).
-        sy : float
-            Inter-atom spacing in y (metres).
-        slayer : float
-            Layer-to-layer thickness (metres).
-
-        Returns
-        -------
-        float
-            Euclidean distance ``d`` (metres).
-        """
-        fx, fy = self._get_2d_coords(from_idx, from_nx)
-        tx, ty = self._get_2d_coords(to_idx, to_nx)
-        return np.sqrt(((fx - tx) * sx) ** 2 + ((fy - ty) * sy) ** 2 + slayer**2)
-
     def _calculate_W(self, from_layer_type: str, to_layer_type: str) -> np.ndarray:
         """Compute the free-space propagation matrix between two adjacent meta-atom layers.
 
@@ -214,6 +180,22 @@ class DualSIMoptimizer:
             W[to, from] = (s_layer · A_cell / d²) · (1/(2πd) − j/λ) · exp(jκd)
         where d is the 3-D Euclidean distance between meta-atom positions,
         A_cell = s² is the unit-cell area, and κ = 2π/λ is the wavenumber.
+
+        Vectorised over both aperture axes at once (NumPy broadcasting).
+
+        Parameters
+        ----------
+        from_layer_type : str
+            ``"TX_input"``, ``"TX_intermediate"``, ``"TX_output"``,
+            ``"RX_input"``, ``"RX_intermediate"``, or ``"RX_output"`` —
+            source layer type.
+        to_layer_type : str
+            Same options — destination layer type.
+
+        Returns
+        -------
+        np.ndarray
+            Complex propagation matrix of shape ``(to_total, from_total)``.
         """
         params = {
             "TX_input": (
@@ -256,25 +238,41 @@ class DualSIMoptimizer:
 
         from_total, from_nx, from_sx, slayer = params[from_layer_type]
         to_total, to_nx, _, _ = params[to_layer_type]
-
         A_cell = from_sx * from_sx
-        W = np.zeros((to_total, from_total), dtype=complex)
 
-        for to_idx in range(1, to_total + 1):
-            for from_idx in range(1, from_total + 1):
-                d = self._calculate_propagation_distance(
-                    from_nx, from_idx, to_nx, to_idx, from_sx, from_sx, slayer
-                )
-                if d > 0:
-                    W[to_idx - 1, from_idx - 1] = (
-                        (slayer * A_cell / d**2)
-                        * (1 / (2 * np.pi * d) - 1j / self.wavelength)
-                        * np.exp(1j * self.kappa * d)
-                    )
+        from_idx = np.arange(1, from_total + 1)
+        from_my = np.ceil(from_idx / from_nx).astype(np.int64)
+        from_mx = from_idx - (from_my - 1) * from_nx
+
+        to_idx = np.arange(1, to_total + 1)
+        to_my = np.ceil(to_idx / to_nx).astype(np.int64)
+        to_mx = to_idx - (to_my - 1) * to_nx
+
+        dx = (to_mx[:, None] - from_mx[None, :]) * from_sx
+        dy = (to_my[:, None] - from_my[None, :]) * from_sx
+        d = np.sqrt(dx**2 + dy**2 + slayer**2)
+
+        W = np.zeros((to_total, from_total), dtype=complex)
+        nonzero = d > 0
+        d_nz = d[nonzero]
+        W[nonzero] = (
+            (slayer * A_cell / d_nz**2)
+            * (1 / (2 * np.pi * d_nz) - 1j / self.wavelength)
+            * np.exp(1j * self.kappa * d_nz)
+        )
         return W
 
     def _calculate_G_T(self) -> np.ndarray:
-        """G_T = ∏_{l=1}^{L_T} Υ_l^(T) W_l^(T)  — TX cascade transfer matrix."""
+        """Compute the TX cascade transfer matrix.
+
+        ``G_T = ∏_{l=1}^{L_T} Υ_l W_l`` where each layer applies a diagonal
+        phase matrix followed by propagation through the metasurface.
+
+        Returns
+        -------
+        np.ndarray
+            Complex TX cascade matrix of shape ``(N_out_T, N_in_T)``.
+        """
         G = np.eye(self.N_in_T, dtype=complex)
         for i in range(self.L_T):
             # Υ_l = diag(exp(j ξ_l)) applies the learnable phase shifts at layer l
@@ -283,11 +281,18 @@ class DualSIMoptimizer:
         return G
 
     def _calculate_G_R(self) -> np.ndarray:
-        """G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0  — RX cascade (Y·W scheme).
+        """Compute the RX cascade transfer matrix.
+
+        ``G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0``  (Y·W scheme).
 
         Signal flow: x → Y_0 → W_0 → Y_1 → W_1 → … → Y_{L-1} → W_{L-1}.
         First phase Y_0 acts on the input aperture (N_in_R); the rest are
         intermediate (M_int_R).  Uses L_R propagation matrices and L_R phases.
+
+        Returns
+        -------
+        np.ndarray
+            Complex RX cascade matrix of shape ``(N_out_R, N_in_R)``.
         """
         G = None
         for i in range(self.L_R):
@@ -372,11 +377,41 @@ class DualSIMoptimizerTorch(nn.Module):
         )
 
     def _get_W_list(self, prefix, L):
-        """Retrieve the registered propagation buffers W_0 … W_{L-1}."""
+        """Retrieve the registered propagation buffers W_0 … W_{L-1}.
+
+        Parameters
+        ----------
+        prefix : str
+            Buffer name prefix (e.g. ``"W_T"`` or ``"W_R"``).
+        L : int
+            Number of layers.
+
+        Returns
+        -------
+        list of torch.Tensor
+            List of ``L`` complex64 buffer tensors.
+        """
         return [getattr(self, f"{prefix}_{i}") for i in range(L)]
 
     def _calculate_G(self, W_list, phases, L, input_dim):
-        """Compute the cascade G = Υ_L W_L … Υ_1 W_1 for a single SIM stack."""
+        """Compute the cascade G = Υ_L W_L … Υ_1 W_1 for a single SIM stack.
+
+        Parameters
+        ----------
+        W_list : list of torch.Tensor
+            Propagation matrices from the module buffers.
+        phases : list of torch.Tensor
+            Phase-shift parameter tensors, one per layer.
+        L : int
+            Number of layers.
+        input_dim : int
+            Dimension of the identity matrix used to start the cascade.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 cascade matrix.
+        """
         device = phases[0].device
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
         for i in range(L):
@@ -387,7 +422,13 @@ class DualSIMoptimizerTorch(nn.Module):
         return G
 
     def _calculate_G_T(self):
-        """Compute the TX cascade G_T from the current phase parameters."""
+        """Compute the TX cascade G_T from the current phase parameters.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 TX cascade matrix.
+        """
         W_T = self._get_W_list("W_T", self.L_T)
         return self._calculate_G(W_T, self.xi_T, self.L_T, W_T[0].shape[1])
 
@@ -397,6 +438,11 @@ class DualSIMoptimizerTorch(nn.Module):
         Signal flow: x → Y_0 → W_0 → … → Y_{L-1} → W_{L-1}.
         First phase Y_0 acts on the input aperture; the rest are intermediate.
         Uses L_R sigmoid-mapped phases.
+
+        Returns
+        -------
+        torch.Tensor
+            Complex64 RX cascade matrix.
         """
         W_R = self._get_W_list("W_R", self.L_R)
         G = None
