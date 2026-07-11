@@ -1,0 +1,4 @@
+# @package _global_
+training:
+  coupling: scalar
+  lr_w: 1.0e-2

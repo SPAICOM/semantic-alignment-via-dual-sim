@@ -20,6 +20,7 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, TensorDataset
 
+import wandb
 from semantic_alignment.data.h_channel import HChannelDataModule
 from semantic_alignment.data.semasia import load_semasia, select_pilots
 from semantic_alignment.evaluation.linear_probe import train_linear_probe
@@ -149,7 +150,7 @@ def _setup(cfg: DictConfig) -> dict:
     )
 
 
-def _out_path(cfg: DictConfig) -> Path:
+def _out_path(cfg: DictConfig, coup: str) -> Path:
     mode = cfg.sim.get("sim_type", "joint")
     tip = tipology_tag(mode)
     result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
@@ -159,7 +160,7 @@ def _out_path(cfg: DictConfig) -> Path:
     fname = (
         f"{cfg.datasets.hf_name}_unrolled_{cfg.alignment.type}"
         f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
-        f"_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
+        f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
     )
     return _RESULTS / result_subdir / fname
 
@@ -169,11 +170,6 @@ def main(cfg: DictConfig) -> None:
     gpu = cfg.training.get("gpu", None)
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
-
-    out = _out_path(cfg)
-    if out.exists():
-        print(f" Already done: {out.name} — skipping.")
-        return
 
     mode = cfg.sim.get("sim_type", "joint")
     print(
@@ -279,6 +275,24 @@ def main(cfg: DictConfig) -> None:
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Joint coupling='{coup}'\n{'=' * 60}")
 
+            out = _out_path(cfg, coup)
+            if out.exists():
+                print(f" Already done: {out.name} — skipping.")
+                continue
+
+            conv_kwargs = {}
+            if coup in ("conv", "conv2d"):
+                conv_kwargs = dict(
+                    shapes_T=[(M_int, M_int)] * (L - 1) + [(ch_x, ch_y)],
+                    shapes_R=[(ch_x, ch_y)] + [(M_int, M_int)] * (L - 1),
+                    k_spatial=cfg.training.get("k_spatial", 3),
+                    k_layer=cfg.training.get("k_layer", 1),
+                    mu_mode=cfg.training.get("mu_mode", "scalar"),
+                    s_mode=cfg.training.get("s_mode", "scalar"),
+                    k_spatial_s=cfg.training.get("k_spatial_s", None),
+                    k_layer_s=cfg.training.get("k_layer_s", None),
+                    reg_s_mode=cfg.training.get("reg_s_mode", "none"),
+                )
             model = DualSIMUnrolledSCA(
                 sim,
                 K,
@@ -289,7 +303,7 @@ def main(cfg: DictConfig) -> None:
                 momentum=cfg.training.get("momentum", True),
                 init_mu=cfg.training.get("init_mu", 0.9),
                 learn_S=cfg.training.get("learn_S", False),
-                first_order=cfg.training.get("first_order", True),
+                **conv_kwargs,
             ).to(device)
 
             dm = HChannelDataModule(
@@ -313,7 +327,7 @@ def main(cfg: DictConfig) -> None:
                 grad_clip=cfg.training.get("grad_clip", 1.0),
                 epochs=epochs,
                 supervision=cfg.training.get("supervision", "final"),
-                gamma=cfg.training.get("gamma", 1.0),
+                weight_ratio=cfg.training.get("weight_ratio", 1.0),
                 learn_S=cfg.training.get("learn_S", False),
                 reg_S=cfg.training.get("reg_S", 0.01),
                 Z_test=ctx["Z_test"],
@@ -346,6 +360,7 @@ def main(cfg: DictConfig) -> None:
                 logger=logger,
                 accelerator="auto",
                 devices=1,
+                precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
                 log_every_n_steps=10,
                 gradient_clip_val=cfg.training.get("grad_clip", 1.0),
                 callbacks=[eval_callback],
@@ -353,15 +368,13 @@ def main(cfg: DictConfig) -> None:
 
             trainer.fit(lightning, dm)
             trainer.test(lightning, dm)
+            wandb.finish()
 
             test_probe = lightning._test_probe_curves
             test_neural = lightning._test_neural_curves
 
             # Save parquet
-            tip = tipology_tag(mode)
-            result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
-            out_dir = _RESULTS / result_subdir
-            out_dir.mkdir(parents=True, exist_ok=True)
+            out.parent.mkdir(parents=True, exist_ok=True)
             rows = [
                 {
                     "seed": cfg.training.seed,
@@ -372,6 +385,7 @@ def main(cfg: DictConfig) -> None:
                     "tx_enc": ctx["tx_enc"],
                     "rx_enc": ctx["rx_enc"],
                     "channel_dim": ch_dim,
+                    "constructive": True,
                     "variant": "Classic Adam",
                     "K": K,
                     "probe_acc": classic_probe,
@@ -386,19 +400,15 @@ def main(cfg: DictConfig) -> None:
                     "tx_enc": ctx["tx_enc"],
                     "rx_enc": ctx["rx_enc"],
                     "channel_dim": ch_dim,
+                    "constructive": True,
                     "variant": f"Unrolled ({coup})",
                     "K": K,
                     "probe_acc": test_probe,
                     "neural_acc": test_neural,
                 },
             ]
-            fname = (
-                f"{cfg.datasets.hf_name}_unrolled_{strategy_name}"
-                f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
-                f"_{ctx['tx_enc']}_{ctx['rx_enc']}.parquet"
-            )
-            pl.DataFrame(rows).write_parquet(out_dir / fname)
-            print(f"Parquet saved → {out_dir / fname}")
+            pl.DataFrame(rows).write_parquet(out)
+            print(f"Parquet saved → {out}")
             del model
             torch.cuda.empty_cache()
 
@@ -468,6 +478,11 @@ def main(cfg: DictConfig) -> None:
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Mono coupling='{coup}'\n{'=' * 60}")
 
+            out = _out_path(cfg, coup)
+            if out.exists():
+                print(f" Already done: {out.name} — skipping.")
+                continue
+
             model = MonoSIMUnrolledSCA(
                 mono_sim,
                 K,
@@ -478,7 +493,6 @@ def main(cfg: DictConfig) -> None:
                 momentum=cfg.training.get("momentum", True),
                 init_mu=cfg.training.get("init_mu", 0.9),
                 learn_S=cfg.training.get("learn_S", False),
-                first_order=cfg.training.get("first_order", True),
             ).to(device)
 
             dm = HChannelDataModule(
@@ -503,7 +517,7 @@ def main(cfg: DictConfig) -> None:
                 grad_clip=cfg.training.get("grad_clip", 1.0),
                 epochs=epochs,
                 supervision=cfg.training.get("supervision", "final"),
-                gamma=cfg.training.get("gamma", 1.0),
+                weight_ratio=cfg.training.get("weight_ratio", 1.0),
                 learn_S=cfg.training.get("learn_S", False),
                 reg_S=cfg.training.get("reg_S", 0.01),
                 Z_test=ctx["Z_test"],
@@ -536,6 +550,7 @@ def main(cfg: DictConfig) -> None:
                 logger=logger,
                 accelerator="auto",
                 devices=1,
+                precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
                 log_every_n_steps=10,
                 gradient_clip_val=cfg.training.get("grad_clip", 1.0),
                 callbacks=[eval_callback],
@@ -543,15 +558,13 @@ def main(cfg: DictConfig) -> None:
 
             trainer.fit(lightning, dm)
             trainer.test(lightning, dm)
+            wandb.finish()
 
             test_probe = lightning._test_probe_curves
             test_neural = lightning._test_neural_curves
 
             # Save parquet
-            tip = tipology_tag(mode)
-            result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
-            out_dir = _RESULTS / result_subdir
-            out_dir.mkdir(parents=True, exist_ok=True)
+            out.parent.mkdir(parents=True, exist_ok=True)
             rows = [
                 {
                     "seed": cfg.training.seed,
@@ -562,6 +575,7 @@ def main(cfg: DictConfig) -> None:
                     "tx_enc": ctx["tx_enc"],
                     "rx_enc": ctx["rx_enc"],
                     "channel_dim": ch_dim,
+                    "constructive": constructive,
                     "variant": "Classic Adam",
                     "K": K,
                     "probe_acc": classic_probe,
@@ -576,19 +590,15 @@ def main(cfg: DictConfig) -> None:
                     "tx_enc": ctx["tx_enc"],
                     "rx_enc": ctx["rx_enc"],
                     "channel_dim": ch_dim,
+                    "constructive": constructive,
                     "variant": f"Unrolled ({coup})",
                     "K": K,
                     "probe_acc": test_probe,
                     "neural_acc": test_neural,
                 },
             ]
-            fname = (
-                f"{cfg.datasets.hf_name}_unrolled_{strategy_name}"
-                f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
-                f"_{ctx['tx_enc']}_{ctx['rx_enc']}.parquet"
-            )
-            pl.DataFrame(rows).write_parquet(out_dir / fname)
-            print(f"Parquet saved → {out_dir / fname}")
+            pl.DataFrame(rows).write_parquet(out)
+            print(f"Parquet saved → {out}")
             del model
             torch.cuda.empty_cache()
 

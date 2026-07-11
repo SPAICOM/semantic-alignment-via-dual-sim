@@ -1,5 +1,6 @@
 defaults:
   - base
+  - coupling: diagonal # conv | conv2d | diagonal | scalar
 
 # Number of unrolled gradient layers (inference iterations)
 K: 10
@@ -11,8 +12,7 @@ lr_rx: 0.2
 
 # Training hyper-params
 batch_size: 16
-epochs: 10
-lr_w: 1.0e-2
+epochs: 100
 lr_schedule: cosine  # none | cosine
 grad_clip: 1.0
 
@@ -28,12 +28,6 @@ wandb_project: compare_unrolled
 init_w: 0.1
 init_mu: 0.9
 
-# Coupling: how the step-size W^k is structured.
-#   scalar   — one scalar per unrolled step (K params)
-#   diagonal — one scalar per phase coordinate per step (K × n_phases params)
-coupling:
-  - diagonal
-
 # Innovation normalisation: rms | unit | sign | none
 innovation_norm: rms
 
@@ -41,9 +35,12 @@ innovation_norm: rms
 innovation_mode: autograd
 
 # Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
-supervision: all
-gamma: 0.9
-first_order: false
+supervision: all      # 'final': only last step NMSE | 'all': weighted sum over all K steps
+weight_ratio: 1.0     # w[0]/w[K-1]: ratio of first-layer to last-layer loss weight (only used when supervision=all)
+                      # 1.0=uniform; 0.0=last-layer only; 0.2 ≈ gamma=0.946 for K=30
+
+# Mixed-precision training: use bfloat16 (saves ~50% memory, needs Ampere+ GPU)
+bf16: true
 
 # Adam-style momentum on the innovation
 momentum: true

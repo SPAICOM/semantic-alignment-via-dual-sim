@@ -1170,8 +1170,8 @@ def _arch_comparison_generic(
         ls_handles,
         [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
-        loc="upper right",
-        bbox_to_anchor=(1.0, 1.12),
+        loc="upper center",
+        bbox_to_anchor=(0.75, 1.12),
         frameon=True,
         framealpha=1,
     )
@@ -1926,8 +1926,8 @@ def _arch_comparison_asym_vs_sym(
         ls_handles,
         [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
-        loc="lower right",
-        bbox_to_anchor=(1.0, -0.14),
+        loc="lower center",
+        bbox_to_anchor=(0.75, -0.14),
         frameon=True,
         framealpha=1,
     )
@@ -1969,98 +1969,166 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Unrolled vs Classic — per-iteration accuracy comparison
+# Unrolled (diagonal) vs Classic — per-layer accuracy grid
 # ---------------------------------------------------------------------------
 
 
-def unrolled_vs_classic_iterations() -> None:
-    """Compare classic vs unrolled convergence: accuracy vs iteration.
+def unrolled_accuracy_grid() -> None:
+    """Accuracy per unrolled layer — grid over alignment strategies.
 
-    Columns: Linear / PPFE.  Color: Mono / Joint.  Style: Classic (dashed) / Unrolled (solid).
-    Baselines: No Mismatch, Oracle.
+    Columns: Linear / PPFE.
+    Color:   SIM tipology (from _ARCH_PALETTE: Joint, Mono, …).
+    Style:   Classic (dashed) / Deep Unrolling (solid).
+
+    Loads all parquets under results/unrolled/{arch}/ and tags each with its
+    arch key so that Classic Adam and Unrolled share the same color per arch.
     """
+    from matplotlib.lines import Line2D
 
-    def _iter_curve(df, col_key):
-        """Return (x, y_mean, y_low, y_hi) from a list-column."""
-        if col_key not in df.columns:
-            return None
-        exploded = df.select(
-            pl.col(col_key).explode().alias("acc"),
-            pl.int_range(0, pl.count()).over(pl.col("seed")).alias("iter"),
-        ).drop_nulls()
-        if exploded.is_empty():
-            return None
-        stats = (
-            exploded.group_by("iter")
-            .agg(
-                [
-                    pl.col("acc").mean().alias("mean"),
-                    pl.col("acc").std().alias("std"),
-                    pl.col("acc").count().alias("n"),
-                ]
-            )
-            .sort("iter")
-        )
-        x = stats["iter"].to_numpy()
-        y = stats["mean"].to_numpy()
-        ci = 1.96 * stats["std"].to_numpy() / np.sqrt(stats["n"].to_numpy())
-        return x, y, y - ci, y + ci
+    # (arch display name, subdirectory)
+    _ARCH_SUBDIRS = [
+        ("Joint", "joint"),
+        ("Mono", "mono"),
+    ]
+
+    frames = []
+    for arch_name, arch_sub in _ARCH_SUBDIRS:
+        sub = RESULTS / "unrolled" / arch_sub
+        arch_files = sorted(sub.glob("*.parquet")) if sub.exists() else []
+        for f in arch_files:
+            tmp = pl.read_parquet(f).with_columns(pl.lit(arch_name).alias("arch"))
+            frames.append(tmp)
+
+    if not frames:
+        print("No unrolled results found.")
+        return
+
+    df = pl.concat(frames, how="diagonal_relaxed")
+    df = df.filter(
+        pl.col("strategy").is_in(STRATEGIES)
+        & pl.col("variant").is_in(["Classic Adam", "Unrolled (diagonal)"])
+    )
+    if "constructive" in df.columns:
+        df = df.filter(pl.col("constructive"))
+    if df.is_empty():
+        return
+
+    present_archs = [a for a, _ in _ARCH_SUBDIRS if a in df["arch"].unique().to_list()]
 
     fig, axes = plt.subplots(
-        1, 2, sharey=True, sharex=True, figsize=(14, 5.5), layout="constrained"
+        1,
+        len(STRATEGIES),
+        sharey=True,
+        figsize=(7 * len(STRATEGIES), 5),
+        layout="constrained",
     )
+    axes = list(np.atleast_1d(axes))
 
-    baseline_drawn = [False, False]
+    for col_idx, strat in enumerate(STRATEGIES):
+        ax = axes[col_idx]
+        df_s = df.filter(pl.col("strategy") == strat)
 
-    for col, strat in enumerate(STRATEGIES):
-        ax = axes[col]
+        x_min, x_max = np.inf, -np.inf
+        for arch in present_archs:
+            color = _ARCH_PALETTE.get(arch, "gray")
+            df_a = df_s.filter(pl.col("arch") == arch)
 
-        for arch, color, subdir in [
-            ("Mono", _ARCH_FAMILY_COLORS["Mono"], "compare_unrolled_mono"),
-            ("Joint", _ARCH_FAMILY_COLORS["Joint"], "compare_unrolled_joint"),
-        ]:
-            df = _get(subdir)
-            if df is None:
-                continue
-            if arch == "Mono":
-                if "constructive" not in df.columns:
+            marker = _ARCH_MARKERS.get(arch, "o")
+            for variant, ls in [("Classic Adam", "--"), ("Unrolled (diagonal)", "-")]:
+                grp = df_a.filter(pl.col("variant") == variant)
+                if grp.is_empty():
                     continue
-                df = df.filter(pl.col("constructive"))
-            df_s = df.filter(pl.col("strategy") == strat)
-            if df_s.is_empty():
-                continue
 
-            for method, ls, col_key in [
-                ("Classic", "--", "classic_acc_history_neural"),
-                ("Unrolled", "-", "unrolled_acc_history_neural"),
-            ]:
-                curve = _iter_curve(df_s, col_key)
-                if curve is None:
+                acc_col = "neural_acc" if "neural_acc" in grp.columns else "probe_acc"
+                all_curves = []
+                for outer in grp[acc_col]:
+                    if outer is None:
+                        continue
+                    for curve in outer:
+                        if curve is not None and len(curve) > 0:
+                            all_curves.append(list(curve))
+                if not all_curves:
                     continue
-                x, y, lo, hi = curve
-                ax.plot(x, y, ls=ls, color=color, linewidth=2, label=f"{arch} {method}")
-                ax.fill_between(x, lo, hi, alpha=0.15, color=color)
 
-            if not baseline_drawn[col]:
-                _add_baseline_hlines(df)
-                baseline_drawn[col] = True
+                arr = np.array(all_curves)  # (n_evals, K)
+                mean = arr.mean(axis=0)
+                se = arr.std(axis=0) / np.sqrt(len(arr))
+                x = np.arange(len(mean))
+                every = max(1, len(mean) // 6)
+                x_min = min(x_min, x[0])
+                x_max = max(x_max, x[-1])
+
+                ax.plot(
+                    x,
+                    mean,
+                    color=color,
+                    ls=ls,
+                    linewidth=2,
+                    marker=marker,
+                    markersize=6,
+                    markevery=every,
+                )
+                ax.fill_between(x, mean - 1.96 * se, mean + 1.96 * se, color=color, alpha=0.12)
+                for idx in (int(np.argmin(mean)), int(np.argmax(mean))):
+                    ax.scatter(
+                        x[idx],
+                        mean[idx],
+                        color=color,
+                        marker=marker,
+                        s=80,
+                        zorder=5,
+                        edgecolors="white",
+                        linewidths=0.6,
+                    )
 
         ax.set_title(strat)
-        ax.set_xlabel("Iteration")
+        ax.set_xlabel(r"Iterations / Num.\ Layers")
+        if col_idx == 0:
+            ax.set_ylabel("Accuracy")
+        if np.isfinite(x_min) and np.isfinite(x_max):
+            ax.set_xlim(x_min, x_max)
 
-    axes[0].set_ylabel("Neural Accuracy")
-
-    handles, labels = axes[0].get_legend_handles_labels()
-    by_label = dict(zip(labels, handles))
+    # Method legend — top center, no title
+    ls_handles = [
+        Line2D([0], [0], color="gray", ls="--", lw=2, label="Classic"),
+        Line2D([0], [0], color="gray", ls="-", lw=2, label="Deep Unrolling"),
+    ]
     fig.legend(
-        by_label.values(),
-        by_label.keys(),
+        ls_handles,
+        [h.get_label() for h in ls_handles],
+        ncol=2,
         loc="upper center",
-        ncol=3,
-        fontsize=13,
+        bbox_to_anchor=(0.5, 1.12),
         frameon=True,
+        framealpha=1,
     )
-    _save("UnrolledVsClassic_Iterations")
+
+    # SIM arch legend — bottom center, marker only, no title (like ArchComparison)
+    arch_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=_ARCH_PALETTE.get(a, "gray"),
+            marker=_ARCH_MARKERS.get(a, "o"),
+            ls="none",
+            markersize=10,
+            label=a,
+        )
+        for a in present_archs
+    ]
+    fig.legend(
+        arch_handles,
+        [h.get_label() for h in arch_handles],
+        ncol=len(arch_handles),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.20),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
+
+    _save("Unrolled_AccuracyGrid")
 
 
 # ---------------------------------------------------------------------------
@@ -2070,7 +2138,7 @@ def unrolled_vs_classic_iterations() -> None:
 
 def _plot_all() -> None:
     """Run every plot function for the currently active ``_DATASET`` / ``IMG_PATH``."""
-    unrolled_vs_classic_iterations()
+    unrolled_accuracy_grid()
     accuracy_vs_simlayers()
     accuracy_vs_snr()
     accuracy_vs_disjoint_asym_layers()

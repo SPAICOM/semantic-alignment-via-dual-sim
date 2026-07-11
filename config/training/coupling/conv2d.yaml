@@ -1,0 +1,14 @@
+# @package _global_
+training:
+  coupling: conv2d
+  k_spatial: 7       # spatial kernel size (conv2d per layer)
+  k_layer: 1         # cross-layer neighbors per layer
+
+  s_mode: diagonal # scalar | diagonal | kernel | hybrid
+  k_spatial_s: 7
+  k_layer_s: 1
+  reg_s_mode: identity # none | l2 | identity
+
+  w_mode: hybrid     # kernel | hybrid (kernel + diagonal)
+  mu_mode: scalar    # scalar | diagonal
+  lr_w: 1.0e-2

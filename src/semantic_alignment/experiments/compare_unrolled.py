@@ -448,8 +448,9 @@ class UnrolledLightning(lg.LightningModule):
         Whether to include H in the loss (mono mode).
     supervision : str
         ``'all'`` (deep supervision) or ``'final'``.
-    gamma : float
-        Discount factor for deep supervision (ignored if supervision='final').
+    weight_ratio : float
+        w[0]/w[K-1] ratio for deep supervision (ignored if supervision='final').
+        1.0=uniform; 0.0=last-layer only. Converted to per-step gamma internally.
     lr_w : float
         Learning rate for unrolled step-size parameters.
     lr_schedule : str
@@ -474,7 +475,7 @@ class UnrolledLightning(lg.LightningModule):
         unrolled_model=None,
         constructive: bool = False,
         supervision: str = "final",
-        gamma: float = 1.0,
+        weight_ratio: float = 1.0,
         lr_w: float = 1e-2,
         lr_schedule: str = "none",
         grad_clip: float = 1.0,
@@ -510,7 +511,7 @@ class UnrolledLightning(lg.LightningModule):
         self.grad_clip = grad_clip
         self.constructive = constructive
         self.supervision = supervision
-        self.gamma = gamma
+        self.weight_ratio = weight_ratio
         self.epochs = epochs
         self.reg_S_coef = reg_S
 
@@ -548,7 +549,7 @@ class UnrolledLightning(lg.LightningModule):
                 self.A_target,
                 B=H_batch.shape[0],
                 supervision=self.supervision,
-                gamma=self.gamma,
+                weight_ratio=self.weight_ratio,
             )
         elif self.mode == "mono":
             left_mat = H_batch if self.constructive else None
@@ -557,7 +558,7 @@ class UnrolledLightning(lg.LightningModule):
                 left_mat=left_mat,
                 B=H_batch.shape[0],
                 supervision=self.supervision,
-                gamma=self.gamma,
+                weight_ratio=self.weight_ratio,
             )
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
@@ -587,7 +588,7 @@ class UnrolledLightning(lg.LightningModule):
                 self.A_target,
                 B=H_batch.shape[0],
                 supervision=self.supervision,
-                gamma=self.gamma,
+                weight_ratio=self.weight_ratio,
             )
         elif self.mode == "mono":
             left_mat = H_batch if self.constructive else None
@@ -596,7 +597,7 @@ class UnrolledLightning(lg.LightningModule):
                 left_mat=left_mat,
                 B=H_batch.shape[0],
                 supervision=self.supervision,
-                gamma=self.gamma,
+                weight_ratio=self.weight_ratio,
             )
         else:
             raise ValueError(f"Unknown mode: {self.mode}")

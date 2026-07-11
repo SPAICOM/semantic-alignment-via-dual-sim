@@ -1,0 +1,13 @@
+# @package _global_
+training:
+  coupling: conv
+  k_spatial: 7       # spatial kernel size for w
+  k_layer: 3         # depth kernel size for w (conv3d)
+
+  s_mode: kernel     # scalar | diagonal | kernel
+  k_spatial_s: 13    # spatial kernel size for S
+  k_layer_s: 3       # depth kernel size for S conv3d
+  reg_s_mode: none   # none | l2 | identity
+
+  mu_mode: scalar    # scalar | diagonal
+  lr_w: 1.0e-2

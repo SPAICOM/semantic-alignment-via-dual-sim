@@ -10,6 +10,7 @@ from ._cascade import (
 from ._cascade import (
     cascade_backward_TX as _cascade_backward_TX,
 )
+from ._step import ConvStep, DiagonalStep, ScalarStep, build_step
 from ._utils import _nmse, _normalize, _phase_from_logit
 from .dual import DualSIMUnrolledSCA
 from .mono import MonoSIMUnrolledSCA
@@ -17,6 +18,10 @@ from .mono import MonoSIMUnrolledSCA
 __all__ = [
     "DualSIMUnrolledSCA",
     "MonoSIMUnrolledSCA",
+    "ScalarStep",
+    "DiagonalStep",
+    "ConvStep",
+    "build_step",
     "_build_cascade_TX",
     "_build_cascade_RX",
     "_cascade_backward_TX",
