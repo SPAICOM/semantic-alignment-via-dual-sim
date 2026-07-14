@@ -15,6 +15,6 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      sim.channel_dim: 1,2,4,6,8,10,20,192,384
+      sim.channel_dim: 1,2,4,6,8,10,12,14,16,18,20,192,384
       alignment: linear,ppfe
       training.seed: 27,42,100,123,144,200

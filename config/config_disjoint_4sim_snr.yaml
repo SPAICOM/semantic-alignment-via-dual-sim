@@ -18,4 +18,4 @@ hydra:
     params:
       sim.M_int: 32
       training.seed: 27,42,100,123,144,200
-      sim.snr: -10,0,10,20,30,40
+      sim.snr: -20,-10,0,10,20,30,40

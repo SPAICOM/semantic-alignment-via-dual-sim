@@ -7,6 +7,7 @@ spacing_divisor: 2
 epsilon: 1.0e-6
 constructive: false    # false: SVD split baked into targets | true: Σ⁻¹ᐟ² factors in loss
 
+
 L: 10
 M_int: 32
 channel_dim: 20
