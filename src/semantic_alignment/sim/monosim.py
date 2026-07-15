@@ -23,8 +23,10 @@ MonoSIMoptimizerTorch — PyTorch wrapper with gradient-based phase optimisation
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm  # noqa: F401  (kept for any downstream importers)
+
+from ._cascade import xi_to_phasor
+from .core import optimize_mono
 
 
 class MonoSIMoptimizer:
@@ -226,8 +228,7 @@ class MonoSIMoptimizerTorch(nn.Module):
             G = None
             for i in range(self.L):
                 W_i = getattr(self, f"W_{i}")
-                phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
-                Y_i = torch.diag(torch.exp(1j * phase))
+                Y_i = torch.diag(xi_to_phasor(self.xi[i]))
                 G = Y_i if G is None else Y_i @ G
                 G = W_i @ G
             return G
@@ -235,64 +236,9 @@ class MonoSIMoptimizerTorch(nn.Module):
             G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
             for i in range(self.L):
                 W_i = getattr(self, f"W_{i}")
-                # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
-                phase = 2 * torch.pi * torch.sigmoid(self.xi[i])
-                Y_i = torch.diag(torch.exp(1j * phase))
+                Y_i = torch.diag(xi_to_phasor(self.xi[i]))
                 G = Y_i @ W_i @ G
             return G
-
-    @staticmethod
-    def _build_optimizer(params, lr: float, optimizer: str):
-        """Construct an SGD or Adam optimizer for ``params``.
-
-        Parameters
-        ----------
-        params : iterable of torch.Tensor
-            Parameters to optimize.
-        lr : float
-            Learning rate.
-        optimizer : str
-            ``"sgd"`` or ``"adam"``.
-
-        Returns
-        -------
-        torch.optim.Optimizer
-            Configured optimizer.
-        """
-        if optimizer == "sgd":
-            return optim.SGD(params, lr=lr)
-        return optim.Adam(params, lr=lr, betas=(0.9, 0.999), eps=1e-8)
-
-    @staticmethod
-    def _build_scheduler(opt, scheduler: str, max_iters: int, warmup_frac: float, lr: float):
-        """Return a cosine-annealing LR scheduler with warm-up, or ``None`` for fixed LR.
-
-        Parameters
-        ----------
-        opt : torch.optim.Optimizer
-            Optimizer to schedule.
-        scheduler : str or None
-            ``"cosine"`` to enable scheduling, any other value returns ``None``.
-        max_iters : int
-            Total number of training iterations.
-        warmup_frac : float
-            Fraction of ``max_iters`` held at constant LR before decay.
-        lr : float
-            Base learning rate (used for ``eta_min = lr * 1e-3``).
-
-        Returns
-        -------
-        torch.optim.lr_scheduler.SequentialLR or None
-        """
-        if scheduler != "cosine":
-            return None
-        warmup_iters = max(1, int(max_iters * warmup_frac))
-        cosine_iters = max(1, max_iters - warmup_iters)
-        constant = optim.lr_scheduler.ConstantLR(opt, factor=1.0, total_iters=warmup_iters)
-        cosine = optim.lr_scheduler.CosineAnnealingLR(opt, T_max=cosine_iters, eta_min=lr * 1e-3)
-        return optim.lr_scheduler.SequentialLR(
-            opt, schedulers=[constant, cosine], milestones=[warmup_iters]
-        )
 
     def optimize_sim(
         self,
@@ -345,56 +291,32 @@ class MonoSIMoptimizerTorch(nn.Module):
         L = left_matrix.to(dev).to(torch.complex64).detach() if left_matrix is not None else None
         R = right_matrix.to(dev).to(torch.complex64).detach() if right_matrix is not None else None
 
-        def _eff(G):
-            G_e = G
-            if L is not None:
-                G_e = L @ G_e
-            if R is not None:
-                G_e = G_e @ R
-            return G_e
+        W_list = [getattr(self, f"W_{i}") for i in range(self.L)]
+        sizes = [p.shape[0] for p in self.xi]
+        phases_init = [p.data.clone() for p in self.xi]
 
-        opt = self._build_optimizer(self.xi.parameters(), lr, optimizer)
-        sched = self._build_scheduler(opt, scheduler, max_iters, warmup_frac, lr)
-        loss_history = []
-        best_loss = float("inf")
-        best_xi = [p.data.clone() for p in self.xi]
-
-        bar = tqdm(
-            range(max_iters), desc=f"MonoSIM {self.side.upper()}", leave=False, dynamic_ncols=True
+        phases, loss_history, beta_f = optimize_mono(
+            W_list,
+            sizes,
+            Target,
+            max_iters,
+            lr,
+            dev,
+            side=self.side,
+            left_matrix=L,
+            right_matrix=R,
+            phases_init=phases_init,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            warmup_frac=warmup_frac,
+            best_tracking=True,
+            show_progress=True,
+            desc=f"MonoSIM {self.side.upper()}",
         )
-        for k in bar:
-            with torch.no_grad():
-                G_eff_k = _eff(self.get_cascade())
-                beta_k = torch.sum(torch.conj(G_eff_k) * Target) / (
-                    torch.sum(torch.conj(G_eff_k) * G_eff_k) + 1e-12
-                )
-
-            opt.zero_grad()
-            G_eff = _eff(self.get_cascade())
-            loss = torch.norm(beta_k * G_eff - Target, p="fro") ** 2 / (
-                G_eff.shape[0] * G_eff.shape[1]
-            )
-            loss.backward()
-            opt.step()
-            if sched is not None:
-                sched.step()
-
-            loss_history.append(loss.item())
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                best_xi = [p.data.clone() for p in self.xi]
-            bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
-
-        bar.close()
         with torch.no_grad():
-            for p, best in zip(self.xi, best_xi):
-                p.copy_(best)
-            G_eff_f = _eff(self.get_cascade())
-            beta_f = torch.sum(torch.conj(G_eff_f) * Target) / (
-                torch.sum(torch.conj(G_eff_f) * G_eff_f) + 1e-12
-            )
-
-        return loss_history, beta_f.item()
+            for p, ph in zip(self.xi, phases):
+                p.copy_(ph)
+        return loss_history, beta_f
 
     def optimize_rx_sequential(
         self,
@@ -437,54 +359,42 @@ class MonoSIMoptimizerTorch(nn.Module):
         beta_f : float
             Optimal scalar β at the final iteration.
         """
+        dev = self.xi[0].device
         if isinstance(H_eff, torch.Tensor):
-            H_eff_t = H_eff.clone().detach().to(self.xi[0].device).to(torch.complex64)
+            H_eff_t = H_eff.clone().detach().to(dev).to(torch.complex64)
         else:
-            H_eff_t = torch.tensor(H_eff, dtype=torch.complex64, device=self.xi[0].device)
+            H_eff_t = torch.tensor(H_eff, dtype=torch.complex64, device=dev)
 
         if isinstance(A_target, torch.Tensor):
-            A_t = A_target.clone().detach().to(self.xi[0].device).to(torch.complex64)
+            A_t = A_target.clone().detach().to(dev).to(torch.complex64)
         else:
-            A_t = torch.tensor(A_target, dtype=torch.complex64, device=self.xi[0].device)
+            A_t = torch.tensor(A_target, dtype=torch.complex64, device=dev)
 
-        opt = self._build_optimizer(self.xi.parameters(), lr, optimizer)
-        sched = self._build_scheduler(opt, scheduler, max_iters, warmup_frac, lr)
-        loss_history = []
-        best_loss = float("inf")
-        best_xi = [p.data.clone() for p in self.xi]
+        W_list = [getattr(self, f"W_{i}") for i in range(self.L)]
+        sizes = [p.shape[0] for p in self.xi]
+        phases_init = [p.data.clone() for p in self.xi]
 
-        bar = tqdm(range(max_iters), desc="MonoSIM RX seq", leave=False, dynamic_ncols=True)
-        for k in bar:
-            with torch.no_grad():
-                G_R = self.get_cascade()
-                Z = G_R @ H_eff_t
-                beta_k = torch.sum(torch.conj(Z) * A_t) / (torch.sum(torch.conj(Z) * Z) + 1e-12)
-
-            opt.zero_grad()
-            Z_cur = self.get_cascade() @ H_eff_t
-            loss = torch.norm(beta_k * Z_cur - A_t, p="fro") ** 2 / (
-                Z_cur.shape[0] * Z_cur.shape[1]
-            )
-            loss.backward()
-            opt.step()
-            if sched is not None:
-                sched.step()
-
-            loss_history.append(loss.item())
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                best_xi = [p.data.clone() for p in self.xi]
-            bar.set_postfix(loss=f"{loss.item():.4e}", beta=f"{torch.abs(beta_k).item():.2e}")
-        bar.close()
-
+        phases, loss_history, beta_f = optimize_mono(
+            W_list,
+            sizes,
+            A_t,
+            max_iters,
+            lr,
+            dev,
+            side="rx",
+            right_matrix=H_eff_t,
+            phases_init=phases_init,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            warmup_frac=warmup_frac,
+            best_tracking=True,
+            show_progress=True,
+            desc="MonoSIM RX seq",
+        )
         with torch.no_grad():
-            for p, best in zip(self.xi, best_xi):
-                p.copy_(best)
-            G_R_f = self.get_cascade()
-            Z_f = G_R_f @ H_eff_t
-            beta_f = torch.sum(torch.conj(Z_f) * A_t) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
-
-        return loss_history, beta_f.item()
+            for p, ph in zip(self.xi, phases):
+                p.copy_(ph)
+        return loss_history, beta_f
 
 
 if __name__ == "__main__":

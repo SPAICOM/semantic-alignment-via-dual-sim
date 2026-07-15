@@ -127,17 +127,9 @@ def make_fname(
     n_clusters: int | None = None,
     dataset: str = "cifar10",
     preconditioner: str = "none",
+    **_,
 ) -> str:
-    """Build a canonical Parquet filename from all experiment fields.
-
-    All fields are always present; ``None`` values use ``"none"`` for s-layer
-    and ``"inf"`` for SNR so filenames are self-documenting without branching.
-    When ``n_clusters`` is provided (PPFE n-clusters sweep), ``_k{n_clusters}``
-    is appended before the encoder suffix.
-    The filename is prefixed with ``{dataset}_``.
-    When ``preconditioner`` is not ``'none'``, ``_prec{preconditioner}`` is
-    appended before the encoder suffix.
-    """
+    """Build a canonical Parquet filename from all experiment fields."""
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
     k_tag = f"_k{n_clusters}" if n_clusters is not None else ""

@@ -23,8 +23,10 @@ DualSIMoptimizerTorch — PyTorch wrapper with gradient-based alternating optimi
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from tqdm.auto import tqdm
+from tqdm.auto import tqdm  # noqa: F401  (kept for any downstream importers)
+
+from ._cascade import xi_to_phasor
+from .core import optimize_joint
 
 
 class DualSIMoptimizer:
@@ -415,9 +417,7 @@ class DualSIMoptimizerTorch(nn.Module):
         device = phases[0].device
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
         for i in range(L):
-            # Map unconstrained parameter to [0, 2π) via sigmoid — smooth, bounded gradient
-            phase = 2 * torch.pi * torch.sigmoid(phases[i])
-            Y_l = torch.diag(torch.exp(1j * phase))
+            Y_l = torch.diag(xi_to_phasor(phases[i]))
             G = Y_l @ W_list[i] @ G
         return G
 
@@ -447,8 +447,7 @@ class DualSIMoptimizerTorch(nn.Module):
         W_R = self._get_W_list("W_R", self.L_R)
         G = None
         for i in range(self.L_R):
-            phase = 2 * torch.pi * torch.sigmoid(self.xi_R[i])
-            Y_l = torch.diag(torch.exp(1j * phase))
+            Y_l = torch.diag(xi_to_phasor(self.xi_R[i]))
             G = Y_l if G is None else Y_l @ G  # phase shift first
             G = W_R[i] @ G  # then propagation
         return G
@@ -518,8 +517,7 @@ class DualSIMoptimizerTorch(nn.Module):
         W_R = self._get_W_list("W_R", self.L_R)
         GR = None
         for i in range(self.L_R):
-            phase = 2 * torch.pi * torch.sigmoid(phases_R[i])
-            Y_l = torch.diag(torch.exp(1j * phase))
+            Y_l = torch.diag(xi_to_phasor(phases_R[i]))
             GR = Y_l if GR is None else Y_l @ GR
             GR = W_R[i] @ GR
 
@@ -538,6 +536,7 @@ class DualSIMoptimizerTorch(nn.Module):
         k_R: int = 100,
         optimizer: str = "adam",
         scheduler: str | None = None,
+        eval_fn=None,
     ):
         """Alternating gradient optimization of TX and RX phase shifts.
 
@@ -586,102 +585,48 @@ class DualSIMoptimizerTorch(nn.Module):
         list of float
             Per-cycle loss values ``‖β Z − A‖²_F / (n·m)``.
         """
-        A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
-        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
-
         device = next(self.parameters()).device
-        A_torch = A_torch.to(device)
-        H_torch = H_torch.to(device)
+        A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
-        if optimizer == "sgd":
-            opt_T = optim.SGD(self.xi_T.parameters(), lr=lr_tx)
-            opt_R = optim.SGD(self.xi_R.parameters(), lr=lr_rx)
-        else:
-            opt_T = optim.Adam(self.xi_T.parameters(), lr=lr_tx, betas=(0.9, 0.999), eps=1e-8)
-            opt_R = optim.Adam(self.xi_R.parameters(), lr=lr_rx, betas=(0.9, 0.999), eps=1e-8)
+        W_T = [getattr(self, f"W_T_{i}") for i in range(self.L_T)]
+        W_R = [getattr(self, f"W_R_{i}") for i in range(self.L_R)]
+        sizes_T = [p.shape[0] for p in self.xi_T]
+        sizes_R = [p.shape[0] for p in self.xi_R]
+        phases_T_init = [p.data.clone() for p in self.xi_T]
+        phases_R_init = [p.data.clone() for p in self.xi_R]
 
         n_cycles = max(1, max_iters // (k_T + k_R))
 
-        if scheduler == "cosine":
-            warmup_iters = max(1, int(n_cycles * warmup_frac))
-            cosine_iters = max(1, n_cycles - warmup_iters)
-
-            def _make_scheduler(opt, base_lr):
-                constant = optim.lr_scheduler.ConstantLR(opt, factor=1.0, total_iters=warmup_iters)
-                cosine = optim.lr_scheduler.CosineAnnealingLR(
-                    opt, T_max=cosine_iters, eta_min=base_lr * 1e-3
-                )
-                return optim.lr_scheduler.SequentialLR(
-                    opt, schedulers=[constant, cosine], milestones=[warmup_iters]
-                )
-
-            sched_T = _make_scheduler(opt_T, lr_tx)
-            sched_R = _make_scheduler(opt_R, lr_rx)
-
-        def _step_side(opt, params):
-            with torch.no_grad():
-                Z_tmp, _ = self.get_effective_cascade(H_torch)
-                Z_norm = torch.norm(Z_tmp, p="fro") + 1e-12
-                # Closed-form optimal β — computed without gradient so the loss
-                # gradient flows only through Z, not through β
-                beta_k = torch.sum(torch.conj(Z_tmp) * A_torch) / (
-                    torch.sum(torch.conj(Z_tmp) * Z_tmp) + 1e-12
-                )
-
-            opt.zero_grad()
-            Z, _ = self.get_effective_cascade(H_torch)
-            loss_J = torch.norm(beta_k * Z - A_torch, p="fro") ** 2 / (
-                A_torch.shape[0] * A_torch.shape[1]
-            )
-            loss_J.backward()
-            if clip_value is not None:
-                nn.utils.clip_grad_norm_(params, max_norm=clip_value)
-            opt.step()
-            return loss_J.item(), beta_k.detach(), Z_norm.detach()
-
-        loss_history = []
-        best_loss = float("inf")
-        best_xi_T = [p.data.clone() for p in self.xi_T]
-        best_xi_R = [p.data.clone() for p in self.xi_R]
-
-        bar = tqdm(range(n_cycles), desc="DualSIM", leave=False, dynamic_ncols=True)
-        for k in bar:
-            current_loss = 0.0
-            beta_k = torch.tensor(1.0 + 0j, device=device)
-            Z_norm_k = torch.tensor(1.0, device=device)
-
-            for _ in range(k_T):
-                current_loss, beta_k, Z_norm_k = _step_side(opt_T, list(self.xi_T.parameters()))
-            for _ in range(k_R):
-                current_loss, beta_k, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()))
-
-            if scheduler == "cosine":
-                sched_T.step()
-                sched_R.step()
-            loss_history.append(current_loss)
-
-            if current_loss < best_loss:
-                best_loss = current_loss
-                best_xi_T = [p.data.clone() for p in self.xi_T]
-                best_xi_R = [p.data.clone() for p in self.xi_R]
-
-            bar.set_postfix(
-                loss=f"{current_loss:.4e}",
-                lr=f"{opt_T.param_groups[0]['lr']:.1e}",
-                Z=f"{Z_norm_k.item():.2e}",
-            )
-        bar.close()
-
+        phases_T, phases_R, loss_history, _ = optimize_joint(
+            W_T,
+            W_R,
+            sizes_T,
+            sizes_R,
+            H_torch,
+            A_torch,
+            n_cycles,
+            lr_tx,
+            lr_rx,
+            device,
+            phases_T_init=phases_T_init,
+            phases_R_init=phases_R_init,
+            k_T=k_T,
+            k_R=k_R,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            warmup_frac=warmup_frac,
+            best_tracking=True,
+            clip_value=clip_value,
+            eval_fn=eval_fn,
+            show_progress=True,
+            desc="DualSIM",
+        )
         with torch.no_grad():
-            for p, best in zip(self.xi_T, best_xi_T):
-                p.copy_(best)
-            for p, best in zip(self.xi_R, best_xi_R):
-                p.copy_(best)
-
-        with torch.no_grad():
-            Z_f, _ = self.get_effective_cascade(H_torch)
-            pass  # accuracy printed by calling experiment_runner
-
+            for p, ph in zip(self.xi_T, phases_T):
+                p.copy_(ph)
+            for p, ph in zip(self.xi_R, phases_R):
+                p.copy_(ph)
         return loss_history
 
 

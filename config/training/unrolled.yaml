@@ -3,7 +3,7 @@ defaults:
   - coupling: diagonal # conv | conv2d | diagonal | scalar
 
 # Number of unrolled gradient layers (inference iterations)
-K: 10
+K: 30
 
 # Learning rate for the classic-comparison Adam loop
 lr: 0.1
@@ -33,6 +33,10 @@ innovation_norm: rms
 
 # How the descent direction is computed: autograd | analytic
 innovation_mode: autograd
+
+# Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
+warm_start_t: 30000       # classic Adam steps before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
+warm_start_H_seed: null  # seed for H_start (null = identity matrix)
 
 # Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
 supervision: all      # 'final': only last step NMSE | 'all': weighted sum over all K steps

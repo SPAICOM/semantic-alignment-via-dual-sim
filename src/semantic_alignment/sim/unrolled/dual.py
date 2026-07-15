@@ -1,18 +1,21 @@
 import torch
-import torch.nn as nn
 
-from ._cascade import (
+from .._cascade import (
     build_cascade_RX,
     build_cascade_TX,
     cascade_backward_RX,
     cascade_backward_TX,
 )
+from ._base import DualUnrolledSCA
 from ._step import build_step
 from ._utils import _nmse, _normalize
 
 
-class DualSIMUnrolledSCA(nn.Module):
-    """Deep unrolled SCA for dual-SIM (joint TX + RX).
+class JointSIMUnrolledSCA(DualUnrolledSCA):
+    """Deep unrolled SCA for dual-SIM with joint TX + RX cascade.
+
+    Both TX and RX phases are updated simultaneously in each step using
+    the gradient of the joint NMSE ``‖β G_R H G_T − A‖²``.
 
     Parameters
     ----------
@@ -54,6 +57,8 @@ class DualSIMUnrolledSCA(nn.Module):
         reg_s_mode: str = "none",
         w_mode: str = "kernel",
         eps: float = 1e-12,
+        phases_T_init: list | None = None,
+        phases_R_init: list | None = None,
     ):
         super().__init__()
         if coupling not in ("scalar", "diagonal", "conv", "conv2d"):
@@ -102,6 +107,9 @@ class DualSIMUnrolledSCA(nn.Module):
         )
         self.step_T = build_step(coupling, K, self.sizes_T, shapes_T, **step_kwargs)
         self.step_R = build_step(coupling, K, self.sizes_R, shapes_R, **step_kwargs)
+
+        self._phT_warm: list | None = phases_T_init
+        self._phR_warm: list | None = phases_R_init
 
     # ---- helpers -----------------------------------------------------------
 
@@ -181,7 +189,7 @@ class DualSIMUnrolledSCA(nn.Module):
         deep = supervision == "all"
         if deep and not (0.0 < weight_ratio <= 1.0):
             raise ValueError(
-                f"weight_ratio must be in (0, 1] when supervision='all'; got {weight_ratio}. Use supervision='final' to train on the last step only."
+                f"weight_ratio must be in (0, 1] when supervision='all'; got {weight_ratio}."
             )
         gamma = weight_ratio ** (1.0 / (k_run - 1)) if (weight_ratio < 1.0 and k_run > 1) else 1.0
 
@@ -189,12 +197,15 @@ class DualSIMUnrolledSCA(nn.Module):
         A, H = A.to(dev), H.to(dev)
         A2 = (A.conj() * A).sum((-2, -1)).real
 
-        phT = [torch.zeros(B, m, device=dev) for m in self.sizes_T]
-        phR = [torch.zeros(B, m, device=dev) for m in self.sizes_R]
+        if self._phT_warm is not None:
+            phT = [p.unsqueeze(0).expand(B, -1).clone() for p in self._phT_warm]
+            phR = [p.unsqueeze(0).expand(B, -1).clone() for p in self._phR_warm]
+        else:
+            phT = [torch.zeros(B, m, device=dev) for m in self.sizes_T]
+            phR = [torch.zeros(B, m, device=dev) for m in self.sizes_R]
         vT = self.step_T.init_momentum(B, self.sizes_T, dev)
         vR = self.step_R.init_momentum(B, self.sizes_R, dev)
 
-        need_full_curves = deep
         curves = []
 
         for k in range(k_run):
@@ -209,13 +220,13 @@ class DualSIMUnrolledSCA(nn.Module):
             phT, vT = self.step_T.apply(phT, gT, vT, k)
             phR, vR = self.step_R.apply(phR, gR, vR, k)
 
-            if need_full_curves or k == k_run - 1:
+            if deep or k == k_run - 1:
                 curves.append(_nmse(self._cascade(H, phT, phR), A, A2, self.eps))
 
             if step_callback is not None and not self.training:
                 step_callback(k, phT + phR)
 
-        if need_full_curves:
+        if deep:
             if gamma < 1.0:
                 w = torch.tensor(
                     [gamma ** (k_run - 1 - k) for k in range(k_run)],
@@ -248,3 +259,7 @@ class DualSIMUnrolledSCA(nn.Module):
             weight_ratio=weight_ratio,
         )
         return [c.mean().item() for c in curves]
+
+
+# Backward-compatibility alias
+DualSIMUnrolledSCA = JointSIMUnrolledSCA

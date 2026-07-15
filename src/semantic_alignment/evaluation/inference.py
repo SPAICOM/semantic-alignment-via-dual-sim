@@ -27,12 +27,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.linear_probe import clf_predict
-from semantic_alignment.utils.utils import (
-    a_inv_times_b,
+from semantic_alignment.utils import (
     awgn,
-    complex_compressed_tensor,
-    decompress_complex_tensor,
-    get_rx_equalizer,
+    pack_complex,
+    rx_equalizer,
+    solve,
+    unpack_complex,
 )
 
 
@@ -99,8 +99,8 @@ def run_evaluation(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(G_T.dtype)
 
         y_sig = beta_opt * (G_R @ (H_mimo @ (G_T @ x_white)))
         if sigma is not None:
@@ -109,7 +109,7 @@ def run_evaluation(
             y = y_sig
 
         z_hat = (L_out @ y) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())
@@ -164,7 +164,7 @@ def run_evaluation_mmse(
         Top-1 classification accuracy in ``[0, 1]``.
     """
     all_preds, all_labels = [], []
-    G_mmse = get_rx_equalizer(H_mimo, snr_db)
+    G_mmse = rx_equalizer(H_mimo, snr_db)
     # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
     sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
@@ -172,8 +172,8 @@ def run_evaluation_mmse(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(H_mimo.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(H_mimo.dtype)
 
         D_tx = x_white.shape[0]
         D_ch = H_mimo.shape[1]
@@ -189,7 +189,7 @@ def run_evaluation_mmse(
         x_recovered = (G_mmse @ y_received)[:D_tx, :]
         z_hat_complex = A_target @ x_recovered
         z_hat = (L_out @ z_hat_complex) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())
@@ -259,7 +259,7 @@ def run_evaluation_mono(
     """
     if use_equalizer:
         eq_snr = snr_db if mmse else None
-        G_eq = get_rx_equalizer(H_mimo, eq_snr)
+        G_eq = rx_equalizer(H_mimo, eq_snr)
 
     # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
     sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
@@ -269,8 +269,8 @@ def run_evaluation_mono(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_c = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
+        x_c = pack_complex(x_real_batch.T, device=device)
+        x_w = solve(L_in, x_c - mu_in).to(G_T.dtype)
 
         y = H_mimo @ (beta_opt * G_T @ x_w)
 
@@ -281,7 +281,7 @@ def run_evaluation_mono(
             y = G_eq @ y
 
         z = (L_out.to(G_T.dtype) @ y) + mu_out.to(G_T.dtype)
-        y_hat = decompress_complex_tensor(z, device=device).T
+        y_hat = unpack_complex(z, device=device).T
 
         preds = clf_predict(clf, y_hat)
         all_preds.extend(preds.cpu().numpy())
@@ -358,8 +358,8 @@ def run_evaluation_disjoint_fixed(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(G_T.dtype)
 
         y_sig = beta_global * (G_R @ (H_mimo @ (G_T @ x_white)))
         if sigma is not None:
@@ -368,7 +368,7 @@ def run_evaluation_disjoint_fixed(
             y = y_sig
 
         z_hat = (L_out @ y) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())

@@ -14,8 +14,11 @@ from tqdm.auto import tqdm
 
 from semantic_alignment.evaluation.linear_probe import clf_accuracy, linear_probe_accuracy
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
-from semantic_alignment.sim.unrolled import _build_cascade_RX, _build_cascade_TX
-from semantic_alignment.utils.utils import decompress_complex_tensor
+from semantic_alignment.sim.unrolled import (
+    _build_cascade_RX,
+    _build_cascade_TX,
+)
+from semantic_alignment.utils import unpack_complex
 
 matplotlib.use("Agg")
 
@@ -59,7 +62,7 @@ def _eval_accuracies(Z_eff, beta, Z_test, labels, W_probe, clf_neural, L_out, mu
         clf_neural = clf_neural.to(dev)
     z_aligned = beta * (Z_eff @ Z_test)
     z_aligned = (L_out @ z_aligned) + mu_out
-    z_aligned = decompress_complex_tensor(z_aligned, device).T
+    z_aligned = unpack_complex(z_aligned, device).T
     probe_acc = linear_probe_accuracy(W_probe, z_aligned.float(), labels)
     neural_acc = None
     if clf_neural is not None:
@@ -427,6 +430,48 @@ def _unrolled_eval_curve_disjoint(
     return curve
 
 
+def _unrolled_eval_curve_disjoint_sym(model, H, A, T_T, T_R, eval_fn, device, k_max=None):
+    """Per-step probe accuracy for DisjointSymUnrolledSCA on a fixed H."""
+    H = H.to(device)
+    A = A.to(device)
+    U, s, Vh = torch.linalg.svd(H.unsqueeze(0), full_matrices=False)
+    sim_tx = model.sim_tx
+    sim_rx = model.sim_rx
+
+    def _step_cb(k, tx_phases, rx_phases):
+        with torch.no_grad():
+            G_T = sim_tx._cascade(tx_phases).squeeze(0)
+            G_R = sim_rx._cascade(rx_phases).squeeze(0)
+            Z_eff = G_R @ H @ G_T
+            beta = _compute_beta(Z_eff, A)
+        eval_fn(Z_eff, beta)
+
+    model.eval()
+    with torch.enable_grad():
+        model.forward(U, s, Vh, T_T, T_R, create_graph=False, k_max=k_max, step_callback=_step_cb)
+
+
+def _unrolled_eval_curve_disjoint_asym(model, H, A, eval_fn, device, k_max=None):
+    """Per-step probe accuracy for DisjointAsymUnrolledSCA on a fixed H."""
+    H = H.to(device)
+    A = A.to(device)
+    H_batch = H.unsqueeze(0)
+    sim_tx = model.sim_tx
+    sim_rx = model.sim_rx
+
+    def _step_cb(k, tx_phases, rx_phases):
+        with torch.no_grad():
+            G_T = sim_tx._cascade(tx_phases).squeeze(0)
+            G_R = sim_rx._cascade(rx_phases).squeeze(0)
+            Z_eff = G_R @ H @ G_T
+            beta = _compute_beta(Z_eff, A)
+        eval_fn(Z_eff, beta)
+
+    model.eval()
+    with torch.enable_grad():
+        model.forward(H_batch, A, create_graph=False, k_max=k_max, step_callback=_step_cb)
+
+
 # ---------------------------------------------------------------------------
 # LightningModule  (training only)
 # ---------------------------------------------------------------------------
@@ -482,6 +527,8 @@ class UnrolledLightning(lg.LightningModule):
         epochs: int = 30,
         learn_S: bool = False,
         reg_S: float = 0.01,
+        T_T=None,
+        T_R=None,
         Z_test=None,
         labels=None,
         W_probe=None,
@@ -494,6 +541,8 @@ class UnrolledLightning(lg.LightningModule):
             ignore=[
                 "unrolled_model",
                 "A_target",
+                "T_T",
+                "T_R",
                 "Z_test",
                 "labels",
                 "W_probe",
@@ -516,6 +565,8 @@ class UnrolledLightning(lg.LightningModule):
         self.reg_S_coef = reg_S
 
         self.unrolled_model = unrolled_model
+        self.T_T = T_T
+        self.T_R = T_R
 
         self.Z_test = Z_test
         self.labels = labels
@@ -560,6 +611,24 @@ class UnrolledLightning(lg.LightningModule):
                 supervision=self.supervision,
                 weight_ratio=self.weight_ratio,
             )
+        elif self.mode == "disjoint_sym":
+            H_batch, U_batch, s_batch, Vh_batch = batch
+            loss, _, _ = self.unrolled_model(
+                U_batch,
+                s_batch,
+                Vh_batch,
+                self.T_T,
+                self.T_R,
+                supervision=self.supervision,
+                weight_ratio=self.weight_ratio,
+            )
+        elif self.mode == "disjoint_asym":
+            loss, _, _ = self.unrolled_model(
+                H_batch,
+                self.A_target,
+                supervision=self.supervision,
+                weight_ratio=self.weight_ratio,
+            )
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -599,6 +668,24 @@ class UnrolledLightning(lg.LightningModule):
                 supervision=self.supervision,
                 weight_ratio=self.weight_ratio,
             )
+        elif self.mode == "disjoint_sym":
+            H_batch, U_batch, s_batch, Vh_batch = batch
+            loss, _, _ = self.unrolled_model(
+                U_batch,
+                s_batch,
+                Vh_batch,
+                self.T_T,
+                self.T_R,
+                supervision=self.supervision,
+                weight_ratio=self.weight_ratio,
+            )
+        elif self.mode == "disjoint_asym":
+            loss, _, _ = self.unrolled_model(
+                H_batch,
+                self.A_target,
+                supervision=self.supervision,
+                weight_ratio=self.weight_ratio,
+            )
         else:
             raise ValueError(f"Unknown mode: {self.mode}")
 
@@ -630,7 +717,7 @@ class UnrolledLightning(lg.LightningModule):
 
             z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
             z_a = self.L_out @ z_aw + self.mu_out
-            z_real = decompress_complex_tensor(z_a, self.device).transpose(-1, -2).float()
+            z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
 
             W = self.W_probe.to(z_real.device)
             labels = self.labels.to(z_real.device)
@@ -656,7 +743,7 @@ class UnrolledLightning(lg.LightningModule):
                 step_callback=_eval_batch,
                 k_max=self.K,
             )
-        else:
+        elif self.mode == "mono":
             left_mat = H_batch if self.constructive else None
             self.unrolled_model.forward(
                 self.A_target,
@@ -665,6 +752,93 @@ class UnrolledLightning(lg.LightningModule):
                 step_callback=_eval_batch,
                 k_max=self.K,
             )
+        elif self.mode == "disjoint_sym":
+            self._test_step_disjoint_sym(batch)
+        elif self.mode == "disjoint_asym":
+            self._test_step_disjoint_asym(batch)
+
+    def _test_step_disjoint_sym(self, batch):
+        H_batch, U_batch, s_batch, Vh_batch = [b.clone() for b in batch]
+        B = H_batch.shape[0]
+        sim_tx = self.unrolled_model.sim_tx
+        sim_rx = self.unrolled_model.sim_rx
+
+        def _step_cb(k, tx_phases, rx_phases):
+            with torch.no_grad():
+                G_T = sim_tx._cascade(tx_phases)
+                G_R = sim_rx._cascade(rx_phases)
+                Z_eff = G_R @ H_batch @ G_T
+                ip = (Z_eff.conj() * self.A_target).sum((-2, -1))
+                s_z = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
+                beta = ip / (s_z + 1e-12)
+                z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
+                z_a = self.L_out @ z_aw + self.mu_out
+                z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
+                W = self.W_probe.to(z_real.device)
+                labels = self.labels.to(z_real.device)
+                preds = (z_real @ W).argmax(dim=-1)
+                self._test_probe_curve[k].extend(
+                    (preds == labels[None, :]).float().mean(dim=-1).tolist()
+                )
+                if self.clf_neural is not None:
+                    dev = next(self.clf_neural.parameters()).device
+                    N_test = z_real.shape[1]
+                    z_flat = z_real.reshape(B * N_test, -1).to(dev)
+                    preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
+                    self._test_neural_curve[k].extend(
+                        (preds_n == labels[None, :].to(dev)).float().mean(dim=-1).tolist()
+                    )
+
+        self.unrolled_model.forward(
+            U_batch,
+            s_batch,
+            Vh_batch,
+            self.T_T,
+            self.T_R,
+            create_graph=False,
+            k_max=self.K,
+            step_callback=_step_cb,
+        )
+
+    def _test_step_disjoint_asym(self, batch):
+        H_batch = batch[0].clone()
+        B = H_batch.shape[0]
+        sim_tx = self.unrolled_model.sim_tx
+        sim_rx = self.unrolled_model.sim_rx
+
+        def _step_cb(k, tx_phases, rx_phases):
+            with torch.no_grad():
+                G_T = sim_tx._cascade(tx_phases)
+                G_R = sim_rx._cascade(rx_phases)
+                Z_eff = G_R @ H_batch @ G_T
+                ip = (Z_eff.conj() * self.A_target).sum((-2, -1))
+                s_z = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
+                beta = ip / (s_z + 1e-12)
+                z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
+                z_a = self.L_out @ z_aw + self.mu_out
+                z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
+                W = self.W_probe.to(z_real.device)
+                labels = self.labels.to(z_real.device)
+                preds = (z_real @ W).argmax(dim=-1)
+                self._test_probe_curve[k].extend(
+                    (preds == labels[None, :]).float().mean(dim=-1).tolist()
+                )
+                if self.clf_neural is not None:
+                    dev = next(self.clf_neural.parameters()).device
+                    N_test = z_real.shape[1]
+                    z_flat = z_real.reshape(B * N_test, -1).to(dev)
+                    preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
+                    self._test_neural_curve[k].extend(
+                        (preds_n == labels[None, :].to(dev)).float().mean(dim=-1).tolist()
+                    )
+
+        self.unrolled_model.forward(
+            H_batch,
+            self.A_target,
+            create_graph=False,
+            k_max=self.K,
+            step_callback=_step_cb,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -753,6 +927,26 @@ class CompareUnrolledCallback(lg.Callback):
                 self.H_classic,
                 pl_module.A_target,
                 pl_module.constructive,
+                eval_fn,
+                pl_module.device,
+                k_max=pl_module.K,
+            )
+        elif pl_module.mode == "disjoint_sym":
+            _unrolled_eval_curve_disjoint_sym(
+                pl_module.unrolled_model,
+                self.H_classic,
+                pl_module.A_target,
+                pl_module.T_T,
+                pl_module.T_R,
+                eval_fn,
+                pl_module.device,
+                k_max=pl_module.K,
+            )
+        elif pl_module.mode == "disjoint_asym":
+            _unrolled_eval_curve_disjoint_asym(
+                pl_module.unrolled_model,
+                self.H_classic,
+                pl_module.A_target,
                 eval_fn,
                 pl_module.device,
                 k_max=pl_module.K,

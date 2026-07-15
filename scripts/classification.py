@@ -35,17 +35,12 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, TensorDataset
 
-from semantic_alignment.data.semasia import load_semasia, select_pilots
+from semantic_alignment.data.prepare import prepare_semasia
 from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
 from semantic_alignment.experiments._utils import make_fname, tipology_tag
-from semantic_alignment.utils.alignment_utils import ppfe, ridge_regression
-from semantic_alignment.utils.utils import (
-    complex_compressed_tensor,
-    complex_gaussian_matrix,
-    prewhiten,
-)
+from semantic_alignment.utils import cn_matrix
 
 _RESULTS = Path("results")
 
@@ -84,7 +79,18 @@ def _out_path(cfg: DictConfig) -> Path | None:
         sim.get("alignment_side", None),
     )
     fname = make_fname(
-        strategy, seed, sim.L, M, ch_dim, snr, tx, rx, s_tx, s_rx, n_clusters, dataset=dataset
+        strategy,
+        seed,
+        sim.L,
+        M,
+        ch_dim,
+        snr,
+        tx,
+        rx,
+        s_tx,
+        s_rx,
+        n_clusters,
+        dataset=dataset,
     )
     return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
 
@@ -93,7 +99,7 @@ def _setup(cfg: DictConfig) -> dict:
     """Load data, compute the alignment target, and collect all shared experiment context.
 
     Runs every step that is common to all architecture variants: loads
-    embeddings from SEMASIA, selects pilot pairs, trains a linear probe, optionally
+    embeddings from Semasia, selects pilot pairs, trains a linear probe, optionally
     loads a neural classifier, computes whitening statistics, computes the
     alignment target (Ridge regression or PPFE), evaluates the *No Mismatch*
     and *Original* (no-SIM, no-channel) accuracy baselines, and draws a random
@@ -165,22 +171,41 @@ def _setup(cfg: DictConfig) -> dict:
     np.random.seed(seed)
     random.seed(seed)
 
-    data = load_semasia(
+    is_csi = cfg.sim.sim_type in ("disjoint_sym", "disjoint_4sim")
+    if cfg.alignment.type == "PPFE":
+        if is_csi:
+            ch_dim_cfg = cfg.sim.get("channel_dim", None)
+            # n_clusters must equal channel_dim so F_T and F_R_H are dimensionally
+            # consistent with B_T and B_R (both live in the ch_dim space).
+            n_k = int(ch_dim_cfg) if ch_dim_cfg is not None else None
+        else:
+            n_k = cfg.alignment.n_clusters
+    else:
+        n_k = None
+
+    prep = prepare_semasia(
         hf_name=cfg.datasets.hf_name,
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
+        train_label_size=cfg.data.train_label_size,
+        alignment_type=cfg.alignment.type,
+        lmb=cfg.alignment.get("lmb", 1e-3),
+        n_clusters=n_k,
+        n_proto=cfg.alignment.get("n_proto", None),
+        keep_csi_frames=is_csi,
+        method=cfg.data.method,
+        grouping=cfg.data.grouping,
         label_col=cfg.datasets.label_col,
         train_split=cfg.datasets.train_split,
         test_split=cfg.datasets.test_split,
         save_to_disk=cfg.data.save_to_disk,
-    )
-    pilots = select_pilots(
-        data.train,
-        train_label_size=cfg.data.train_label_size,
-        method=cfg.data.method,
-        grouping=cfg.data.grouping,
         seed=seed,
+        device=device,
     )
+    data = prep.data
+    L_in, mu_in, L_out, mu_out = prep.L_in, prep.mu_in, prep.L_out, prep.mu_out
+    A_target, F_T, F_R_H = prep.A_target, prep.F_T, prep.F_R_H
+
     # Linear probe — always trained
     clf_probe = train_linear_probe(
         data.train.z_rx.to(device),
@@ -216,41 +241,6 @@ def _setup(cfg: DictConfig) -> dict:
         shuffle=False,
     )
 
-    input_c = complex_compressed_tensor(pilots.z_tx.T, device=device)
-    output_c = complex_compressed_tensor(pilots.z_rx.T, device=device)
-    input_w, L_in, mu_in = prewhiten(input_c, device=device)
-    output_w, L_out, mu_out = prewhiten(output_c, device=device)
-
-    if cfg.alignment.type == "Linear":
-        A_target = ridge_regression(input_w, output_w, lmb=cfg.alignment.lmb)
-        F_T, F_R_H = None, None
-    else:
-        is_csi = cfg.sim.sim_type in ("disjoint_sym", "disjoint_4sim")
-        if is_csi:
-            # n_clusters must equal channel_dim so F_T and F_R_H are dimensionally
-            # consistent with B_T and B_R (both live in the ch_dim space).
-            ch_dim_cfg = cfg.sim.get("channel_dim", None)
-            n_k = (
-                int(ch_dim_cfg)
-                if ch_dim_cfg is not None
-                else int(max(input_w.shape[0], output_w.shape[0]))
-            )
-        else:
-            n_k = cfg.alignment.n_clusters
-
-        F_T, F_R_H = ppfe(
-            input_w,
-            output_w,
-            output_real=pilots.z_rx,
-            n_clusters=n_k,
-            n_proto=cfg.alignment.n_proto,
-            seed=seed,
-        )
-        A_target = F_R_H @ F_T
-
-        if not is_csi:
-            F_T, F_R_H = None, None
-
     # Original: A_target applied to TX embeddings, no SIM, no channel
     original_probe = run_original_accuracy(
         test_loader,
@@ -282,7 +272,7 @@ def _setup(cfg: DictConfig) -> dict:
     else:
         ch_dim_cfg = cfg.sim.get("channel_dim", None)
         h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
-    H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+    H_mimo = cn_matrix(0, 1, size=(h_dim, h_dim)).to(device)
 
     return dict(
         seed=seed,

@@ -3,7 +3,7 @@
 import torch
 
 from semantic_alignment.experiments._utils import tipology_tag
-from semantic_alignment.utils.utils import get_rx_equalizer
+from semantic_alignment.utils import rx_equalizer
 
 
 def compute_asym_targets(
@@ -62,7 +62,7 @@ def compute_asym_targets(
                     "Use alignment_side='rx' with constructive=True instead."
                 )
             # TX: ‖β G_T − A‖²,  RX: ‖β G_R − H†‖²
-            Q = get_rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
+            Q = rx_equalizer(H_torch, snr_db=None, epsilon=epsilon)
             return A_torch, None, None, Q, None, None
 
         # constructive=True: H lives in the loss, target is I on the equalization side

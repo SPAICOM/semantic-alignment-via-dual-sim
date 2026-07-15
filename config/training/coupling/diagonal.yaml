@@ -1,4 +1,4 @@
 # @package _global_
 training:
   coupling: diagonal
-  lr_w: 1.0e-2
+  lr_w: 5.0e-3

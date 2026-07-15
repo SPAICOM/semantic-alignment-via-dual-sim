@@ -15,7 +15,7 @@ import torch
 
 from semantic_alignment.evaluation.inference import run_evaluation_mono
 from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
-from semantic_alignment.utils.utils import complex_gaussian_matrix
+from semantic_alignment.utils import cn_matrix
 
 from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, tipology_tag
 
@@ -101,7 +101,7 @@ def run_mono_sim(
     random.seed(seed)
 
     h_dim = int(A_target.shape[0])
-    H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+    H_mimo = cn_matrix(0, 1, size=(h_dim, h_dim)).to(device)
     H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
     tx_cpu = MonoSIMoptimizer(

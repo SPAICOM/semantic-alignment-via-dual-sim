@@ -11,19 +11,21 @@ check:
     uvx ruff check . --fix
 
 # Format + lint (CI-style target)
-all: format check
+clean: format check
 
 # Run wandb leet for experiment tracking
 leet:
-    # Run wandb leet for experiment tracking
     uv run wandb beta leet run wandb
 
-# ── SIM experiments (all via scripts/classification.py) ──────────────────────
+# ── SIM experiments ───────────────────────────────────────────────────────────
+# Leaf recipes are prefixed cls- (classification) to distinguish from future
+# rec- (reconstruction) recipes sharing the same methodology/sweep structure.
+#
 # Full sweeps use dedicated primary configs (config/config_*.yaml) with
 # hydra.mode=MULTIRUN so no -m flag is needed.
 #
 # Dataset override (default: cifar10):
-#   just dataset=cifar100 run-joint
+#   just dataset=cifar100 cls-joint-layers
 #   just dataset=cifar100 joint
 #
 # Tipology overrides (pass as extra ARGS or use dedicated recipes below):
@@ -31,68 +33,69 @@ leet:
 #   sim.alignment_side=rx           — alignment on RX-SIM (asym only)
 #
 # Example:
-#   just dataset=cifar100 run-disjoint-asym sim.constructive=true sim.alignment_side=rx
+#   just dataset=cifar100 cls-disjoint-asym-layers sim.constructive=true sim.alignment_side=rx
 
 dataset := "cifar10"
 
 # ── Joint Dual-SIM ────────────────────────────────────────────────────────────
 
 # Joint Dual-SIM: sweep over SIM layers
-run-joint *ARGS: train-clf
+cls-joint-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_layers datasets={{dataset}} {{ARGS}}
 
 # Joint Dual-SIM: sweep over SNR
-run-joint-snr *ARGS: train-clf
+cls-joint-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_snr datasets={{dataset}} {{ARGS}}
 
 # Joint Dual-SIM: sweep over inter-layer spacing
-run-joint-slayer *ARGS: train-clf
+cls-joint-slayer *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_slayer datasets={{dataset}} {{ARGS}}
 
 # Joint Dual-SIM: sweep over channel dimension
-run-joint-channel-dim *ARGS: train-clf
+cls-joint-channel-dim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_channel_dim datasets={{dataset}} {{ARGS}}
 
-# Aggregate: all joint Dual-SIM sweeps
-joint: run-joint run-joint-snr run-joint-channel-dim
+# Aggregate: joint Dual-SIM (layers + SNR)
+joint: cls-joint-layers cls-joint-snr
 
 # ── Disjoint asym ─────────────────────────────────────────────────────────────
 # Tipology: alignment_side ∈ {tx, rx} × constructive ∈ {false, true}
 # Results go to results/disjoint_asym_*/equalized|constructive/tx|rx/
 
 # Disjoint asym (tx, equalized): sweep over SIM layers
-run-disjoint-asym *ARGS: train-clf
+cls-disjoint-asym-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_layers datasets={{dataset}} {{ARGS}}
 
 # Disjoint asym (tx, equalized): sweep over SNR
-run-disjoint-asym-snr *ARGS: train-clf
+cls-disjoint-asym-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr datasets={{dataset}} {{ARGS}}
 
 # constructive=true, alignment_side=tx  →  tipology: constructive/tx
 # Disjoint asym (tx, constructive): sweep over SIM layers
-run-disjoint-asym-c *ARGS: train-clf
+cls-disjoint-asym-layers-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_layers datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Disjoint asym (tx, constructive): sweep over SNR
-run-disjoint-asym-snr-c *ARGS: train-clf
+cls-disjoint-asym-snr-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # constructive=true, alignment_side=rx  →  tipology: constructive/rx
 # Disjoint asym (rx, constructive): sweep over SIM layers
-run-disjoint-asym-rx-c *ARGS: train-clf
+cls-disjoint-asym-rx-layers-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_layers datasets={{dataset}} sim.constructive=true sim.alignment_side=rx {{ARGS}}
 
 # Disjoint asym (rx, constructive): sweep over SNR
-run-disjoint-asym-snr-rx-c *ARGS: train-clf
+cls-disjoint-asym-snr-rx-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_asym_snr datasets={{dataset}} sim.constructive=true sim.alignment_side=rx {{ARGS}}
 
-# Aggregate: all disjoint asym (tx, equalized) sweeps
-disjoint-asym: run-disjoint-asym run-disjoint-asym-snr
-# Aggregate: all disjoint asym (tx, constructive) sweeps
-disjoint-asym-c: run-disjoint-asym-c run-disjoint-asym-snr-c
-# Aggregate: all disjoint asym (rx, constructive) sweeps
-disjoint-asym-rx-c: run-disjoint-asym-rx-c run-disjoint-asym-snr-rx-c
-
+# Aggregate: disjoint asym (tx, equalized) — layers + SNR
+disjoint-asym: cls-disjoint-asym-layers cls-disjoint-asym-snr
+# Aggregate: disjoint asym (tx, constructive) — layers + SNR
+disjoint-asym-c: cls-disjoint-asym-layers-c cls-disjoint-asym-snr-c
+# Aggregate: disjoint asym (rx, constructive) — layers + SNR
+disjoint-asym-rx-c: cls-disjoint-asym-rx-layers-c cls-disjoint-asym-snr-rx-c
+# Aggregate: disjoint asym — equalized + constructive (layers + SNR, no channel-dim)
+disjoint-asym-full: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 # Aggregate: all disjoint asym sweeps
 disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 
@@ -101,34 +104,37 @@ disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 # Results go to results/disjoint_sym_*/equalized|constructive/
 
 # Disjoint sym (equalized): sweep over SIM layers
-run-disjoint-sym *ARGS: train-clf
+cls-disjoint-sym-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_layers datasets={{dataset}} {{ARGS}}
 
 # Disjoint sym (equalized): sweep over SNR
-run-disjoint-sym-snr *ARGS: train-clf
+cls-disjoint-sym-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_snr datasets={{dataset}} {{ARGS}}
 
 # Disjoint sym (equalized): sweep over channel dimension
-run-disjoint-sym-channel-dim *ARGS: train-clf
+cls-disjoint-sym-channel-dim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_channel_dim datasets={{dataset}} {{ARGS}}
 
 # constructive=true  →  tipology: constructive
 # Disjoint sym (constructive): sweep over SIM layers
-run-disjoint-sym-c *ARGS: train-clf
+cls-disjoint-sym-layers-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_layers datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Disjoint sym (constructive): sweep over SNR
-run-disjoint-sym-snr-c *ARGS: train-clf
+cls-disjoint-sym-snr-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_snr datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Disjoint sym (constructive): sweep over channel dimension
-run-disjoint-sym-channel-dim-c *ARGS: train-clf
+cls-disjoint-sym-channel-dim-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_sym_channel_dim datasets={{dataset}} sim.constructive=true {{ARGS}}
 
-# Aggregate: all disjoint sym (equalized) sweeps
-disjoint-sym: run-disjoint-sym run-disjoint-sym-snr run-disjoint-sym-channel-dim
-# Aggregate: all disjoint sym (constructive) sweeps
-disjoint-sym-c: run-disjoint-sym-c run-disjoint-sym-snr-c run-disjoint-sym-channel-dim-c
+
+# Aggregate: disjoint sym (equalized) — layers + SNR
+disjoint-sym: cls-disjoint-sym-layers cls-disjoint-sym-snr
+# Aggregate: disjoint sym (constructive) — layers + SNR
+disjoint-sym-c: cls-disjoint-sym-layers-c cls-disjoint-sym-snr-c
+# Aggregate: disjoint sym — equalized + constructive (layers + SNR, no channel-dim)
+disjoint-sym-full: disjoint-sym disjoint-sym-c
 # Aggregate: all disjoint sym sweeps
 disjoint-sym-all: disjoint-sym disjoint-sym-c
 
@@ -137,106 +143,122 @@ disjoint-sym-all: disjoint-sym disjoint-sym-c
 # Results go to results/disjoint_4sim_*/equalized|constructive/
 
 # Disjoint 4-SIM (equalized): sweep over SIM layers
-run-disjoint-4sim *ARGS: train-clf
+cls-disjoint-4sim-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_layers datasets={{dataset}} {{ARGS}}
 
 # Disjoint 4-SIM (equalized): sweep over SNR
-run-disjoint-4sim-snr *ARGS: train-clf
+cls-disjoint-4sim-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_snr datasets={{dataset}} {{ARGS}}
 
 # Disjoint 4-SIM (equalized): sweep over channel dimension
-run-disjoint-4sim-channel-dim *ARGS: train-clf
+cls-disjoint-4sim-channel-dim *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_channel_dim datasets={{dataset}} {{ARGS}}
 
 # Disjoint 4-SIM (constructive): sweep over SIM layers
-run-disjoint-4sim-c *ARGS: train-clf
+cls-disjoint-4sim-layers-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_layers datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Disjoint 4-SIM (constructive): sweep over SNR
-run-disjoint-4sim-snr-c *ARGS: train-clf
+cls-disjoint-4sim-snr-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_disjoint_4sim_snr datasets={{dataset}} sim.constructive=true {{ARGS}}
 
-# Aggregate: all disjoint 4-SIM (equalized) sweeps
-disjoint-4sim: run-disjoint-4sim run-disjoint-4sim-snr run-disjoint-4sim-channel-dim
-# Aggregate: all disjoint 4-SIM (constructive) sweeps
-disjoint-4sim-c: run-disjoint-4sim-c run-disjoint-4sim-snr-c
+# Aggregate: disjoint 4-SIM (equalized) — layers + SNR
+disjoint-4sim: cls-disjoint-4sim-layers cls-disjoint-4sim-snr
+# Aggregate: disjoint 4-SIM (constructive) — layers + SNR
+disjoint-4sim-c: cls-disjoint-4sim-layers-c cls-disjoint-4sim-snr-c
+# Aggregate: disjoint 4-SIM — equalized + constructive (layers + SNR, no channel-dim)
+disjoint-4sim-full: disjoint-4sim disjoint-4sim-c
 # Aggregate: all disjoint 4-SIM sweeps
 disjoint-4sim-all: disjoint-4sim disjoint-4sim-c
 
 # ── Cross-architecture aggregates ─────────────────────────────────────────────
 
 # Aggregate: all standard disjoint variants
-disjoint: disjoint-asym disjoint-sym disjoint-4sim
+disjoint: disjoint-asym disjoint-sym
 
 # Aggregate: all constructive disjoint variants
-disjoint-constructive: disjoint-asym-c disjoint-sym-c disjoint-4sim-c
+disjoint-constructive: disjoint-asym-c disjoint-sym-c
+
+# Layers sweep across all methods (joint + asym + sym + mono, excl. 4-SIM)
+cls-all-layers: cls-joint-layers \
+                cls-disjoint-asym-layers cls-disjoint-asym-layers-c cls-disjoint-asym-rx-layers-c \
+                cls-disjoint-sym-layers cls-disjoint-sym-layers-c \
+                cls-mono-layers cls-mono-layers-c
+
+# SNR sweep across all methods (joint + asym + sym + mono, excl. 4-SIM)
+cls-all-snr: cls-joint-snr \
+             cls-disjoint-asym-snr cls-disjoint-asym-snr-c cls-disjoint-asym-snr-rx-c \
+             cls-disjoint-sym-snr cls-disjoint-sym-snr-c \
+             cls-mono-snr cls-mono-snr-c
 
 # ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
 # Tipology: constructive ∈ {false, true}
 # Results go to results/mono*/equalized|constructive/
 
 # Mono-SIM (equalized): sweep over SIM layers
-run-mono *ARGS: train-clf
+cls-mono-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} {{ARGS}}
 
 # Mono-SIM (equalized): sweep over SNR
-run-mono-snr *ARGS: train-clf
+cls-mono-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} {{ARGS}}
 
 # constructive=true  →  tipology: constructive (loss ‖β H G_T − A‖², no G_eq at RX)
 # Mono-SIM (constructive): sweep over SIM layers
-run-mono-c *ARGS: train-clf
+cls-mono-layers-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Mono-SIM (constructive): sweep over SNR
-run-mono-snr-c *ARGS: train-clf
+cls-mono-snr-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} sim.constructive=true {{ARGS}}
 
-# Aggregate: all mono-SIM (equalized) sweeps
-mono: run-mono run-mono-snr
-# Aggregate: all mono-SIM (constructive) sweeps
-mono-c: run-mono-c run-mono-snr-c
+# Aggregate: mono-SIM (equalized) — layers + SNR
+mono: cls-mono-layers cls-mono-snr
+# Aggregate: mono-SIM (constructive) — layers + SNR
+mono-c: cls-mono-layers-c cls-mono-snr-c
+# Aggregate: mono-SIM — equalized + constructive (layers + SNR, no channel-dim)
+mono-full: mono mono-c
 # Aggregate: all mono-SIM sweeps
 mono-all: mono mono-c
 
 # ── n_proto sweep (PPFE only) ─────────────────────────────────────────────────
 
 # n_proto sweep: joint Dual-SIM
-run-n-proto-joint *ARGS: train-clf
+cls-n-proto-joint *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_joint datasets={{dataset}} {{ARGS}}
 
 # n_proto sweep: mono-SIM (equalized)
-run-n-proto-mono *ARGS: train-clf
+cls-n-proto-mono *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_mono datasets={{dataset}} {{ARGS}}
 
+# n_proto sweep: mono-SIM (constructive)
+cls-n-proto-mono-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_mono_c datasets={{dataset}} {{ARGS}}
+
 # n_proto sweep: disjoint asym (tx, equalized)
-run-n-proto-disjoint-asym *ARGS: train-clf
+cls-n-proto-disjoint-asym *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym datasets={{dataset}} {{ARGS}}
 
-# n_proto sweep: disjoint sym (equalized)
-run-n-proto-disjoint-sym *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym datasets={{dataset}} {{ARGS}}
-
-# n_proto sweep: disjoint sym (constructive)
-run-n-proto-disjoint-sym-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym_c datasets={{dataset}} {{ARGS}}
-
 # n_proto sweep: disjoint asym (tx, constructive)
-run-n-proto-disjoint-asym-c *ARGS: train-clf
+cls-n-proto-disjoint-asym-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym_c datasets={{dataset}} {{ARGS}}
 
 # n_proto sweep: disjoint asym (rx, constructive)
-run-n-proto-disjoint-asym-rx-c *ARGS: train-clf
+cls-n-proto-disjoint-asym-rx-c *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_n_proto_disjoint_asym_rx_c datasets={{dataset}} {{ARGS}}
 
-# n_proto sweep: mono-SIM (constructive)
-run-n-proto-mono-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_n_proto_mono_c datasets={{dataset}} {{ARGS}}
+# n_proto sweep: disjoint sym (equalized)
+cls-n-proto-disjoint-sym *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym datasets={{dataset}} {{ARGS}}
+
+# n_proto sweep: disjoint sym (constructive)
+cls-n-proto-disjoint-sym-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_n_proto_disjoint_sym_c datasets={{dataset}} {{ARGS}}
 
 # Aggregate: all n_proto (equalized) sweeps
-n-proto: run-n-proto-joint run-n-proto-mono run-n-proto-disjoint-asym run-n-proto-disjoint-sym
+n-proto: cls-n-proto-joint cls-n-proto-mono cls-n-proto-disjoint-asym cls-n-proto-disjoint-sym
 # Aggregate: all n_proto (constructive) sweeps
-n-proto-c: run-n-proto-disjoint-sym-c run-n-proto-disjoint-asym-c run-n-proto-disjoint-asym-rx-c run-n-proto-mono-c
+n-proto-c: cls-n-proto-mono-c cls-n-proto-disjoint-asym-c cls-n-proto-disjoint-asym-rx-c cls-n-proto-disjoint-sym-c
 # Aggregate: all n_proto sweeps
 n-proto-all: n-proto n-proto-c
 
@@ -249,7 +271,7 @@ train-clf *ARGS:
 # ── Single run (no multirun, useful for quick tests) ─────────────────────────
 
 # Single run (no multirun, for quick tests)
-run *ARGS: train-clf
+cls *ARGS: train-clf
     uv run python scripts/classification.py datasets={{dataset}} {{ARGS}}
 
 # ── Unrolled GD (progressive block training) ──────────────────────────────────
@@ -257,38 +279,39 @@ run *ARGS: train-clf
 # Config: config/training/unrolled.yaml
 
 # Unrolled GD: joint Dual-SIM
-run-unrolled *ARGS: train-clf
+cls-unrolled *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} {{ARGS}}
 
 # Unrolled GD: mono-SIM (equalized)
-run-unrolled-mono *ARGS: train-clf
+cls-unrolled-mono *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_mono datasets={{dataset}} {{ARGS}}
 
 # Unrolled GD: mono-SIM (constructive)
-run-unrolled-mono-c *ARGS: train-clf
+cls-unrolled-mono-c *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_mono datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Unrolled GD: disjoint sym (equalized)
-run-unrolled-disjoint-sym *ARGS: train-clf
+cls-unrolled-disjoint-sym *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_sym datasets={{dataset}} {{ARGS}}
 
 # Unrolled GD: disjoint sym (constructive)
-run-unrolled-disjoint-sym-c *ARGS: train-clf
+cls-unrolled-disjoint-sym-c *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_sym datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Unrolled GD: disjoint asym (tx, equalized)
-run-unrolled-disjoint-asym *ARGS: train-clf
+cls-unrolled-disjoint-asym *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets={{dataset}} {{ARGS}}
 
 # Unrolled GD: disjoint asym (tx, constructive)
-run-unrolled-disjoint-asym-c *ARGS: train-clf
+cls-unrolled-disjoint-asym-c *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Aggregate: all unrolled GD experiments
-unrolled: run-unrolled run-unrolled-mono run-unrolled-mono-c run-unrolled-disjoint-sym run-unrolled-disjoint-sym-c run-unrolled-disjoint-asym run-unrolled-disjoint-asym-c
+unrolled: cls-unrolled cls-unrolled-mono cls-unrolled-mono-c cls-unrolled-disjoint-sym cls-unrolled-disjoint-sym-c cls-unrolled-disjoint-asym cls-unrolled-disjoint-asym-c
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
 # Generate publication-ready result plots
 plot:
     uv run python scripts/plot_results.py
+
