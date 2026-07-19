@@ -17,6 +17,6 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      training.seed: 27,42,100,123,144,200
       sim.s_tx: 4,5,6,7,8,9,10
       sim.s_rx: 4,7,10
+      training.seed: 27,42,100,123,144,200

@@ -223,26 +223,33 @@ def _save(name: str) -> None:
     print(f" {name}.pdf / .png")
 
 
-def _add_baseline_hlines(df: pl.DataFrame) -> list[str]:
+def _add_baseline_hlines(df: pl.DataFrame, kind: str = "neural") -> list[str]:
     """Horizontal lines for No Mismatch (solid) and Original per strategy (dashed).
-    Returns the list of labels added, for use in a legend."""
+    Returns the list of labels added, for use in a legend.
+    ``kind`` is ``"neural"`` or ``"probe"``.
+    """
     added = []
 
-    nm = df["no_mismatch_neural"].drop_nulls().mean()
-    if nm is not None:
-        plt.axhline(y=nm, color="black", linestyle="-", linewidth=2.5, label="No Mismatch")
-        added.append("No Mismatch")
+    nm_col = f"no_mismatch_{kind}"
+    orig_col = f"original_{kind}"
 
-    for strat, linestyle, label in [
-        ("Linear", "-.", "Oracle Linear"),
-        ("PPFE", ":", "Oracle PPFE"),
-    ]:
-        vals = df.filter(pl.col("strategy") == strat)["original_neural"].drop_nulls()
-        if vals.len() > 0:
-            plt.axhline(
-                y=vals.mean(), color="gray", linestyle=linestyle, linewidth=2.5, label=label
-            )
-            added.append(label)
+    if nm_col in df.columns:
+        nm = df[nm_col].drop_nulls().mean()
+        if nm is not None:
+            plt.axhline(y=nm, color="black", linestyle="-", linewidth=2.5, label="No Mismatch")
+            added.append("No Mismatch")
+
+    if orig_col in df.columns:
+        for strat, linestyle, label in [
+            ("Linear", "-.", "Oracle Linear"),
+            ("PPFE", ":", "Oracle PPFE"),
+        ]:
+            vals = df.filter(pl.col("strategy") == strat)[orig_col].drop_nulls()
+            if vals.len() > 0:
+                plt.axhline(
+                    y=vals.mean(), color="gray", linestyle=linestyle, linewidth=2.5, label=label
+                )
+                added.append(label)
 
     return added
 
@@ -1017,14 +1024,17 @@ def _arch_comparison_generic(
     x_log: bool = False,
     show_baselines: bool = True,
     y_min: float | None = None,
+    acc_col: str = "sim_accuracy_neural",
+    baseline_kind: str = "neural",
 ) -> None:
     """Generic arch comparison: color=family, solid=constructive, dashed=standard.
 
     ``sweep`` ∈ ``{"layers", "snr", "channel_dim"}``.
+    ``acc_col`` selects the accuracy column (``sim_accuracy_neural`` or ``sim_accuracy_probe``).
+    ``baseline_kind`` selects the baseline columns (``"neural"`` or ``"probe"``).
     """
     from matplotlib.lines import Line2D
 
-    acc_col = "sim_accuracy_neural"
     sweep_idx = {"layers": 4, "snr": 5, "channel_dim": 6}[sweep]
 
     frames = []
@@ -1056,8 +1066,8 @@ def _arch_comparison_generic(
         "_family",
         "_constructive",
         acc_col,
-        "no_mismatch_neural",
-        "original_neural",
+        f"no_mismatch_{baseline_kind}",
+        f"original_{baseline_kind}",
     ]
     df_all = pl.concat(
         [f.select([c for c in needed if c in f.columns]) for f in frames],
@@ -1130,7 +1140,7 @@ def _arch_comparison_generic(
 
         if show_baselines:
             plt.sca(ax)
-            bl_added = _add_baseline_hlines(df_s)
+            bl_added = _add_baseline_hlines(df_s, kind=baseline_kind)
             h_all, l_all = ax.get_legend_handles_labels()
             for hi, li in zip(h_all, l_all):
                 if li in bl_added and li not in baseline_handles_dict:
@@ -1205,13 +1215,19 @@ def _arch_comparison_generic(
 
 
 def arch_comparison_layers() -> None:
-    """Accuracy vs $L$ — all architectures and tipologies, M_int=32×32."""
-    _arch_comparison_generic(
-        sweep="layers",
-        x_col="L",
-        x_label=r"SIM Layers $L$",
-        fname="ArchComparison_Layers_M32",
-    )
+    """Accuracy vs $L$ — all architectures and tipologies, M_int=32×32. Both accuracy types."""
+    for acc_col, kind, suffix in [
+        ("sim_accuracy_neural", "neural", "Neural"),
+        ("sim_accuracy_probe", "probe", "Probe"),
+    ]:
+        _arch_comparison_generic(
+            sweep="layers",
+            x_col="L",
+            x_label=r"SIM Layers $L$",
+            fname=f"ArchComparison_Layers_M32_{suffix}",
+            acc_col=acc_col,
+            baseline_kind=kind,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1220,13 +1236,19 @@ def arch_comparison_layers() -> None:
 
 
 def arch_comparison_snr() -> None:
-    """Accuracy vs SNR — all architectures and tipologies, M_int=32×32."""
-    _arch_comparison_generic(
-        sweep="snr",
-        x_col="snr",
-        x_label=r"Signal-to-Noise Ratio [dB]",
-        fname="ArchComparison_SNR_M32",
-    )
+    """Accuracy vs SNR — all architectures and tipologies, M_int=32×32. Both accuracy types."""
+    for acc_col, kind, suffix in [
+        ("sim_accuracy_neural", "neural", "Neural"),
+        ("sim_accuracy_probe", "probe", "Probe"),
+    ]:
+        _arch_comparison_generic(
+            sweep="snr",
+            x_col="snr",
+            x_label=r"Signal-to-Noise Ratio [dB]",
+            fname=f"ArchComparison_SNR_M32_{suffix}",
+            acc_col=acc_col,
+            baseline_kind=kind,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1399,16 +1421,22 @@ def loss_curves_disjoint_4sim_layers() -> None:
 
 
 def arch_comparison_channel_dim() -> None:
-    """Accuracy vs channel dimension — all architectures and tipologies, M_int=32×32."""
-    _arch_comparison_generic(
-        sweep="channel_dim",
-        x_col="channel_dim",
-        x_label=r"Channel dimension $d_H$",
-        fname="ArchComparison_ChannelDim",
-        x_log=True,
-        show_baselines=False,
-        y_min=0.0,
-    )
+    """Accuracy vs channel dimension — all architectures and tipologies, M_int=32×32. Both accuracy types."""
+    for acc_col, kind, suffix in [
+        ("sim_accuracy_neural", "neural", "Neural"),
+        ("sim_accuracy_probe", "probe", "Probe"),
+    ]:
+        _arch_comparison_generic(
+            sweep="channel_dim",
+            x_col="channel_dim",
+            x_label=r"Channel dimension $d_H$",
+            fname=f"ArchComparison_ChannelDim_{suffix}",
+            x_log=True,
+            show_baselines=False,
+            y_min=0.0,
+            acc_col=acc_col,
+            baseline_kind=kind,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2138,32 +2166,9 @@ def unrolled_accuracy_grid() -> None:
 
 def _plot_all() -> None:
     """Run every plot function for the currently active ``_DATASET`` / ``IMG_PATH``."""
-    unrolled_accuracy_grid()
-    accuracy_vs_simlayers()
-    accuracy_vs_snr()
-    accuracy_vs_disjoint_asym_layers()
-    accuracy_vs_disjoint_asym_snr()
-    accuracy_vs_disjoint_sym_layers()
-    accuracy_vs_disjoint_sym_snr()
-    accuracy_vs_disjoint_4sim_layers()
-    accuracy_vs_disjoint_4sim_snr()
-    accuracy_vs_thickness()
-    accuracy_vs_mono_layers()
-    accuracy_vs_mono_snr()
-    loss_curves_joint_layers()
-    loss_curves_mono_layers()
-    loss_curves_disjoint_asym_layers()
-    loss_curves_disjoint_sym_layers()
-    loss_curves_disjoint_4sim_layers()
-    loss_curves_disjoint_sym_tipology()
-    loss_curves_disjoint_asym_tipology()
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
-    arch_comparison_asym_vs_sym_layers()
-    arch_comparison_asym_vs_sym_snr()
-    arch_comparison_asym_vs_sym_channel_dim()
-    accuracy_vs_n_proto()
 
 
 def main() -> None:

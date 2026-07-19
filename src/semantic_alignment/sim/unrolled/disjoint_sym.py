@@ -1,5 +1,10 @@
+"""Symmetric (full-CSI) disjoint dual-SIM unrolled optimizer."""
+
+from collections.abc import Callable
+
 import torch
 
+from ..original.optimizers.monosim import MonoSIMoptimizerTorch
 from ._disjoint import DisjointUnrolledSCA
 
 
@@ -11,11 +16,11 @@ class DisjointSymUnrolledSCA(DisjointUnrolledSCA):
     ``(U, s, Vh)`` from ``HChannelDataModule(precompute_svd=True)``.
 
     constructive=False (default — equalized):
-        TX loss: ``‖β G_T − B_T T_T‖²``
-        RX loss: ``‖β G_R − T_R B_R‖²``
+        TX loss: ``‖β G_T − tx_ch_inv @ tx_target‖²``
+        RX loss: ``‖β G_R − rx_target @ rx_ch_inv‖²``
     constructive=True:
-        TX loss: ``‖β (Σ^½ Vᴴ) G_T − T_T‖²``
-        RX loss: ``‖β G_R (U Σ^½) − T_R‖²``
+        TX loss: ``‖β (Σ^½ Vᴴ) G_T − tx_target‖²``
+        RX loss: ``‖β G_R (U Σ^½) − rx_target‖²``
 
     Parameters
     ----------
@@ -29,19 +34,50 @@ class DisjointSymUnrolledSCA(DisjointUnrolledSCA):
 
     def __init__(
         self,
-        sim_tx,
-        sim_rx,
+        sim_tx: MonoSIMoptimizerTorch,
+        sim_rx: MonoSIMoptimizerTorch,
         K: int,
         constructive: bool = False,
         epsilon: float = 0.0,
         **shared_kwargs,
     ):
+        """Initialize symmetric disjoint dual-SIM.
+
+        Parameters
+        ----------
+        sim_tx : MonoSIMoptimizerTorch
+            TX-side SIM (``side='tx'``).
+        sim_rx : MonoSIMoptimizerTorch
+            RX-side SIM (``side='rx'``).
+        K : int
+            Number of interleaved steps.
+        constructive : bool
+            If True, use constructive (full-CSI) targets.
+        epsilon : float
+            Tikhonov regularization for SVD inversion.
+        **shared_kwargs
+            Forwarded to both :class:`MonoUnrolledSCA` constructors.
+        """
         super().__init__(sim_tx, sim_rx, K, **shared_kwargs)
         self.constructive = constructive
         self.epsilon = epsilon
 
-    def _make_inputs(self, U, s, Vh, T_T, T_R):
-        """Convert batched SVD to ``(A_tx, tx_left, tx_right, A_rx, rx_left, rx_right)``."""
+    def _make_inputs(
+        self,
+        U: torch.Tensor,
+        s: torch.Tensor,
+        Vh: torch.Tensor,
+        tx_target: torch.Tensor,
+        rx_target: torch.Tensor,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
+        """Convert batched SVD to ``(tx_target_eff, tx_left, tx_right, rx_target_eff, rx_left, rx_right)``."""
         eps = self.epsilon
         dtype = U.dtype
 
@@ -50,34 +86,34 @@ class DisjointSymUnrolledSCA(DisjointUnrolledSCA):
             reg_sqrt_s = torch.sqrt(s**2 / (s + eps)).to(dtype)  # (B, k)
             tx_left = reg_sqrt_s.unsqueeze(-1) * Vh  # (B, k, n_T) = Σ^½ Vᴴ
             rx_right = U * reg_sqrt_s.unsqueeze(-2)  # (B, n_R, k) = U Σ^½
-            return T_T, tx_left, None, T_R, None, rx_right
+            return tx_target, tx_left, None, rx_target, None, rx_right
         else:
             # reg_inv_sqrt_s = sqrt(σ / (σ² + ε)) ≈ σ^{-½}  for large σ, → 0 for σ → 0
             reg_inv_sqrt_s = torch.sqrt(s / (s**2 + eps)).to(dtype)  # (B, k)
-            B_T = Vh.mH * reg_inv_sqrt_s.unsqueeze(-2)  # (B, n_T, k)
-            B_R = reg_inv_sqrt_s.unsqueeze(-1) * U.mH  # (B, k, n_R)
-            return B_T @ T_T, None, None, T_R @ B_R, None, None
+            tx_ch_inv = Vh.mH * reg_inv_sqrt_s.unsqueeze(-2)  # (B, n_T, k)
+            rx_ch_inv = reg_inv_sqrt_s.unsqueeze(-1) * U.mH  # (B, k, n_R)
+            return tx_ch_inv @ tx_target, None, None, rx_target @ rx_ch_inv, None, None
 
     def forward(
         self,
-        U,
-        s,
-        Vh,
-        T_T,
-        T_R,
-        create_graph=None,
-        k_max=None,
+        U: torch.Tensor,
+        s: torch.Tensor,
+        Vh: torch.Tensor,
+        tx_target: torch.Tensor,
+        rx_target: torch.Tensor,
+        create_graph: bool | None = None,
+        k_max: int | None = None,
         supervision: str = "final",
         weight_ratio: float = 1.0,
-        step_callback=None,
-    ):
+        step_callback: Callable | None = None,
+    ) -> tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
         """K interleaved steps on batched SVD components.
 
         Parameters
         ----------
         U, s, Vh : (B, n_R, k), (B, k), (B, k, n_T)  batched SVD of H
-        T_T : (k, n_tx_in) or (ch_dim, n_tx_in)  TX alignment target
-        T_R : (n_rx_out, k) or (n_rx_out, ch_dim)  RX alignment target
+        tx_target : (k, n_tx_in) or (ch_dim, n_tx_in)  TX alignment target
+        rx_target : (n_rx_out, k) or (n_rx_out, ch_dim)  RX alignment target
 
         Returns
         -------
@@ -86,13 +122,15 @@ class DisjointSymUnrolledSCA(DisjointUnrolledSCA):
         B = U.shape[0]
         dev = next(self.sim_tx.buffers()).device
         U, s, Vh = U.to(dev), s.to(dev), Vh.to(dev)
-        T_T, T_R = T_T.to(dev), T_R.to(dev)
+        tx_target, rx_target = tx_target.to(dev), rx_target.to(dev)
 
         if create_graph is None:
             create_graph = self.training
         k_run = k_max if k_max is not None else self.sim_tx.K
 
-        A_tx, tx_left, tx_right, A_rx, rx_left, rx_right = self._make_inputs(U, s, Vh, T_T, T_R)
+        A_tx, tx_left, tx_right, A_rx, rx_left, rx_right = self._make_inputs(
+            U, s, Vh, tx_target, rx_target
+        )
         return self._run_loop(
             A_tx,
             tx_left,
@@ -109,14 +147,44 @@ class DisjointSymUnrolledSCA(DisjointUnrolledSCA):
         )
 
     @torch.no_grad()
-    def eval_curve(self, U, s, Vh, T_T, T_R, k_max=None, supervision="final", weight_ratio=1.0):
+    def eval_curve(
+        self,
+        U: torch.Tensor,
+        s: torch.Tensor,
+        Vh: torch.Tensor,
+        tx_target: torch.Tensor,
+        rx_target: torch.Tensor,
+        k_max: int | None = None,
+        supervision: str = "final",
+        weight_ratio: float = 1.0,
+    ) -> tuple[list[float], list[float]]:
+        """Evaluate TX and RX NMSE convergence curves without gradients.
+
+        Parameters
+        ----------
+        U, s, Vh : Tensor
+            Batched SVD components of H.
+        tx_target, rx_target : Tensor
+            TX and RX alignment targets.
+        k_max : int or None
+            Override number of steps.
+        supervision : str
+            ``"final"`` or ``"all"``.
+        weight_ratio : float
+            Deep supervision weight ratio.
+
+        Returns
+        -------
+        tuple[list[float], list[float]]
+            ``(curves_tx, curves_rx)`` — per-step mean NMSE for each SIM.
+        """
         self.eval()
         _, curves_tx, curves_rx = self.forward(
             U,
             s,
             Vh,
-            T_T,
-            T_R,
+            tx_target,
+            rx_target,
             create_graph=False,
             k_max=k_max,
             supervision=supervision,

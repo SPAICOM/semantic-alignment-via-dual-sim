@@ -10,6 +10,7 @@ alone can achieve before any hardware or channel impairments are introduced.
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.linear_probe import clf_predict
@@ -27,7 +28,7 @@ def run_original_accuracy(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Apply A_target to TX embeddings and evaluate classification accuracy.

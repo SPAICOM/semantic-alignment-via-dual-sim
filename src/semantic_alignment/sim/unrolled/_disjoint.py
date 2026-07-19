@@ -1,7 +1,10 @@
 """Shared interleaved-loop backbone for disjoint (independent TX+RX) unrolled SCA."""
 
+from collections.abc import Callable
+
 import torch
 
+from ..original.optimizers.monosim import MonoSIMoptimizerTorch
 from ._base import DualUnrolledSCA, MonoUnrolledSCA
 from ._utils import _nmse, _normalize
 
@@ -27,14 +30,38 @@ class DisjointUnrolledSCA(DualUnrolledSCA):
     **shared_kwargs  forwarded to both :class:`MonoUnrolledSCA` constructors
     """
 
-    def __init__(self, sim_tx, sim_rx, K: int, **shared_kwargs):
+    def __init__(
+        self, sim_tx: MonoSIMoptimizerTorch, sim_rx: MonoSIMoptimizerTorch, K: int, **shared_kwargs
+    ):
+        """Initialize disjoint dual-SIM with independent TX and RX backbones.
+
+        Parameters
+        ----------
+        sim_tx : MonoSIMoptimizerTorch
+            TX-side SIM optimizer (``side='tx'``).
+        sim_rx : MonoSIMoptimizerTorch
+            RX-side SIM optimizer (``side='rx'``).
+        K : int
+            Number of interleaved optimization steps.
+        **shared_kwargs
+            Forwarded to both :class:`MonoUnrolledSCA` constructors.
+        """
         super().__init__()
         self.sim_tx = MonoUnrolledSCA(sim_tx, K, **shared_kwargs)
         self.sim_rx = MonoUnrolledSCA(sim_rx, K, **shared_kwargs)
 
     # ---- interface ---------------------------------------------------------
 
-    def _make_inputs(self, *args):
+    def _make_inputs(
+        self, *args
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
         """Return (A_tx, tx_left, tx_right, A_rx, rx_left, rx_right)."""
         raise NotImplementedError
 
@@ -42,19 +69,19 @@ class DisjointUnrolledSCA(DualUnrolledSCA):
 
     def _run_loop(
         self,
-        A_tx,
-        tx_left,
-        tx_right,
-        A_rx,
-        rx_left,
-        rx_right,
+        A_tx: torch.Tensor,
+        tx_left: torch.Tensor | None,
+        tx_right: torch.Tensor | None,
+        A_rx: torch.Tensor,
+        rx_left: torch.Tensor | None,
+        rx_right: torch.Tensor | None,
         B: int,
         create_graph: bool,
         k_run: int,
         supervision: str = "final",
         weight_ratio: float = 1.0,
-        step_callback=None,
-    ):
+        step_callback: Callable | None = None,
+    ) -> tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
         """K interleaved steps (1 TX + 1 RX each).
 
         Returns
@@ -131,11 +158,32 @@ class DisjointUnrolledSCA(DualUnrolledSCA):
 
     # ---- common accessors --------------------------------------------------
 
-    def reg_S(self):
+    def reg_S(self) -> torch.Tensor:
+        """Return combined regularization loss from TX and RX step modules.
+
+        Returns
+        -------
+        torch.Tensor
+            Sum of TX and RX S-regularization losses.
+        """
         return self.sim_tx.reg_S() + self.sim_rx.reg_S()
 
-    def forward(self, *args, **kwargs):
+    def forward(self, *args, **kwargs) -> torch.Tensor:
+        """Run the disjoint optimization loop (implemented by subclasses).
+
+        Raises
+        ------
+        NotImplementedError
+            Always — subclasses must override this method.
+        """
         raise NotImplementedError
 
-    def eval_curve(self, *args, **kwargs):
+    def eval_curve(self, *args, **kwargs) -> list[float]:
+        """Evaluate NMSE convergence curves (implemented by subclasses).
+
+        Raises
+        ------
+        NotImplementedError
+            Always — subclasses must override this method.
+        """
         raise NotImplementedError

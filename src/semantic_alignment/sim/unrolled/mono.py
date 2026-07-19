@@ -1,3 +1,7 @@
+"""Mono-SIM unrolled optimizer — single SIM with K-step forward loop."""
+
+from collections.abc import Callable
+
 import torch
 
 from ._base import MonoUnrolledSCA
@@ -22,18 +26,51 @@ class MonoSIMUnrolledSCA(MonoUnrolledSCA):
 
     def forward(
         self,
-        A,
-        left_mat=None,
-        right_mat=None,
+        A: torch.Tensor,
+        left_mat: torch.Tensor | None = None,
+        right_mat: torch.Tensor | None = None,
         B: int = 1,
         record: bool = False,
-        create_graph=None,
+        create_graph: bool | None = None,
         return_phases: bool = False,
-        step_callback=None,
+        step_callback: Callable | None = None,
         k_max: int | None = None,
         supervision: str = "final",
         weight_ratio: float = 1.0,
+    ) -> (
+        tuple[torch.Tensor, list[torch.Tensor]]
+        | tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]
     ):
+        """Run K unrolled steps on a single SIM cascade.
+
+        Parameters
+        ----------
+        A : Tensor
+            Target alignment matrix, shape (d_out, d_in).
+        left_mat : Tensor or None
+            Optional left-multiplication matrix (e.g. channel H).
+        right_mat : Tensor or None
+            Optional right-multiplication matrix.
+        B : int
+            Batch size (number of parallel phase profiles).
+        create_graph : bool or None
+            If None, defaults to ``self.training``.
+        return_phases : bool
+            If True, also return the final phase logits.
+        step_callback : callable or None
+            Optional callback ``callback(k, phases)`` after each step.
+        k_max : int or None
+            Override the number of steps (default ``self.K``).
+        supervision : str
+            ``"final"`` for last-step loss, ``"all"`` for deep supervision.
+        weight_ratio : float
+            Geometric decay ratio for deep supervision weights.
+
+        Returns
+        -------
+        tuple[Tensor, list[Tensor]] or tuple[Tensor, list[Tensor], list[Tensor]]
+            ``(loss, curves)`` or ``(loss, curves, phases)`` if ``return_phases``.
+        """
         if create_graph is None:
             create_graph = self.training
         k_run = k_max if k_max is not None else self.K
@@ -97,8 +134,34 @@ class MonoSIMUnrolledSCA(MonoUnrolledSCA):
 
     @torch.no_grad()
     def eval_curve(
-        self, A, left_mat=None, right_mat=None, k_max=None, supervision="final", weight_ratio=1.0
-    ):
+        self,
+        A: torch.Tensor,
+        left_mat: torch.Tensor | None = None,
+        right_mat: torch.Tensor | None = None,
+        k_max: int | None = None,
+        supervision: str = "final",
+        weight_ratio: float = 1.0,
+    ) -> list[float]:
+        """Evaluate the NMSE convergence curve without gradients.
+
+        Parameters
+        ----------
+        A : Tensor
+            Target alignment matrix.
+        left_mat, right_mat : Tensor or None
+            Optional pre/post matrices.
+        k_max : int or None
+            Override number of steps.
+        supervision : str
+            ``"final"`` or ``"all"``.
+        weight_ratio : float
+            Deep supervision weight ratio.
+
+        Returns
+        -------
+        list[float]
+            Per-step mean NMSE values.
+        """
         self.eval()
         _, curves = self.forward(
             A,

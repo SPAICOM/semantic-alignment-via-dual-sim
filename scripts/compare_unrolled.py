@@ -26,8 +26,21 @@ from semantic_alignment.data import HChannelDataModule
 from semantic_alignment.data.prepare import prepare_semasia
 from semantic_alignment.evaluation.linear_probe import train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
-from semantic_alignment.experiments._utils import ch_dims, tipology_tag
-from semantic_alignment.experiments.compare_unrolled import (
+from semantic_alignment.sim.original._utils import ch_dims, tipology_tag
+from semantic_alignment.sim.original.disjoint_asym import DisjointAsymSIM
+from semantic_alignment.sim.original.disjoint_sym import DisjointSymSIM
+from semantic_alignment.sim.original.joint import JointSIM
+from semantic_alignment.sim.original.optimizers.monosim import (
+    MonoSIMoptimizer,
+    MonoSIMoptimizerTorch,
+)
+from semantic_alignment.sim.unrolled import (
+    DisjointAsymUnrolledSCA,
+    DisjointSymUnrolledSCA,
+    DualSIMUnrolledSCA,
+    MonoSIMUnrolledSCA,
+)
+from semantic_alignment.sim.unrolled.runner import (
     CompareUnrolledCallback,
     UnrolledLightning,
     _build_mono_sims,
@@ -35,19 +48,6 @@ from semantic_alignment.experiments.compare_unrolled import (
     _classic_mono,
     _make_eval_fn,
     _precompute_test_data,
-)
-from semantic_alignment.experiments.disjoint_asym import compute_asym_targets
-from semantic_alignment.experiments.disjoint_sym import (
-    compute_sym_alignment_targets,
-    compute_sym_targets,
-)
-from semantic_alignment.experiments.joint import build_joint_sim
-from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
-from semantic_alignment.sim.unrolled import (
-    DisjointAsymUnrolledSCA,
-    DisjointSymUnrolledSCA,
-    DualSIMUnrolledSCA,
-    MonoSIMUnrolledSCA,
 )
 from semantic_alignment.utils import cn_matrix, pack_complex
 
@@ -204,7 +204,7 @@ def main(cfg: DictConfig) -> None:
     # ---- Mode-specific build + classic baseline + training ----
 
     if mode == "joint":
-        sim = build_joint_sim(
+        sim = JointSIM.build_model(
             L,
             M_int,
             cfg.sim.wavelength,
@@ -653,7 +653,7 @@ def main(cfg: DictConfig) -> None:
         )
         n_R = n_T = ch_dim
 
-        T_T, T_R = compute_sym_alignment_targets(
+        tx_target, rx_target = DisjointSymSIM.build_alignment_targets(
             A_target,
             ch_dim,
             strategy_name,
@@ -668,15 +668,17 @@ def main(cfg: DictConfig) -> None:
             lg.seed_everything(_cs)
             _H_cs = cn_matrix(0, 1, size=(n_R, n_T)).to(device)
             _s = {"probe": [], "neural": []}
-            target_tx, tx_left, tx_right, target_rx, rx_left, rx_right = compute_sym_targets(
-                A_target,
-                _H_cs,
-                ch_dim,
-                strategy_name,
-                device,
-                F_T=ctx["F_T"],
-                F_R_H=ctx["F_R_H"],
-                constructive=constructive,
+            tx_target, tx_left, tx_right, rx_target, rx_left, rx_right = (
+                DisjointSymSIM.build_targets(
+                    A_target,
+                    _H_cs,
+                    ch_dim,
+                    strategy_name,
+                    device,
+                    F_T=ctx["F_T"],
+                    F_R_H=ctx["F_R_H"],
+                    constructive=constructive,
+                )
             )
             _tmp = DisjointSymUnrolledSCA(
                 tx_sim,
@@ -694,8 +696,8 @@ def main(cfg: DictConfig) -> None:
                 _W_R,
                 _sz_T,
                 _sz_R,
-                target_tx,
-                target_rx,
+                tx_target,
+                rx_target,
                 tx_left,
                 tx_right,
                 rx_left,
@@ -765,8 +767,8 @@ def main(cfg: DictConfig) -> None:
             lightning = UnrolledLightning(
                 mode="disjoint_sym",
                 A_target=A_target,
-                T_T=T_T,
-                T_R=T_R,
+                tx_target=tx_target,
+                rx_target=rx_target,
                 K=K,
                 unrolled_model=model,
                 constructive=constructive,
@@ -886,13 +888,15 @@ def main(cfg: DictConfig) -> None:
             lg.seed_everything(_cs)
             _H_cs = cn_matrix(0, 1, size=(n_R, n_T)).to(device)
             _s = {"probe": [], "neural": []}
-            target_tx, tx_left, tx_right, target_rx, rx_left, rx_right = compute_asym_targets(
-                A_target,
-                _H_cs,
-                ch_dim,
-                device,
-                constructive=constructive,
-                alignment_side=alignment_side,
+            tx_target, tx_left, tx_right, rx_target, rx_left, rx_right = (
+                DisjointAsymSIM.build_targets(
+                    A_target,
+                    _H_cs,
+                    ch_dim,
+                    device,
+                    constructive=constructive,
+                    alignment_side=alignment_side,
+                )
             )
             _tmp = DisjointAsymUnrolledSCA(
                 tx_sim,
@@ -911,8 +915,8 @@ def main(cfg: DictConfig) -> None:
                 _W_R,
                 _sz_T,
                 _sz_R,
-                target_tx,
-                target_rx,
+                tx_target,
+                rx_target,
                 tx_left,
                 tx_right,
                 rx_left,

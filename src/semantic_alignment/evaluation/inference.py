@@ -24,6 +24,7 @@ import math
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.linear_probe import clf_predict
@@ -37,7 +38,7 @@ from semantic_alignment.utils import (
 
 
 def run_evaluation(
-    model,
+    model: nn.Module,
     dataloader: DataLoader,
     H_mimo: torch.Tensor,
     snr_db: float | None,
@@ -46,7 +47,7 @@ def run_evaluation(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate semantic accuracy for the joint Dual-SIM architecture.
@@ -127,7 +128,7 @@ def run_evaluation_mmse(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate the digital MMSE baseline (no SIM, SVD-based equalizer).
@@ -208,7 +209,7 @@ def run_evaluation_mono(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
     use_equalizer: bool = True,
     mmse: bool = False,
@@ -291,8 +292,8 @@ def run_evaluation_mono(
 
 
 def run_evaluation_disjoint_fixed(
-    tx_model,
-    rx_model,
+    tx_model: nn.Module,
+    rx_model: nn.Module,
     dataloader: DataLoader,
     H_mimo: torch.Tensor,
     snr_db: float | None,
@@ -301,7 +302,7 @@ def run_evaluation_disjoint_fixed(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.

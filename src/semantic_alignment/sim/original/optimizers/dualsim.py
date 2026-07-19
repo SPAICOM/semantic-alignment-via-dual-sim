@@ -20,13 +20,15 @@ DualSIMoptimizer      — NumPy reference implementation (builds propagation mat
 DualSIMoptimizerTorch — PyTorch wrapper with gradient-based alternating optimisation.
 """
 
+from collections.abc import Callable
+
 import numpy as np
 import torch
 import torch.nn as nn
 from tqdm.auto import tqdm  # noqa: F401  (kept for any downstream importers)
 
-from ._cascade import xi_to_phasor
-from .core import optimize_joint
+from ..._cascade import xi_to_phasor
+from ...core import optimize_joint
 
 
 class DualSIMoptimizer:
@@ -99,7 +101,7 @@ class DualSIMoptimizer:
         thickness_RX: float,
         wavelength: float,
         verbose: bool = False,
-        spacings: dict = None,
+        spacings: dict | None = None,
     ):
         if num_layers_TX <= 0 or num_layers_RX <= 0:
             raise ValueError("Number of layers must be positive for both SIMs.")
@@ -143,28 +145,8 @@ class DualSIMoptimizer:
         # RX uses L_R propagation matrices (W·Y scheme, signal hits Y before W)
         self.W_RX = self._build_W_list(self.L_R, "RX_input", "RX_intermediate", "RX_output")
 
-    def _build_W_list(self, L: int, type_in: str, type_int: str, type_out: str) -> list:
-        """Build the list of L propagation matrices for a SIM stack.
-
-        Layer layout: input → [intermediate × (L-2)] → output.
-        For L=1 the single layer maps input directly to output.
-
-        Parameters
-        ----------
-        L : int
-            Number of layers.
-        type_in : str
-            Layer-type label for the input aperture (e.g. ``"TX_input"``).
-        type_int : str
-            Layer-type label for intermediate layers (e.g. ``"TX_intermediate"``).
-        type_out : str
-            Layer-type label for the output aperture (e.g. ``"TX_output"``).
-
-        Returns
-        -------
-        list of np.ndarray
-            List of ``L`` complex propagation matrices.
-        """
+    def _build_W_list(self, L: int, type_in: str, type_int: str, type_out: str) -> list[np.ndarray]:
+        """Build the list of L propagation matrices for a SIM stack."""
         W_list = []
         if L == 1:
             W_list.append(self._calculate_W(type_in, type_out))
@@ -176,29 +158,7 @@ class DualSIMoptimizer:
         return W_list
 
     def _calculate_W(self, from_layer_type: str, to_layer_type: str) -> np.ndarray:
-        """Compute the free-space propagation matrix between two adjacent meta-atom layers.
-
-        Uses the scalar Green's function approximation:
-            W[to, from] = (s_layer · A_cell / d²) · (1/(2πd) − j/λ) · exp(jκd)
-        where d is the 3-D Euclidean distance between meta-atom positions,
-        A_cell = s² is the unit-cell area, and κ = 2π/λ is the wavenumber.
-
-        Vectorised over both aperture axes at once (NumPy broadcasting).
-
-        Parameters
-        ----------
-        from_layer_type : str
-            ``"TX_input"``, ``"TX_intermediate"``, ``"TX_output"``,
-            ``"RX_input"``, ``"RX_intermediate"``, or ``"RX_output"`` —
-            source layer type.
-        to_layer_type : str
-            Same options — destination layer type.
-
-        Returns
-        -------
-        np.ndarray
-            Complex propagation matrix of shape ``(to_total, from_total)``.
-        """
+        """Compute the free-space propagation matrix between two adjacent meta-atom layers."""
         params = {
             "TX_input": (
                 self.N_in_T,
@@ -265,74 +225,28 @@ class DualSIMoptimizer:
         return W
 
     def _calculate_G_T(self) -> np.ndarray:
-        """Compute the TX cascade transfer matrix.
-
-        ``G_T = ∏_{l=1}^{L_T} Υ_l W_l`` where each layer applies a diagonal
-        phase matrix followed by propagation through the metasurface.
-
-        Returns
-        -------
-        np.ndarray
-            Complex TX cascade matrix of shape ``(N_out_T, N_in_T)``.
-        """
+        """Compute the TX cascade transfer matrix G_T = ∏_{l=1}^{L_T} Υ_l W_l."""
         G = np.eye(self.N_in_T, dtype=complex)
         for i in range(self.L_T):
-            # Υ_l = diag(exp(j ξ_l)) applies the learnable phase shifts at layer l
             Y_l = np.diag(np.exp(1j * self._phase_shifts_TX[i]))
             G = Y_l @ self.W_TX[i] @ G
         return G
 
     def _calculate_G_R(self) -> np.ndarray:
-        """Compute the RX cascade transfer matrix.
-
-        ``G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0``  (Y·W scheme).
-
-        Signal flow: x → Y_0 → W_0 → Y_1 → W_1 → … → Y_{L-1} → W_{L-1}.
-        First phase Y_0 acts on the input aperture (N_in_R); the rest are
-        intermediate (M_int_R).  Uses L_R propagation matrices and L_R phases.
-
-        Returns
-        -------
-        np.ndarray
-            Complex RX cascade matrix of shape ``(N_out_R, N_in_R)``.
-        """
+        """Compute G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0 (Y·W scheme)."""
         G = None
         for i in range(self.L_R):
             Y_l = np.diag(np.exp(1j * self._phase_shifts_RX[i]))
-            G = Y_l if G is None else Y_l @ G  # phase shift first
-            G = self.W_RX[i] @ G  # then propagation
+            G = Y_l if G is None else Y_l @ G
+            G = self.W_RX[i] @ G
         return G
 
     def calculate_effective_cascade(self, H_mimo: np.ndarray) -> np.ndarray:
-        """Compute the end-to-end cascade Z = G_R · H · G_T.
-
-        Parameters
-        ----------
-        H_mimo : np.ndarray
-            Complex MIMO channel matrix.
-
-        Returns
-        -------
-        np.ndarray
-            Effective cascade matrix Z.
-        """
+        """Compute the end-to-end cascade Z = G_R · H · G_T."""
         return self._calculate_G_R() @ H_mimo @ self._calculate_G_T()
 
     def calculate_optimal_beta(self, Z: np.ndarray, A: np.ndarray) -> complex:
-        """Compute the optimal scalar β = ⟨Z, A⟩_F / ⟨Z, Z⟩_F.
-
-        Parameters
-        ----------
-        Z : np.ndarray
-            Cascade matrix, shape ``(D_rx, D_tx)``.
-        A : np.ndarray
-            Target alignment matrix, same shape as Z.
-
-        Returns
-        -------
-        complex
-            Optimal scaling scalar β.
-        """
+        """Compute the optimal scalar β = ⟨Z, A⟩_F / ⟨Z, Z⟩_F."""
         z_vec = Z.flatten()
         a_vec = A.flatten()
         return np.vdot(z_vec, a_vec) / np.vdot(z_vec, z_vec)
@@ -353,24 +267,36 @@ class DualSIMoptimizerTorch(nn.Module):
     """
 
     def __init__(self, sim_cpu: DualSIMoptimizer):
+        """Initialize Torch wrapper from a pre-built NumPy DualSIMoptimizer.
+
+        Copies TX and RX propagation matrices as non-trainable buffers and
+        phase shifts as trainable parameters.
+
+        Parameters
+        ----------
+        sim_cpu : DualSIMoptimizer
+            Pre-built NumPy optimizer.
+        """
         super().__init__()
         self.verbose = sim_cpu.verbose
         self.L_T = sim_cpu.L_T
         self.L_R = sim_cpu.L_R
 
+        # Register TX propagation matrices as buffers
         for i, W in enumerate(sim_cpu.W_TX):
             self.register_buffer(f"W_T_{i}", torch.tensor(W, dtype=torch.complex64))
-        # W_RX has L_R+1 matrices (W·Y·W scheme)
+        # Register RX propagation matrices as buffers
         for i, W in enumerate(sim_cpu.W_RX):
             self.register_buffer(f"W_R_{i}", torch.tensor(W, dtype=torch.complex64))
 
+        # TX phase logits (trainable)
         self.xi_T = nn.ParameterList(
             [
                 nn.Parameter(torch.zeros_like(torch.tensor(p, dtype=torch.float32)))
                 for p in sim_cpu._phase_shifts_TX
             ]
         )
-        # xi_R has L_R parameters all of size M_int_R (intermediate layers only)
+        # RX phase logits (trainable)
         self.xi_R = nn.ParameterList(
             [
                 nn.Parameter(torch.zeros_like(torch.tensor(p, dtype=torch.float32)))
@@ -378,142 +304,105 @@ class DualSIMoptimizerTorch(nn.Module):
             ]
         )
 
-    def _get_W_list(self, prefix, L):
-        """Retrieve the registered propagation buffers W_0 … W_{L-1}.
+    def _get_W_list(self, prefix: str, L: int) -> list[torch.Tensor]:
+        """Retrieve L propagation matrices by name prefix.
 
         Parameters
         ----------
         prefix : str
-            Buffer name prefix (e.g. ``"W_T"`` or ``"W_R"``).
+            Buffer name prefix (``"W_T"`` or ``"W_R"``).
         L : int
             Number of layers.
 
         Returns
         -------
-        list of torch.Tensor
-            List of ``L`` complex64 buffer tensors.
+        list[Tensor]
+            Propagation matrices.
         """
         return [getattr(self, f"{prefix}_{i}") for i in range(L)]
 
-    def _calculate_G(self, W_list, phases, L, input_dim):
-        """Compute the cascade G = Υ_L W_L … Υ_1 W_1 for a single SIM stack.
+    def _calculate_G(
+        self, W_list: list[torch.Tensor], phases: list[torch.Tensor], L: int, input_dim: int
+    ):
+        """Compute TX cascade: G = Υ_L W_L … Υ_1 W_1.
 
         Parameters
         ----------
-        W_list : list of torch.Tensor
-            Propagation matrices from the module buffers.
-        phases : list of torch.Tensor
-            Phase-shift parameter tensors, one per layer.
+        W_list : list[Tensor]
+            Linear transforms for each layer.
+        phases : list[Tensor]
+            Phase logits for each layer.
         L : int
             Number of layers.
         input_dim : int
-            Dimension of the identity matrix used to start the cascade.
+            Input dimension (rows of first W).
 
         Returns
         -------
         torch.Tensor
-            Complex64 cascade matrix.
+            Complex cascade matrix.
         """
         device = phases[0].device
+        # Start with identity: G_0 = I
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
         for i in range(L):
+            # Y·W scheme: phasor after linear transform
             Y_l = torch.diag(xi_to_phasor(phases[i]))
             G = Y_l @ W_list[i] @ G
         return G
 
-    def _calculate_G_T(self):
-        """Compute the TX cascade G_T from the current phase parameters.
-
-        Returns
-        -------
-        torch.Tensor
-            Complex64 TX cascade matrix.
-        """
+    def _calculate_G_T(self) -> torch.Tensor:
+        """Compute the TX cascade G_T from current TX phase parameters."""
         W_T = self._get_W_list("W_T", self.L_T)
         return self._calculate_G(W_T, self.xi_T, self.L_T, W_T[0].shape[1])
 
-    def _calculate_G_R(self):
-        """Compute G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0 (Y·W scheme).
+    def _calculate_G_R(self) -> torch.Tensor:
+        """Compute the RX cascade G_R from current RX phase parameters.
 
-        Signal flow: x → Y_0 → W_0 → … → Y_{L-1} → W_{L-1}.
-        First phase Y_0 acts on the input aperture; the rest are intermediate.
-        Uses L_R sigmoid-mapped phases.
-
-        Returns
-        -------
-        torch.Tensor
-            Complex64 RX cascade matrix.
+        Uses the W·Y scheme: G_R = W_{L-1} · Y_{L-1} · … · W_0 · Y_0.
         """
         W_R = self._get_W_list("W_R", self.L_R)
         G = None
         for i in range(self.L_R):
             Y_l = torch.diag(xi_to_phasor(self.xi_R[i]))
-            G = Y_l if G is None else Y_l @ G  # phase shift first
-            G = W_R[i] @ G  # then propagation
+            # First iteration: G = Y_0; subsequent: G = Y_i @ G
+            G = Y_l if G is None else Y_l @ G
+            # Apply linear transform after phasor modulation
+            G = W_R[i] @ G
         return G
 
-    def get_effective_cascade(self, H):
+    def get_effective_cascade(self, H: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute the end-to-end cascade Z = G_R · H · G_T.
 
         Parameters
         ----------
-        H : torch.Tensor
-            Complex MIMO channel matrix.
+        H : Tensor
+            MIMO channel matrix, shape (d_rx, d_tx).
 
         Returns
         -------
-        Z : torch.Tensor
-            Effective cascade matrix.
-        G_R : torch.Tensor
-            RX cascade matrix (returned for downstream beta computation).
+        tuple[Tensor, Tensor]
+            ``(Z, G_R)`` where Z is the end-to-end cascade and G_R is the RX cascade.
         """
         GT = self._calculate_G_T()
         GR = self._calculate_G_R()
         return GR @ H @ GT, GR
 
-    def get_TX_cascade(self):
-        """Return the TX cascade matrix G_T from the current phase parameters.
-
-        Returns
-        -------
-        torch.Tensor
-            Complex64 cascade matrix G_T.
-        """
+    def get_TX_cascade(self) -> torch.Tensor:
+        """Return the current TX cascade matrix G_T."""
         return self._calculate_G_T()
 
-    def get_RX_cascade(self):
-        """Return the RX cascade matrix G_R from the current phase parameters.
-
-        Returns
-        -------
-        torch.Tensor
-            Complex64 cascade matrix G_R.
-        """
+    def get_RX_cascade(self) -> torch.Tensor:
+        """Return the current RX cascade matrix G_R."""
         return self._calculate_G_R()
 
-    def get_effective_cascade_functional(self, H, phases_T, phases_R):
-        """Compute Z = G_R · H · G_T using externally supplied phase lists.
-
-        Useful for evaluation without modifying the module's own parameters.
-
-        Parameters
-        ----------
-        H : torch.Tensor
-            Complex MIMO channel matrix.
-        phases_T : list of torch.Tensor
-            TX phase-shift tensors, one per layer.
-        phases_R : list of torch.Tensor
-            RX phase-shift tensors, one per layer.
-
-        Returns
-        -------
-        torch.Tensor
-            Effective cascade matrix Z.
-        """
+    def get_effective_cascade_functional(
+        self, H: torch.Tensor, phases_T: list[torch.Tensor], phases_R: list[torch.Tensor]
+    ) -> torch.Tensor:
+        """Compute Z = G_R · H · G_T using externally supplied phase lists."""
         W_T = self._get_W_list("W_T", self.L_T)
         GT = self._calculate_G(W_T, phases_T, self.L_T, W_T[0].shape[1])
 
-        # G_R uses Y·W scheme: signal hits the phase shift before each propagation
         W_R = self._get_W_list("W_R", self.L_R)
         GR = None
         for i in range(self.L_R):
@@ -525,8 +414,8 @@ class DualSIMoptimizerTorch(nn.Module):
 
     def optimize_alternating(
         self,
-        A_target,
-        H_mimo,
+        A_target: torch.Tensor | np.ndarray,
+        H_mimo: torch.Tensor | np.ndarray,
         max_iters: int = 3000,
         lr_tx: float = 0.1,
         lr_rx: float = 0.1,
@@ -536,18 +425,12 @@ class DualSIMoptimizerTorch(nn.Module):
         k_R: int = 100,
         optimizer: str = "adam",
         scheduler: str | None = None,
-        eval_fn=None,
-    ):
+        eval_fn: Callable | None = None,
+    ) -> list[float]:
         """Alternating gradient optimization of TX and RX phase shifts.
 
-        Minimises ``‖β Z − A‖²_F / (n·m)`` where
-        ``β = ⟨Z, A⟩_F / ‖Z‖²_F`` is the closed-form optimal scalar computed
-        without gradient (``torch.no_grad``), so the loss gradient flows only
-        through ``Z``.  Dividing by ``n·m`` keeps the loss scale consistent
-        with :class:`MonoSIMoptimizerTorch`.
-
-        Each outer iteration (cycle) performs ``k_T`` consecutive TX-only gradient
-        steps followed by ``k_R`` consecutive RX-only gradient steps.
+        Each outer iteration performs ``k_T`` consecutive TX-only gradient steps
+        followed by ``k_R`` consecutive RX-only gradient steps.
         Best phase profiles are restored at the end.
 
         Parameters
@@ -555,35 +438,18 @@ class DualSIMoptimizerTorch(nn.Module):
         A_target : array-like or torch.Tensor
             Target alignment matrix, shape ``(D_rx/2, D_tx/2)``, complex.
         H_mimo : array-like or torch.Tensor
-            MIMO channel matrix, same shape as required by the SIM.
-        max_iters : int, optional
-            Total gradient-step budget.  The number of TX/RX cycles run is
-            ``max_iters // (k_T + k_R)``.
-        lr_tx : float, optional
-            Learning rate for the TX (G_T) optimizer.
-        lr_rx : float, optional
-            Learning rate for the RX (G_R) optimizer.
-        warmup_frac : float, optional
-            Fraction of ``max_iters`` kept at constant LR before cosine decay
-            (only used when ``scheduler="cosine"``).
-        clip_value : float or None, optional
-            Gradient clipping norm applied after each backward pass.
-            ``None`` disables gradient clipping entirely.
-        k_T : int, optional
-            Consecutive TX-only gradient steps per cycle.
-        k_R : int, optional
-            Consecutive RX-only gradient steps per cycle.
-        optimizer : str, optional
-            ``"sgd"`` — SGD; ``"adam"`` — Adam (default).
-        scheduler : str or None, optional
-            ``None`` — fixed LR throughout (default);
-            ``"cosine"`` — constant LR for the first ``warmup_frac`` cycles,
-            then cosine annealing down to ``lr * 1e-3``.
+            MIMO channel matrix.
+        max_iters : int
+            Total gradient-step budget; cycles = ``max_iters // (k_T + k_R)``.
+        lr_tx, lr_rx : float
+            Learning rates for TX and RX optimizers.
+        k_T, k_R : int
+            Consecutive TX-only / RX-only steps per cycle.
 
         Returns
         -------
         list of float
-            Per-cycle loss values ``‖β Z − A‖²_F / (n·m)``.
+            Per-cycle loss values.
         """
         device = next(self.parameters()).device
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
@@ -628,33 +494,3 @@ class DualSIMoptimizerTorch(nn.Module):
             for p, ph in zip(self.xi_R, phases_R):
                 p.copy_(ph)
         return loss_history
-
-
-if __name__ == "__main__":
-    import torch
-
-    cpu = DualSIMoptimizer(
-        num_layers_TX=2,
-        num_meta_atoms_TX_in_x=2,
-        num_meta_atoms_TX_in_y=2,
-        num_meta_atoms_TX_out_x=2,
-        num_meta_atoms_TX_out_y=2,
-        num_meta_atoms_TX_int_x=2,
-        num_meta_atoms_TX_int_y=2,
-        thickness_TX=0.05,
-        num_layers_RX=2,
-        num_meta_atoms_RX_in_x=2,
-        num_meta_atoms_RX_in_y=2,
-        num_meta_atoms_RX_out_x=2,
-        num_meta_atoms_RX_out_y=2,
-        num_meta_atoms_RX_int_x=2,
-        num_meta_atoms_RX_int_y=2,
-        thickness_RX=0.05,
-        wavelength=0.005,
-        verbose=False,
-    )
-    model = DualSIMoptimizerTorch(cpu)
-    H = torch.eye(4, dtype=torch.complex64)
-    Z, G_R = model.get_effective_cascade(H)
-    G_T = model.get_TX_cascade()
-    print(f"DualSIMoptimizerTorch : Z={Z.shape}, G_T={G_T.shape}, G_R={G_R.shape}, dtype={Z.dtype}")

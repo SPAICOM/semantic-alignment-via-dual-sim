@@ -1,4 +1,4 @@
-"""Sim sub-package: SIM phase-profile optimizers.
+"""Sim sub-package: SIM phase-profile optimizers and runners.
 
 :class:`DualSIMoptimizer` / :class:`DualSIMoptimizerTorch`
     Optimize the phase profiles of a *dual* SIM stack (one SIM at TX, one at RX)
@@ -12,9 +12,16 @@ NumPy variants use closed-form or iterative solvers; Torch variants enable
 gradient-based optimization on GPU.
 """
 
-from semantic_alignment.sim.dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
-from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
+from semantic_alignment.sim.original.optimizers.dualsim import (
+    DualSIMoptimizer,
+    DualSIMoptimizerTorch,
+)
+from semantic_alignment.sim.original.optimizers.monosim import (
+    MonoSIMoptimizer,
+    MonoSIMoptimizerTorch,
+)
 
+# Re-export the canonical optimizer classes at the package level for convenience.
 __all__ = [
     "DualSIMoptimizer",
     "DualSIMoptimizerTorch",

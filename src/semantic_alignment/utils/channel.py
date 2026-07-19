@@ -134,7 +134,9 @@ def sigma_from_snr(snr_db: float, signal: torch.Tensor) -> float:
 # ── MIMO equalization ─────────────────────────────────────────────────────────
 
 
-def svd_equalizer(channel_matrix: torch.Tensor, snr_db: float = None):
+def svd_equalizer(
+    channel_matrix: torch.Tensor, snr_db: float | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute a joint MMSE/ZF SVD precoder–equalizer pair for a MIMO channel.
 
     Decomposes ``H = U Σ Vᴴ`` and constructs:
@@ -192,7 +194,7 @@ def svd_equalizer(channel_matrix: torch.Tensor, snr_db: float = None):
 
 def rx_equalizer(
     channel_matrix: torch.Tensor,
-    snr_db: float = None,
+    snr_db: float | None = None,
     epsilon: float = 0.0,
 ) -> torch.Tensor:
     """Compute a receive-only MMSE/ZF equalizer (no TX precoding).
@@ -365,8 +367,11 @@ def solve(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 def prewhiten(
     x_train: torch.Tensor,
-    x_test: torch.Tensor = None,
+    x_test: torch.Tensor | None = None,
     device: str = "cpu",
+) -> (
+    tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+    | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
 ):
     """Prewhiten data using the Cholesky factor of the training covariance.
 

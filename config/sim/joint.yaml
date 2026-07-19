@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.joint.run_joint_sim
+_target_: semantic_alignment.sim.original.joint.JointSIM.run_sim
 sim_type: joint
 
 wavelength: 0.005          # lambda = 5 mm (60 GHz band)

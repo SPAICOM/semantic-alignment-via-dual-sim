@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.disjoint_asym.run_disjoint_asym
+_target_: semantic_alignment.sim.original.disjoint_asym.DisjointAsymSIM.run_sim
 sim_type: disjoint_asym
 
 wavelength: 0.005

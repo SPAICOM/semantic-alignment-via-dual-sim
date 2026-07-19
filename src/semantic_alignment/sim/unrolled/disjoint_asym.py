@@ -1,5 +1,10 @@
+"""Asymmetric disjoint dual-SIM unrolled optimizer."""
+
+from collections.abc import Callable
+
 import torch
 
+from ..original.optimizers.monosim import MonoSIMoptimizerTorch
 from ._disjoint import DisjointUnrolledSCA
 
 
@@ -33,14 +38,33 @@ class DisjointAsymUnrolledSCA(DisjointUnrolledSCA):
 
     def __init__(
         self,
-        sim_tx,
-        sim_rx,
+        sim_tx: MonoSIMoptimizerTorch,
+        sim_rx: MonoSIMoptimizerTorch,
         K: int,
         constructive: bool = False,
         alignment_side: str = "tx",
         epsilon: float = 0.0,
         **shared_kwargs,
     ):
+        """Initialize asymmetric disjoint dual-SIM.
+
+        Parameters
+        ----------
+        sim_tx : MonoSIMoptimizerTorch
+            TX-side SIM (``side='tx'``).
+        sim_rx : MonoSIMoptimizerTorch
+            RX-side SIM (``side='rx'``).
+        K : int
+            Number of interleaved steps.
+        constructive : bool
+            If True, use constructive (full-CSI) targets.
+        alignment_side : str
+            ``"tx"`` or ``"rx"`` — which side gets the alignment target.
+        epsilon : float
+            Tikhonov regularization for H† (non-constructive only).
+        **shared_kwargs
+            Forwarded to both :class:`MonoUnrolledSCA` constructors.
+        """
         super().__init__(sim_tx, sim_rx, K, **shared_kwargs)
         if not constructive and alignment_side == "rx":
             raise ValueError(
@@ -50,7 +74,16 @@ class DisjointAsymUnrolledSCA(DisjointUnrolledSCA):
         self.alignment_side = alignment_side
         self.epsilon = epsilon
 
-    def _make_inputs(self, H_batch, A_target):
+    def _make_inputs(
+        self, H_batch: torch.Tensor, A_target: torch.Tensor
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+        torch.Tensor,
+        torch.Tensor | None,
+        torch.Tensor | None,
+    ]:
         """Compute ``(A_tx, tx_left, tx_right, A_rx, rx_left, rx_right)`` from a batch of H."""
         eps = self.epsilon
         dev = H_batch.device
@@ -76,14 +109,14 @@ class DisjointAsymUnrolledSCA(DisjointUnrolledSCA):
 
     def forward(
         self,
-        H_batch,
-        A_target,
-        create_graph=None,
-        k_max=None,
+        H_batch: torch.Tensor,
+        A_target: torch.Tensor,
+        create_graph: bool | None = None,
+        k_max: int | None = None,
         supervision: str = "final",
         weight_ratio: float = 1.0,
-        step_callback=None,
-    ):
+        step_callback: Callable | None = None,
+    ) -> tuple[torch.Tensor, list[torch.Tensor], list[torch.Tensor]]:
         """K interleaved steps on a batch of channel matrices.
 
         Parameters
@@ -120,7 +153,34 @@ class DisjointAsymUnrolledSCA(DisjointUnrolledSCA):
         )
 
     @torch.no_grad()
-    def eval_curve(self, H_batch, A_target, k_max=None, supervision="final", weight_ratio=1.0):
+    def eval_curve(
+        self,
+        H_batch: torch.Tensor,
+        A_target: torch.Tensor,
+        k_max: int | None = None,
+        supervision: str = "final",
+        weight_ratio: float = 1.0,
+    ) -> tuple[list[float], list[float]]:
+        """Evaluate TX and RX NMSE convergence curves without gradients.
+
+        Parameters
+        ----------
+        H_batch : Tensor
+            Batch of channel matrices, shape (B, n_R, n_T).
+        A_target : Tensor
+            Fixed alignment target.
+        k_max : int or None
+            Override number of steps.
+        supervision : str
+            ``"final"`` or ``"all"``.
+        weight_ratio : float
+            Deep supervision weight ratio.
+
+        Returns
+        -------
+        tuple[list[float], list[float]]
+            ``(curves_tx, curves_rx)`` — per-step mean NMSE for each SIM.
+        """
         self.eval()
         _, curves_tx, curves_rx = self.forward(
             H_batch,

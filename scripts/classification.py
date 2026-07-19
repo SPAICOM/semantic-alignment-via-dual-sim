@@ -39,7 +39,7 @@ from semantic_alignment.data.prepare import prepare_semasia
 from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
-from semantic_alignment.experiments._utils import make_fname, tipology_tag
+from semantic_alignment.sim.original._utils import make_fname, tipology_tag
 from semantic_alignment.utils import cn_matrix
 
 _RESULTS = Path("results")

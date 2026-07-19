@@ -89,6 +89,27 @@ class HChannelDataModule(LightningDataModule):
         seed: int = 42,
         precompute_svd: bool = False,
     ):
+        """Initialize the H channel dataset.
+
+        Parameters
+        ----------
+        n_R : int
+            Number of RX antennas.
+        n_T : int
+            Number of TX antennas.
+        n_total : int, optional
+            Total number of channel realizations.
+        batch_size : int, optional
+            Batch size for DataLoaders.
+        train_ratio : float, optional
+            Fraction of data for training.
+        val_ratio : float, optional
+            Fraction of data for validation.
+        seed : int, optional
+            Random seed for reproducibility.
+        precompute_svd : bool, optional
+            If True, precompute SVD decompositions of all H matrices.
+        """
         super().__init__()
         # Persist all constructor args so Lightning can serialise them.
         self.save_hyperparameters(ignore=[])
@@ -138,7 +159,11 @@ class HChannelDataModule(LightningDataModule):
             self.val_svd = svds[1]
             self.test_svd = svds[2]
 
-    def _make_dataset(self, H, svd=None):
+    def _make_dataset(
+        self,
+        H: torch.Tensor,
+        svd: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None,
+    ) -> TensorDataset:
         """Wrap a split's tensors into a :class:`TensorDataset`.
 
         Parameters
@@ -159,7 +184,7 @@ class HChannelDataModule(LightningDataModule):
             return TensorDataset(H, U, s, Vh)
         return TensorDataset(H)
 
-    def train_dataloader(self):
+    def train_dataloader(self) -> DataLoader:
         """Return the training dataloader (shuffled).
 
         Returns
@@ -171,7 +196,7 @@ class HChannelDataModule(LightningDataModule):
         ds = self._make_dataset(self.train_H, self.train_svd if self.precompute_svd else None)
         return DataLoader(ds, batch_size=self.batch_size, shuffle=True)
 
-    def val_dataloader(self):
+    def val_dataloader(self) -> DataLoader:
         """Return the validation dataloader (not shuffled).
 
         Returns
@@ -183,7 +208,7 @@ class HChannelDataModule(LightningDataModule):
         ds = self._make_dataset(self.val_H, self.val_svd if self.precompute_svd else None)
         return DataLoader(ds, batch_size=self.batch_size, shuffle=False)
 
-    def test_dataloader(self):
+    def test_dataloader(self) -> DataLoader:
         """Return the test dataloader (not shuffled).
 
         Returns

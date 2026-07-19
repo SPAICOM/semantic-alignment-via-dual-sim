@@ -14,7 +14,7 @@ def ppfe(
     output_real: torch.Tensor,
     n_clusters: int,
     n_proto: int,
-    seed: int = None,
+    seed: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Prototype-based Parseval Frame Equalization (zero-shot alignment).
 
