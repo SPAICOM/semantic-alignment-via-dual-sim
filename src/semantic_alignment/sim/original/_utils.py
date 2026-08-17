@@ -142,6 +142,7 @@ def make_fname(
     n_clusters: int | None = None,
     dataset: str = "cifar10",
     preconditioner: str = "none",
+    extra_tag: str = "",
     **_,
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
@@ -186,7 +187,7 @@ def make_fname(
     return (
         f"{dataset}_{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
         f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}{prec_tag}"
-        f"_{tx_enc}_{rx_enc}.parquet"
+        f"{extra_tag}_{tx_enc}_{rx_enc}.parquet"
     )
 
 

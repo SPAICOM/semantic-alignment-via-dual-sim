@@ -78,6 +78,13 @@ def _out_path(cfg: DictConfig) -> Path | None:
         sim.get("constructive", False),
         sim.get("alignment_side", None),
     )
+    lr_tx = cfg.training.get("lr_tx", None)
+    lr_rx = cfg.training.get("lr_rx", None)
+    lr_tag = (
+        f"_lrtx{lr_tx}_lrrx{lr_rx}"
+        if "lr_search" in result_subdir and lr_tx is not None and lr_rx is not None
+        else ""
+    )
     fname = make_fname(
         strategy,
         seed,
@@ -91,6 +98,7 @@ def _out_path(cfg: DictConfig) -> Path | None:
         s_rx,
         n_clusters,
         dataset=dataset,
+        extra_tag=lr_tag,
     )
     return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
 
@@ -293,8 +301,10 @@ def _setup(cfg: DictConfig) -> dict:
         strategy_name=cfg.alignment.type,
         max_iters=cfg.training.max_iters,
         lr=cfg.training.get("lr", None),
-        lr_tx=cfg.training.get("lr_tx", None),
-        lr_rx=cfg.training.get("lr_rx", None),
+        lr_tx=cfg.alignment.get("lr_tx", cfg.training.get("lr_tx", None)),
+        lr_rx=cfg.alignment.get("lr_rx", cfg.training.get("lr_rx", None)),
+        k_T=int(cfg.training.get("k_T", 100)),
+        k_R=int(cfg.training.get("k_R", 100)),
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
         optimizer=cfg.training.get("optimizer", "adam"),
@@ -303,6 +313,7 @@ def _setup(cfg: DictConfig) -> dict:
         clip_value=cfg.training.get("clip_value", None),
         tx_steps_per_rx=int(cfg.training.get("tx_steps_per_rx", 1)),
         rx_steps_per_tx=int(cfg.training.get("rx_steps_per_tx", 1)),
+        save_curve=bool(cfg.training.get("save_curve", False)),
         F_T=F_T,
         F_R_H=F_R_H,
     )

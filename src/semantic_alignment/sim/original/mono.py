@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from semantic_alignment.evaluation.inference import run_evaluation_mono
+from semantic_alignment.evaluation.inference import run_evaluation_cascade, run_evaluation_mono
 from semantic_alignment.utils import cn_matrix
 
 from ._base import SIMRunner
@@ -87,6 +87,7 @@ class MonoSIM(SIMRunner):
         use_mmse: bool = False,
         dataset: str = "cifar10",
         result_subdir: str = "",
+        save_curve: bool = False,
         **_,
     ) -> None:
         """Run one Mono-SIM (TX-only) job."""
@@ -139,6 +140,63 @@ class MonoSIM(SIMRunner):
         )
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
 
+        curve_probe: list[float] = []
+        curve_neural: list[float] = []
+
+        def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
+            if constructive:
+                acc = run_evaluation_cascade(
+                    Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
+                )
+            else:
+                acc = run_evaluation_mono(
+                    G_T=Z_eff,
+                    dataloader=test_loader,
+                    H_mimo=H_torch,
+                    snr_db=snr,
+                    beta_opt=beta,
+                    L_in=L_in,
+                    mu_in=mu_in,
+                    L_out=L_out,
+                    mu_out=mu_out,
+                    clf=clf,
+                    device=device,
+                    use_equalizer=True,
+                    mmse=use_mmse,
+                )
+            curve_probe.append(acc)
+            if clf_neural is not None:
+                if constructive:
+                    acc_n = run_evaluation_cascade(
+                        Z_eff,
+                        test_loader,
+                        snr,
+                        beta,
+                        L_in,
+                        mu_in,
+                        L_out,
+                        mu_out,
+                        clf_neural,
+                        device,
+                    )
+                else:
+                    acc_n = run_evaluation_mono(
+                        G_T=Z_eff,
+                        dataloader=test_loader,
+                        H_mimo=H_torch,
+                        snr_db=snr,
+                        beta_opt=beta,
+                        L_in=L_in,
+                        mu_in=mu_in,
+                        L_out=L_out,
+                        mu_out=mu_out,
+                        clf=clf_neural,
+                        device=device,
+                        use_equalizer=True,
+                        mmse=use_mmse,
+                    )
+                curve_neural.append(acc_n)
+
         loss_history, _ = tx_model.optimize_sim(
             target_matrix=A_torch,
             max_iters=max_iters,
@@ -147,6 +205,7 @@ class MonoSIM(SIMRunner):
             scheduler=scheduler,
             warmup_frac=warmup_frac,
             left_matrix=H_torch if constructive else None,
+            eval_fn=_eval_fn if save_curve else None,
         )
 
         with torch.no_grad():
@@ -214,6 +273,8 @@ class MonoSIM(SIMRunner):
                 "tipology": tipo,
                 "constructive": constructive,
                 "dataset": dataset,
+                "sim_accuracy_probe_curve": curve_probe if save_curve else None,
+                "sim_accuracy_neural_curve": curve_neural if save_curve else None,
             },
         )
         del tx_model

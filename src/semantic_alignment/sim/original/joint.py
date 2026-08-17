@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from semantic_alignment.evaluation.inference import run_evaluation
+from semantic_alignment.evaluation.inference import run_evaluation, run_evaluation_cascade
 
 from ._base import SIMRunner
 from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, snr_tag
@@ -103,6 +103,7 @@ class JointSIM(SIMRunner):
         lr_tx: float = 0.1,
         lr_rx: float = 0.2,
         dataset: str = "cifar10",
+        save_curve: bool = False,
         **_,
     ) -> None:
         """Run one joint Dual-SIM experiment.
@@ -160,6 +161,7 @@ class JointSIM(SIMRunner):
         rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
         is_slayer = s_tx is not None and s_rx is not None
+        lr_tag = f"_lrtx{lr_tx}_lrrx{lr_rx}" if "lr_search" in result_subdir else ""
         fname = make_fname(
             strategy_name,
             seed,
@@ -173,6 +175,7 @@ class JointSIM(SIMRunner):
             s_rx,
             n_clusters,
             dataset=dataset,
+            extra_tag=lr_tag,
         )
         log_prefix = (
             f"s_tx={s_tx}λ s_rx={s_rx}λ seed={seed}"
@@ -209,6 +212,20 @@ class JointSIM(SIMRunner):
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
 
+        curve_probe: list[float] = []
+        curve_neural: list[float] = []
+
+        def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
+            acc = run_evaluation_cascade(
+                Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
+            )
+            curve_probe.append(acc)
+            if clf_neural is not None:
+                acc_n = run_evaluation_cascade(
+                    Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf_neural, device
+                )
+                curve_neural.append(acc_n)
+
         loss_history = model.optimize_alternating(
             A_target=A_target,
             H_mimo=H_mimo,
@@ -221,6 +238,7 @@ class JointSIM(SIMRunner):
             clip_value=clip_value,
             k_T=k_T,
             k_R=k_R,
+            eval_fn=_eval_fn if save_curve else None,
         )
 
         with torch.no_grad():
@@ -285,6 +303,8 @@ class JointSIM(SIMRunner):
                 "channel_dim": ch_dim,
                 "n_clusters": n_clusters,
                 "dataset": dataset,
+                "sim_accuracy_probe_curve": curve_probe if save_curve else None,
+                "sim_accuracy_neural_curve": curve_neural if save_curve else None,
             },
         )
         del model

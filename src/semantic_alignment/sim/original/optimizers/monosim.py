@@ -292,6 +292,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         warmup_frac: float = 0.05,
         left_matrix: torch.Tensor | np.ndarray | None = None,
         right_matrix: torch.Tensor | np.ndarray | None = None,
+        eval_fn=None,
     ) -> tuple[list[float], float]:
         """Optimize phase shifts to minimise ``‖β (L G R) − T‖²_F / (n·m)``.
 
@@ -340,8 +341,9 @@ class MonoSIMoptimizerTorch(nn.Module):
             optimizer=optimizer,
             scheduler=scheduler,
             warmup_frac=warmup_frac,
-            best_tracking=True,
+            best_tracking=eval_fn is None,
             show_progress=True,
+            eval_fn=eval_fn,
             desc=f"MonoSIM {self.side.upper()}",
         )
         with torch.no_grad():

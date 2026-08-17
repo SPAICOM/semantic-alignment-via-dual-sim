@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.inference import run_evaluation_disjoint_fixed
@@ -101,6 +102,7 @@ class Disjoint2SIM(SIMRunner):
         lr_tx: float = 0.1,
         lr_rx: float = 0.1,
         dataset: str = "cifar10",
+        save_curve: bool = False,
         **kwargs,
     ) -> None:
         """Run one disjoint 2-SIM experiment.
@@ -208,33 +210,117 @@ class Disjoint2SIM(SIMRunner):
             device,
         )
 
-        sim_kw = dict(
-            optimizer=optimizer, scheduler=scheduler, warmup_frac=warmup_frac, max_iters=max_iters
-        )
+        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+        curve_probe: list[float] = []
+        curve_neural: list[float] = []
 
-        tx_loss, beta_T = tx_model.optimize_sim(
-            target_matrix=targets.tx_target,
-            lr=lr_tx,
-            left_matrix=targets.tx_left,
-            right_matrix=targets.tx_right,
-            **sim_kw,
-        )
-        rx_loss, beta_R = rx_model.optimize_sim(
-            target_matrix=targets.rx_target,
-            lr=lr_rx,
-            left_matrix=targets.rx_left,
-            right_matrix=targets.rx_right,
-            **sim_kw,
-        )
+        if save_curve:
+            opt_tx = optim.Adam(list(tx_model.xi), lr=lr_tx)
+            opt_rx = optim.Adam(list(rx_model.xi), lr=lr_rx)
+            tx_loss_history: list[float] = []
+            rx_loss_history: list[float] = []
+            beta_T_last = torch.tensor(1.0, dtype=torch.complex64, device=device)
+            beta_R_last = torch.tensor(1.0, dtype=torch.complex64, device=device)
 
-        beta_bar = complex(beta_T) * complex(beta_R)
+            def _beta(Z: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+                return torch.sum(torch.conj(Z) * A) / (torch.sum(torch.conj(Z) * Z) + 1e-12)
+
+            def _step(model, opt_m, tgt, left, right):
+                model.train()
+                with torch.no_grad():
+                    G = model.get_cascade()
+                    Z = left @ G if left is not None else G
+                    Z = Z @ right if right is not None else Z
+                    beta_k = _beta(Z, tgt).detach()
+                opt_m.zero_grad()
+                G = model.get_cascade()
+                Z = left @ G if left is not None else G
+                Z = Z @ right if right is not None else Z
+                loss = torch.norm(beta_k * Z - tgt, p="fro") ** 2 / (Z.shape[0] * Z.shape[1])
+                loss.backward()
+                opt_m.step()
+                return loss.item(), beta_k
+
+            for _ in range(max_iters):
+                t_loss, beta_T_last = _step(
+                    tx_model, opt_tx, targets.tx_target, targets.tx_left, targets.tx_right
+                )
+                r_loss, beta_R_last = _step(
+                    rx_model, opt_rx, targets.rx_target, targets.rx_left, targets.rx_right
+                )
+                tx_loss_history.append(t_loss)
+                rx_loss_history.append(r_loss)
+
+                beta_bar = complex(beta_T_last.item()) * complex(beta_R_last.item())
+                beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
+                acc = run_evaluation_disjoint_fixed(
+                    tx_model,
+                    rx_model,
+                    test_loader,
+                    H_torch,
+                    snr,
+                    beta_g,
+                    L_in,
+                    mu_in,
+                    L_out,
+                    mu_out,
+                    clf,
+                    device,
+                )
+                curve_probe.append(acc)
+                if clf_neural is not None:
+                    acc_n = run_evaluation_disjoint_fixed(
+                        tx_model,
+                        rx_model,
+                        test_loader,
+                        H_torch,
+                        snr,
+                        beta_g,
+                        L_in,
+                        mu_in,
+                        L_out,
+                        mu_out,
+                        clf_neural,
+                        device,
+                    )
+                    curve_neural.append(acc_n)
+
+            tx_loss = tx_loss_history
+            rx_loss = rx_loss_history
+            beta_T = beta_T_last
+            beta_R = beta_R_last
+        else:
+            sim_kw = dict(
+                optimizer=optimizer,
+                scheduler=scheduler,
+                warmup_frac=warmup_frac,
+                max_iters=max_iters,
+            )
+            tx_loss, beta_T = tx_model.optimize_sim(
+                target_matrix=targets.tx_target,
+                lr=lr_tx,
+                left_matrix=targets.tx_left,
+                right_matrix=targets.tx_right,
+                **sim_kw,
+            )
+            rx_loss, beta_R = rx_model.optimize_sim(
+                target_matrix=targets.rx_target,
+                lr=lr_rx,
+                left_matrix=targets.rx_left,
+                right_matrix=targets.rx_right,
+                **sim_kw,
+            )
+
+        beta_T_c = complex(beta_T.item() if isinstance(beta_T, torch.Tensor) else beta_T)
+        beta_R_c = complex(beta_R.item() if isinstance(beta_R, torch.Tensor) else beta_R)
+        beta_bar = beta_T_c * beta_R_c
         beta_g = torch.tensor(beta_bar, dtype=torch.complex64, device=device)
 
         sim_probe = run_evaluation_disjoint_fixed(
             tx_model,
             rx_model,
             test_loader,
-            H_mimo,
+            H_torch,
             snr,
             beta_g,
             L_in,
@@ -249,7 +335,7 @@ class Disjoint2SIM(SIMRunner):
                 tx_model,
                 rx_model,
                 test_loader,
-                H_mimo,
+                H_torch,
                 snr,
                 beta_g,
                 L_in,
@@ -268,7 +354,7 @@ class Disjoint2SIM(SIMRunner):
             f" | nm_linear={no_mismatch_probe * 100:.2f}%{neural_str('nm_neural', no_mismatch_neural)}"
             f" | orig_linear={original_probe * 100:.2f}%{neural_str('orig_neural', original_neural)}"
             f" | sim_linear={sim_probe * 100:.2f}%{neural_str('sim_neural', pct(sim_neural))}"
-            f" | β_T={abs(beta_T):.3e} β_R={abs(beta_R):.3e}"
+            f" | β_T={abs(beta_T_c):.3e} β_R={abs(beta_R_c):.3e}"
         )
 
         save_result(
@@ -292,8 +378,8 @@ class Disjoint2SIM(SIMRunner):
                 "sim_accuracy_neural": pct(sim_neural),
                 "lr_tx": lr_tx,
                 "lr_rx": lr_rx,
-                "beta_T": abs(beta_T),
-                "beta_R": abs(beta_R),
+                "beta_T": abs(beta_T_c),
+                "beta_R": abs(beta_R_c),
                 "loss": tx_loss[-1] if tx_loss else 0.0,
                 "loss_history": tx_loss,
                 "rx_loss": rx_loss[-1] if rx_loss else 0.0,
@@ -304,6 +390,8 @@ class Disjoint2SIM(SIMRunner):
                 "constructive": kwargs.get("constructive", False),
                 "alignment_side": kwargs.get("alignment_side"),
                 "dataset": dataset,
+                "sim_accuracy_probe_curve": curve_probe if save_curve else None,
+                "sim_accuracy_neural_curve": curve_neural if save_curve else None,
             },
         )
         del tx_model, rx_model

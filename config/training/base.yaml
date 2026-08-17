@@ -12,3 +12,7 @@ warmup_frac: 0.05   # fraction of max_iters at constant LR (scheduler=cosine onl
 
 # GPU index (null = let PyTorch pick)
 gpu: null
+
+# If true, evaluate probe accuracy after every optimizer step and save the full curve.
+# Joint: 1 TX step + 1 RX step per evaluation. Disjoint: interleaved 1 TX + 1 RX step.
+save_curve: false

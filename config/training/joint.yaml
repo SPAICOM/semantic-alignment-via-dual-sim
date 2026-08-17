@@ -1,16 +1,15 @@
 defaults:
   - base
 
-max_iters: 30000
+max_iters: 150   # alternating cycles (each cycle = k_T TX steps + k_R RX steps)
 
 # Per-SIM learning rates for alternating optimisation
-lr_tx: 0.1   # G_T (TX cascade)
-lr_rx: 0.2   # G_R (RX cascade)
+lr_tx: 0.03   # G_T (TX cascade) — tuned via joint_lr_search multi-seed sweep
+lr_rx: 0.07   # G_R (RX cascade) — tuned via joint_lr_search multi-seed sweep
 
 # Gradient clipping (null = disabled)
 clip_value: null
 
 # Block sizes per alternation cycle.
-# max_iters (from base) = total gradient-step budget; cycles = max_iters // (k_T + k_R).
 k_T: 100   # consecutive TX-only (G_T) steps per cycle
 k_R: 100   # consecutive RX-only (G_R) steps per cycle

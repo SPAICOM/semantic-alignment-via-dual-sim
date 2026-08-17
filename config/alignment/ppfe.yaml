@@ -3,3 +3,5 @@
 type: PPFE
 n_clusters: 20   # number of KMeans clusters
 n_proto: 1000    # prototypes sampled per cluster
+lr_tx: 0.03      # optimal joint LR (tuned via joint_lr_search)
+lr_rx: 0.07      # optimal joint LR (tuned via joint_lr_search)

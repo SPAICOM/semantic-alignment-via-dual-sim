@@ -2002,46 +2002,80 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 def unrolled_accuracy_grid() -> None:
-    """Accuracy per unrolled layer — grid over alignment strategies.
+    """Accuracy vs iteration — Classic Adam (dashed) vs Deep Unrolling (solid).
 
     Columns: Linear / PPFE.
-    Color:   SIM tipology (from _ARCH_PALETTE: Joint, Mono, …).
-    Style:   Classic (dashed) / Deep Unrolling (solid).
+    Color:   SIM architecture.
 
-    Loads all parquets under results/unrolled/{arch}/ and tags each with its
-    arch key so that Classic Adam and Unrolled share the same color per arch.
+    Classic Adam curves are loaded from results/{arch}_curve/ (sim_accuracy_*_curve).
+    Unrolled curves are loaded from results/unrolled/{arch}/ (neural_acc / probe_acc),
+    filtered to variant="Unrolled (diagonal)" and constructive=True.
     """
     from matplotlib.lines import Line2D
 
-    # (arch display name, subdirectory)
-    _ARCH_SUBDIRS = [
-        ("Joint", "joint"),
-        ("Mono", "mono"),
+    # (display name, curve subdir relative to RESULTS, unrolled subdir, constructive filter)
+    _ARCHS = [
+        ("Joint", "joint_curve", "unrolled/joint", False),
+        ("Mono", "mono_curve/constructive", "unrolled/mono", True),
+        ("DisjointSym", "disjoint_sym_curve/constructive", "unrolled/disjoint_sym", True),
     ]
 
-    frames = []
-    for arch_name, arch_sub in _ARCH_SUBDIRS:
-        sub = RESULTS / "unrolled" / arch_sub
-        arch_files = sorted(sub.glob("*.parquet")) if sub.exists() else []
-        for f in arch_files:
-            tmp = pl.read_parquet(f).with_columns(pl.lit(arch_name).alias("arch"))
-            frames.append(tmp)
+    def _load_classic(curve_dir: Path, strategy: str) -> list[list[float]]:
+        if not curve_dir.exists():
+            return []
+        curves = []
+        for f in sorted(curve_dir.glob("*.parquet")):
+            df = pl.read_parquet(f)
+            df = df.filter(pl.col("strategy") == strategy)
+            col = (
+                "sim_accuracy_neural_curve"
+                if "sim_accuracy_neural_curve" in df.columns
+                else "sim_accuracy_probe_curve"
+            )
+            for c in df[col]:
+                if c is not None and len(c) > 0:
+                    curves.append(list(c))
+        return curves
 
-    if not frames:
-        print("No unrolled results found.")
+    def _load_unrolled(unrolled_dir: Path, strategy: str, constructive: bool) -> list[list[float]]:
+        if not unrolled_dir.exists():
+            return []
+        frames = []
+        for f in sorted(unrolled_dir.glob("*.parquet")):
+            frames.append(pl.read_parquet(f))
+        if not frames:
+            return []
+        df = pl.concat(frames, how="diagonal_relaxed")
+        df = df.filter(
+            (pl.col("strategy") == strategy) & pl.col("variant").str.starts_with("Unrolled")
+        )
+        if "constructive" in df.columns:
+            df = df.filter(pl.col("constructive") == constructive)
+        col = "neural_acc" if "neural_acc" in df.columns else "probe_acc"
+        curves = []
+        for outer in df[col]:
+            if outer is None:
+                continue
+            for curve in outer:
+                if curve is not None and len(curve) > 0:
+                    curves.append(list(curve))
+        return curves
+
+    # Determine which archs have any data at all
+    present_archs = []
+    for arch_name, curve_sub, unrolled_sub, cstr in _ARCHS:
+        has_classic = (RESULTS / curve_sub).exists() and any(
+            (RESULTS / curve_sub).glob("*.parquet")
+        )
+        has_unrolled = (RESULTS / unrolled_sub).exists() and any(
+            (RESULTS / unrolled_sub).glob("*.parquet")
+        )
+        if has_classic or has_unrolled:
+            present_archs.append((arch_name, curve_sub, unrolled_sub, cstr))
+
+    if not present_archs:
+        print("No unrolled or curve results found.")
         return
-
-    df = pl.concat(frames, how="diagonal_relaxed")
-    df = df.filter(
-        pl.col("strategy").is_in(STRATEGIES)
-        & pl.col("variant").is_in(["Classic Adam", "Unrolled (diagonal)"])
-    )
-    if "constructive" in df.columns:
-        df = df.filter(pl.col("constructive"))
-    if df.is_empty():
-        return
-
-    present_archs = [a for a, _ in _ARCH_SUBDIRS if a in df["arch"].unique().to_list()]
 
     fig, axes = plt.subplots(
         1,
@@ -2054,31 +2088,22 @@ def unrolled_accuracy_grid() -> None:
 
     for col_idx, strat in enumerate(STRATEGIES):
         ax = axes[col_idx]
-        df_s = df.filter(pl.col("strategy") == strat)
-
         x_min, x_max = np.inf, -np.inf
-        for arch in present_archs:
-            color = _ARCH_PALETTE.get(arch, "gray")
-            df_a = df_s.filter(pl.col("arch") == arch)
 
-            marker = _ARCH_MARKERS.get(arch, "o")
-            for variant, ls in [("Classic Adam", "--"), ("Unrolled (diagonal)", "-")]:
-                grp = df_a.filter(pl.col("variant") == variant)
-                if grp.is_empty():
-                    continue
+        for arch_name, curve_sub, unrolled_sub, cstr in present_archs:
+            color = _ARCH_PALETTE.get(arch_name, "gray")
+            marker = _ARCH_MARKERS.get(arch_name, "o")
 
-                acc_col = "neural_acc" if "neural_acc" in grp.columns else "probe_acc"
-                all_curves = []
-                for outer in grp[acc_col]:
-                    if outer is None:
-                        continue
-                    for curve in outer:
-                        if curve is not None and len(curve) > 0:
-                            all_curves.append(list(curve))
+            sources = [
+                (_load_classic(RESULTS / curve_sub, strat), "--"),
+                (_load_unrolled(RESULTS / unrolled_sub, strat, cstr), "-"),
+            ]
+            for all_curves, ls in sources:
                 if not all_curves:
                     continue
-
-                arr = np.array(all_curves)  # (n_evals, K)
+                # Truncate to shortest curve so np.array works
+                min_len = min(len(c) for c in all_curves)
+                arr = np.array([c[:min_len] for c in all_curves])
                 mean = arr.mean(axis=0)
                 se = arr.std(axis=0) / np.sqrt(len(arr))
                 x = np.arange(len(mean))
@@ -2110,15 +2135,14 @@ def unrolled_accuracy_grid() -> None:
                     )
 
         ax.set_title(strat)
-        ax.set_xlabel(r"Iterations / Num.\ Layers")
+        ax.set_xlabel("Cycle (TX step + RX step)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
         if np.isfinite(x_min) and np.isfinite(x_max):
             ax.set_xlim(x_min, x_max)
 
-    # Method legend — top center, no title
     ls_handles = [
-        Line2D([0], [0], color="gray", ls="--", lw=2, label="Classic"),
+        Line2D([0], [0], color="gray", ls="--", lw=2, label="Classic Adam"),
         Line2D([0], [0], color="gray", ls="-", lw=2, label="Deep Unrolling"),
     ]
     fig.legend(
@@ -2131,7 +2155,6 @@ def unrolled_accuracy_grid() -> None:
         framealpha=1,
     )
 
-    # SIM arch legend — bottom center, marker only, no title (like ArchComparison)
     arch_handles = [
         Line2D(
             [0],
@@ -2142,7 +2165,7 @@ def unrolled_accuracy_grid() -> None:
             markersize=10,
             label=a,
         )
-        for a in present_archs
+        for a, *_ in present_archs
     ]
     fig.legend(
         arch_handles,
@@ -2160,6 +2183,202 @@ def unrolled_accuracy_grid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Joint LR grid-search heatmap
+# ---------------------------------------------------------------------------
+
+
+def joint_lr_search_heatmap() -> None:
+    """Accuracy heatmap over lr_tx × lr_rx — Joint Dual-SIM LR search.
+
+    Rows: alignment strategies (Linear / PPFE).
+    Cols: probe accuracy / neural accuracy.
+    Each cell is a 5×5 heatmap with annotated values.
+    """
+    df = _get("joint_lr_search")
+    if df is None:
+        print("No joint_lr_search results found.")
+        return
+
+    acc_specs = []
+    if "sim_accuracy_probe" in df.columns and df["sim_accuracy_probe"].drop_nulls().len() > 0:
+        acc_specs.append(("sim_accuracy_probe", "Probe Accuracy"))
+    if "sim_accuracy_neural" in df.columns and df["sim_accuracy_neural"].drop_nulls().len() > 0:
+        acc_specs.append(("sim_accuracy_neural", "Neural Accuracy"))
+    if not acc_specs:
+        print("joint_lr_search: no accuracy columns found.")
+        return
+
+    strats = [s for s in STRATEGIES if s in df["strategy"].unique().to_list()]
+    if not strats:
+        return
+
+    n_rows, n_cols = len(strats), len(acc_specs)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(5.5 * n_cols, 4.5 * n_rows),
+        squeeze=False,
+        layout="constrained",
+    )
+
+    for r, strat in enumerate(strats):
+        df_s = df.filter(pl.col("strategy") == strat)
+        for c, (acc_col, acc_label) in enumerate(acc_specs):
+            ax = axes[r][c]
+            lr_txs = sorted(df_s["lr_tx"].drop_nulls().unique().to_list())
+            lr_rxs = sorted(df_s["lr_rx"].drop_nulls().unique().to_list())
+            mat = np.full((len(lr_rxs), len(lr_txs)), np.nan)
+            for i, lrx in enumerate(lr_rxs):
+                for j, ltx in enumerate(lr_txs):
+                    vals = df_s.filter((pl.col("lr_rx") == lrx) & (pl.col("lr_tx") == ltx))[
+                        acc_col
+                    ].drop_nulls()
+                    if vals.len() > 0:
+                        mat[i, j] = float(vals.mean())
+
+            import numpy.ma as ma
+
+            mat_masked = ma.masked_invalid(mat)
+            vmin = float(np.nanmin(mat)) if not np.all(np.isnan(mat)) else 0.0
+            vmax = float(np.nanmax(mat)) if not np.all(np.isnan(mat)) else 1.0
+
+            im = ax.imshow(
+                mat_masked,
+                aspect="auto",
+                origin="lower",
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+            )
+            for i in range(len(lr_rxs)):
+                for j in range(len(lr_txs)):
+                    v = mat[i, j]
+                    if not np.isnan(v):
+                        ax.text(
+                            j,
+                            i,
+                            f"{v:.3f}",
+                            ha="center",
+                            va="center",
+                            fontsize=8,
+                            color="white" if v < (vmin + vmax) / 2 else "black",
+                        )
+
+            ax.set_xticks(range(len(lr_txs)))
+            ax.set_xticklabels([str(v) for v in lr_txs], rotation=90)
+            ax.set_yticks(range(len(lr_rxs)))
+            ax.set_yticklabels([str(v) for v in lr_rxs])
+            ax.set_xlabel(r"$\eta_{\rm TX}$")
+            ax.set_ylabel(r"$\eta_{\rm RX}$")
+            ax.set_title(f"{strat} — {acc_label}")
+            fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Accuracy")
+
+    _save("JointLRSearch_Heatmap")
+
+
+# ---------------------------------------------------------------------------
+# Joint LR grid-search — loss and accuracy curves
+# ---------------------------------------------------------------------------
+
+_LR_STRAT_COLORS = {"Linear": "#1f77b4", "PPFE": "#ff7f0e"}
+
+
+def _joint_lr_search_curve_grid(col: str, y_label: str, fname: str) -> None:
+    """Generic 5×5 curve grid for the joint LR search.
+
+    Rows = lr_rx values, cols = lr_tx values.
+    Each panel plots the requested ``col`` (list-valued) for every strategy.
+    Missing or empty curves are silently skipped.
+    """
+    df = _get("joint_lr_search")
+    if df is None:
+        print("No joint_lr_search results found.")
+        return
+    if col not in df.columns:
+        print(f"joint_lr_search: column '{col}' not found.")
+        return
+    # keep only rows that actually have the curve
+    df = df.filter(pl.col(col).is_not_null())
+    if df.is_empty():
+        print(f"joint_lr_search: no non-null '{col}' found.")
+        return
+
+    lr_txs = sorted(df["lr_tx"].drop_nulls().unique().to_list())
+    lr_rxs = sorted(df["lr_rx"].drop_nulls().unique().to_list())
+    strats = [s for s in STRATEGIES if s in df["strategy"].unique().to_list()]
+
+    n_rows, n_cols = len(lr_rxs), len(lr_txs)
+    fig, axes = plt.subplots(
+        n_rows,
+        n_cols,
+        figsize=(3.5 * n_cols, 3.0 * n_rows),
+        squeeze=False,
+        sharex=False,
+        sharey=True,
+        layout="constrained",
+    )
+
+    for r, lrx in enumerate(lr_rxs):
+        for c, ltx in enumerate(lr_txs):
+            ax = axes[r][c]
+            sub = df.filter((pl.col("lr_rx") == lrx) & (pl.col("lr_tx") == ltx))
+            for strat in strats:
+                color = _LR_STRAT_COLORS.get(strat, "gray")
+                rows_s = sub.filter(pl.col("strategy") == strat)
+                curves = [list(v) for v in rows_s[col] if v is not None and len(v) > 0]
+                if not curves:
+                    continue
+                min_len = min(len(c_) for c_ in curves)
+                arr = np.array([c_[:min_len] for c_ in curves])
+                mean = arr.mean(axis=0)
+                se = arr.std(axis=0) / max(np.sqrt(len(arr)), 1)
+                x = np.arange(len(mean))
+                ax.plot(x, mean, color=color, linewidth=1.3, label=strat)
+                ax.fill_between(x, mean - 1.96 * se, mean + 1.96 * se, color=color, alpha=0.15)
+
+            if r == 0:
+                ax.set_title(rf"$\eta_{{TX}}={ltx}$", fontsize=9)
+            if c == 0:
+                ax.set_ylabel(rf"$\eta_{{RX}}={lrx}$" + f"\n{y_label}", fontsize=8)
+            if r == n_rows - 1:
+                ax.set_xlabel("Cycle", fontsize=8)
+            ax.tick_params(labelsize=7)
+
+    from matplotlib.lines import Line2D
+
+    legend_handles = [
+        Line2D([0], [0], color=_LR_STRAT_COLORS.get(s, "gray"), lw=1.5, label=s) for s in strats
+    ]
+    fig.legend(
+        legend_handles,
+        [h.get_label() for h in legend_handles],
+        ncol=len(strats),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.04),
+        frameon=True,
+        framealpha=1,
+    )
+    _save(fname)
+
+
+def joint_lr_search_curves() -> None:
+    """Loss and accuracy curves grid — Joint LR search (lr_tx × lr_rx).
+
+    Produces three plots:
+      - JointLRSearch_LossCurves   — training loss
+      - JointLRSearch_ProbeCurves  — probe accuracy over cycles (save_curve)
+      - JointLRSearch_NeuralCurves — neural accuracy over cycles (save_curve)
+    """
+    _joint_lr_search_curve_grid("loss_history", "Loss", "JointLRSearch_LossCurves")
+    _joint_lr_search_curve_grid(
+        "sim_accuracy_probe_curve", "Probe Acc.", "JointLRSearch_ProbeCurves"
+    )
+    _joint_lr_search_curve_grid(
+        "sim_accuracy_neural_curve", "Neural Acc.", "JointLRSearch_NeuralCurves"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -2169,6 +2388,9 @@ def _plot_all() -> None:
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
+    unrolled_accuracy_grid()
+    joint_lr_search_heatmap()
+    joint_lr_search_curves()
 
 
 def main() -> None:

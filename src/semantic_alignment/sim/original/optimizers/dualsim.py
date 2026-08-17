@@ -440,7 +440,7 @@ class DualSIMoptimizerTorch(nn.Module):
         H_mimo : array-like or torch.Tensor
             MIMO channel matrix.
         max_iters : int
-            Total gradient-step budget; cycles = ``max_iters // (k_T + k_R)``.
+            Number of alternating cycles (each cycle = k_T TX steps + k_R RX steps).
         lr_tx, lr_rx : float
             Learning rates for TX and RX optimizers.
         k_T, k_R : int
@@ -462,7 +462,7 @@ class DualSIMoptimizerTorch(nn.Module):
         phases_T_init = [p.data.clone() for p in self.xi_T]
         phases_R_init = [p.data.clone() for p in self.xi_R]
 
-        n_cycles = max(1, max_iters // (k_T + k_R))
+        n_cycles = max(1, max_iters)
 
         phases_T, phases_R, loss_history, _ = optimize_joint(
             W_T,
@@ -482,7 +482,7 @@ class DualSIMoptimizerTorch(nn.Module):
             optimizer=optimizer,
             scheduler=scheduler,
             warmup_frac=warmup_frac,
-            best_tracking=True,
+            best_tracking=eval_fn is None,
             clip_value=clip_value,
             eval_fn=eval_fn,
             show_progress=True,

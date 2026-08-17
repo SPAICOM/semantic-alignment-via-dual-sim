@@ -278,9 +278,18 @@ cls *ARGS: train-clf
 # Trains K=100 layers in blocks of m, saving results at each block endpoint.
 # Config: config/training/unrolled.yaml
 
-# Unrolled GD: joint Dual-SIM
+# Unrolled GD: joint Dual-SIM — PPFE
+cls-unrolled-ppfe *ARGS: train-clf
+    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=ppfe {{ARGS}}
+
+# Unrolled GD: joint Dual-SIM — Linear
+cls-unrolled-linear *ARGS: train-clf
+    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=linear {{ARGS}}
+
+# Unrolled GD: joint Dual-SIM (both strategies)
 cls-unrolled *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} {{ARGS}}
+    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=ppfe {{ARGS}}
+    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=linear {{ARGS}}
 
 # Unrolled GD: mono-SIM (equalized)
 cls-unrolled-mono *ARGS: train-clf
@@ -308,6 +317,56 @@ cls-unrolled-disjoint-asym-c *ARGS: train-clf
 
 # Aggregate: all unrolled GD experiments
 unrolled: cls-unrolled cls-unrolled-mono cls-unrolled-mono-c cls-unrolled-disjoint-sym cls-unrolled-disjoint-sym-c cls-unrolled-disjoint-asym cls-unrolled-disjoint-asym-c
+
+# ── Convergence curves (save_curve=true) ─────────────────────────────────────
+# Each recipe runs classification.py with training.save_curve=true, saving a
+# per-iteration accuracy list (sim_accuracy_probe_curve / _neural_curve) in the
+# parquet result.  Fixed geometry: L=10, M_int=32, channel_dim=20.
+# All produce 200 eval points. Joint: k_T=k_R=100, max_iters=200 cycles.
+# Override from CLI:  just cls-joint-curve training.max_iters=120
+
+# Joint Dual-SIM convergence curve
+cls-joint-curve *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_joint_curve datasets={{dataset}} {{ARGS}}
+
+# Mono-SIM (equalized) convergence curve
+cls-mono-curve *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_curve datasets={{dataset}} {{ARGS}}
+
+# Mono-SIM (constructive) convergence curve
+cls-mono-curve-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_curve datasets={{dataset}} sim.constructive=true {{ARGS}}
+
+# Disjoint sym (equalized) convergence curve
+cls-disjoint-sym-curve *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_curve datasets={{dataset}} {{ARGS}}
+
+# Disjoint sym (constructive) convergence curve
+cls-disjoint-sym-curve-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_curve datasets={{dataset}} sim.constructive=true {{ARGS}}
+
+# Disjoint asym (tx, equalized) convergence curve
+cls-disjoint-asym-curve *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_curve datasets={{dataset}} {{ARGS}}
+
+# Disjoint asym (tx, constructive) convergence curve
+cls-disjoint-asym-curve-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_asym_curve datasets={{dataset}} sim.constructive=true {{ARGS}}
+
+# Aggregate: joint + mono-constructive + disjoint-sym-constructive
+curve: cls-joint-curve cls-mono-curve-c cls-disjoint-sym-curve-c
+# curve: cls-joint-curve cls-mono-curve cls-disjoint-sym-curve cls-disjoint-asym-curve
+# curve-c: cls-mono-curve-c cls-disjoint-sym-curve-c cls-disjoint-asym-curve-c
+# curve-all: curve curve-c
+
+# ── Joint LR grid search ─────────────────────────────────────────────────────
+# Grid search over lr_tx × lr_rx for joint SIM.
+# L=10, k_T=k_R=1, max_iters=3000 (1500 cycles), seed=42, snr=inf.
+# 25 jobs (5×5 grid).
+
+# Joint Dual-SIM LR grid search
+cls-joint-lr-search *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_joint_lr_search datasets={{dataset}} {{ARGS}}
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 

@@ -378,6 +378,72 @@ def run_evaluation_disjoint_fixed(
     return (np.array(all_preds) == np.array(all_labels)).mean()
 
 
+def run_evaluation_cascade(
+    Z: torch.Tensor,
+    dataloader: DataLoader,
+    snr_db: float | None,
+    beta_opt: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf: torch.Tensor | nn.Module,
+    device: torch.device,
+) -> float:
+    """Evaluate from a precomputed effective cascade ``Z``.
+
+    Signal model: ``ŷ = β Z x + v`` — no additional channel or equalizer.
+    Works for any architecture where ``Z`` already encodes the full
+    TX-to-RX mapping (joint: ``G_R H G_T``; constructive mono: ``H G_T``).
+
+    Parameters
+    ----------
+    Z : torch.Tensor
+        Precomputed effective cascade matrix (complex).
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    snr_db : float or None
+        AWGN SNR in dB; ``None`` means noiseless.
+    beta_opt : torch.Tensor
+        Optimal alignment scalar.
+    L_in, mu_in : torch.Tensor
+        TX whitening statistics.
+    L_out, mu_out : torch.Tensor
+        RX whitening statistics.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
+    """
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
+    all_preds, all_labels = [], []
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_c = pack_complex(x_real_batch.T, device=device)
+        x_w = solve(L_in, x_c - mu_in).to(Z.dtype)
+
+        y = beta_opt * (Z @ x_w)
+        if sigma is not None:
+            y = y + awgn(sigma, y.shape, device=device)
+
+        z_hat = (L_out.to(Z.dtype) @ y) + mu_out.to(Z.dtype)
+        y_hat = unpack_complex(z_hat, device=device).T
+
+        preds = clf_predict(clf, y_hat)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
 if __name__ == "__main__":
     print("inference.py — evaluation functions for each SIM architecture:")
     print("  run_evaluation               : Joint Dual-SIM  (β G_R H G_T x + v, β at TX)")

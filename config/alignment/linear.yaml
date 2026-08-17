@@ -2,3 +2,5 @@
 
 type: Linear
 lmb: 0.001       # L2 regularisation weight
+lr_tx: 0.03      # optimal joint LR (tuned via joint_lr_search)
+lr_rx: 0.04      # optimal joint LR (tuned via joint_lr_search)
