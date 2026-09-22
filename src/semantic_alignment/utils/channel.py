@@ -1,8 +1,8 @@
 """Channel and signal-processing utilities.
 
-Covers channel matrix generation, AWGN noise, SNR conversion, MIMO
-equalization, complex tensor encoding/decoding, whitening, and Cholesky
-linear solves.
+Covers channel matrix generation (Rayleigh, Rician), AWGN noise, SNR
+conversion, MIMO equalization, complex tensor encoding/decoding, whitening,
+and Cholesky linear solves.
 """
 
 import math
@@ -48,6 +48,168 @@ def cn_matrix(
     - adding ``mean * (1 + 1j)`` shifts both components by ``mean``
     """
     return torch.randn(size, dtype=torch.complex64, generator=generator) * std + mean * (1 + 1j)
+
+
+def rician_los(
+    n_R: int,
+    n_T: int,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Return the rank-1 LoS component used in the Rician channel model.
+
+    Generates the outer product of two random steering vectors with i.i.d.
+    uniform phases in ``[0, 2π)``.  All entries have magnitude 1, so
+    ``‖H_los‖_F² = n_R · n_T``.
+
+    The generator state is consumed by exactly two ``torch.rand`` calls (one
+    per dimension), so calling this function with the same seed as
+    :func:`rician_matrix` reproduces the identical LoS component.
+
+    Parameters
+    ----------
+    n_R, n_T : int
+        Channel matrix dimensions.
+    generator : torch.Generator or None, optional
+        RNG for reproducibility.
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 rank-1 matrix of shape ``(n_R, n_T)``.
+    """
+    theta_R = torch.rand(n_R, 1, generator=generator) * (2 * math.pi)
+    theta_T = torch.rand(1, n_T, generator=generator) * (2 * math.pi)
+    return torch.polar(torch.ones(n_R, 1), theta_R) @ torch.polar(torch.ones(1, n_T), theta_T)
+
+
+def rician_matrix(
+    n_R: int,
+    n_T: int,
+    n_samples: int,
+    rice_factor_db: float,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Draw ``n_samples`` Rician MIMO channel matrices of shape ``(n_samples, n_R, n_T)``.
+
+    Models ``H_i = sqrt(K/(K+1)) * H_los + sqrt(1/(K+1)) * H_nlos_i`` where:
+
+    * ``K = 10^(rice_factor_db/10)`` is the linear Rician factor.
+    * ``H_los`` is a fixed rank-1 LoS component — the outer product of two
+      random phase-shift steering vectors with i.i.d. uniform phases in
+      ``[0, 2π)``.  All entries have magnitude 1, so
+      ``‖H_los‖_F² = n_R · n_T`` (same expected power as Rayleigh).
+      Drawn once per call; shared across all ``n_samples``.
+    * ``H_nlos_i ~ CN(0, 1)`` i.i.d. per sample (scattering component).
+
+    The expected Frobenius power per sample equals ``n_R · n_T`` for any K,
+    matching the Rayleigh baseline.  Higher K concentrates samples around the
+    shared LoS direction, giving the deep-unrolling model exploitable structure.
+
+    Parameters
+    ----------
+    n_R : int
+        Number of receive antennas (rows of H).
+    n_T : int
+        Number of transmit antennas (columns of H).
+    n_samples : int
+        Number of independent channel realisations to generate.
+    rice_factor_db : float
+        Rician K-factor in dB.  K_dB=0 dB → K=1 (equal LoS/NLoS power);
+        K_dB→-∞ → Rayleigh; K_dB→+∞ → deterministic LoS.
+    generator : torch.Generator or None, optional
+        Optional RNG for reproducibility.  The LoS component is drawn first,
+        so the same generator produces the same H_los and H_nlos sequence.
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 tensor of shape ``(n_samples, n_R, n_T)``.
+    """
+    H_los = rician_los(n_R, n_T, generator=generator)
+    H_nlos = cn_matrix(0, 1, (n_samples, n_R, n_T), generator=generator)
+    K = 10 ** (rice_factor_db / 10)
+    return math.sqrt(K / (K + 1)) * H_los + math.sqrt(1 / (K + 1)) * H_nlos
+
+
+def standardize_channel(
+    H: torch.Tensor,
+    channel_type: str = "rayleigh",
+) -> torch.Tensor:
+    """Standardise a single channel matrix (or batch) to zero mean and unit variance.
+
+    For Rician channels the per-sample mean of entries is approximately zero
+    (random-phase LoS steering vectors cancel for large arrays), but the
+    variance is ``1/(K+1) < 1``.  This function removes the residual sample
+    mean and rescales so that entry-wise variance is 1, making the channel
+    statistics consistent with the ``CN(0,1)`` assumption used by the SIM
+    optimiser.
+
+    No-op for Rayleigh (already ``CN(0,1)`` in expectation).
+
+    Parameters
+    ----------
+    H : Tensor
+        Channel matrix of shape ``(n_R, n_T)`` or batch ``(B, n_R, n_T)``.
+    channel_type : {"rayleigh", "rician"}
+        Only applied when ``"rician"``; identity otherwise.
+
+    Returns
+    -------
+    Tensor
+        Standardised channel, same shape and device as ``H``.
+    """
+    if channel_type != "rician":
+        return H
+    # Flatten spatial dims for per-sample statistics.
+    flat = H.reshape(*H.shape[:-2], -1)  # (..., n_R*n_T)
+    mu = flat.mean(-1, keepdim=True)  # (..., 1)  complex
+    sigma = (flat - mu).abs().pow(2).mean(-1, keepdim=True).sqrt()  # (..., 1)  real
+    return (H - mu.unsqueeze(-1)) / (sigma.unsqueeze(-1) + 1e-8)
+
+
+def channel(
+    n_R: int,
+    n_T: int,
+    n_samples: int = 1,
+    channel_type: str = "rayleigh",
+    rice_factor_db: float | None = None,
+    generator: torch.Generator | None = None,
+) -> torch.Tensor:
+    """Generate MIMO channel matrices.
+
+    Unified factory for Rayleigh and Rician channel models.
+
+    Parameters
+    ----------
+    n_R : int
+        Number of receive antennas.
+    n_T : int
+        Number of transmit antennas.
+    n_samples : int, optional
+        Number of channel realisations (default 1).
+    channel_type : {"rayleigh", "rician"}, optional
+        Channel model to use (default ``"rayleigh"``).
+    rice_factor_db : float or None, optional
+        Rician K-factor in dB.  Required when ``channel_type="rician"``.
+    generator : torch.Generator or None, optional
+        Optional RNG for reproducibility.
+
+    Returns
+    -------
+    torch.Tensor
+        Complex64 tensor of shape ``(n_R, n_T)`` when ``n_samples=1``,
+        otherwise ``(n_samples, n_R, n_T)``.
+    """
+    if channel_type == "rayleigh":
+        size = (n_R, n_T) if n_samples == 1 else (n_samples, n_R, n_T)
+        return cn_matrix(0, 1, size, generator=generator)
+    elif channel_type == "rician":
+        if rice_factor_db is None:
+            raise ValueError("rice_factor_db must be provided when channel_type='rician'")
+        batch = rician_matrix(n_R, n_T, n_samples, rice_factor_db, generator=generator)
+        return batch.squeeze(0) if n_samples == 1 else batch
+    else:
+        raise ValueError(f"Unknown channel_type {channel_type!r}. Choose 'rayleigh' or 'rician'.")
 
 
 # ── Noise and SNR ─────────────────────────────────────────────────────────────

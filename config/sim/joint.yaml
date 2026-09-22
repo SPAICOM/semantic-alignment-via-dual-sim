@@ -14,3 +14,5 @@ s_rx: null                 # RX inter-layer spacing override (units of lambda); 
 
 name: joint_layers
 result_subdir: joint_layers
+channel_type: rayleigh
+rice_factor_db: null

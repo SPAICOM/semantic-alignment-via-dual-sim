@@ -1,10 +1,24 @@
-"""Lightning DataModule for i.i.d. complex-Gaussian MIMO channels.
+"""Lightning DataModule for random MIMO channel matrices (Rayleigh or Rician).
 
-Generates ``n_total`` channel matrices ``H ~ CN(0, 1)`` (complex standard
-normal) of shape ``(n_R, n_T)`` and splits them into train / val / test sets
-according to the given ratios.  When ``precompute_svd=True`` the thin SVD
-of every matrix is cached so that downstream code can skip repeated SVD
-decompositions during training.
+Generates ``n_total`` channel matrices of shape ``(n_R, n_T)`` and splits
+them into train / val / test sets according to the given ratios.
+When ``precompute_svd=True`` the thin SVD of every matrix is cached so that
+downstream code can skip repeated SVD decompositions during training.
+
+Channel models (``channel_type``):
+
+* ``"rayleigh"`` (default) — i.i.d. CN(0, 1) entries.
+* ``"rician"`` — Rician fading: ``H_i = sqrt(K/(K+1))*H_los + sqrt(1/(K+1))*H_nlos_i``
+  where ``K = 10^(rice_factor_db/10)`` and ``H_los`` is a fixed rank-1 LoS
+  component (outer product of random phase-shift steering vectors) shared
+  across all samples.  Requires ``rice_factor_db`` to be set.
+
+Rayleigh perturbation (``h0_var``, Rayleigh only):
+  A single base channel ``H_0 ~ CN(0, 1)`` is drawn first; each realisation
+  is ``H_i = H_0 + sqrt(h0_var) * eps_i`` where ``eps_i ~ CN(0, 1)``.
+  ``h0_var`` is the per-element perturbation variance; with ``h0_var=1``
+  each entry has the same variance as a pure Rayleigh channel.
+  Not compatible with Rician.
 """
 
 import torch
@@ -12,6 +26,7 @@ from lightning import LightningDataModule
 from torch.utils.data import DataLoader, TensorDataset
 
 from semantic_alignment.utils import cn_matrix
+from semantic_alignment.utils.channel import channel as _channel
 
 
 class HChannelDataModule(LightningDataModule):
@@ -88,6 +103,9 @@ class HChannelDataModule(LightningDataModule):
         val_ratio: float = 0.15,
         seed: int = 42,
         precompute_svd: bool = False,
+        h0_var: float | None = None,
+        channel_type: str = "rayleigh",
+        rice_factor_db: float | None = None,
     ):
         """Initialize the H channel dataset.
 
@@ -121,6 +139,9 @@ class HChannelDataModule(LightningDataModule):
         self.val_ratio = val_ratio
         self.seed = seed
         self.precompute_svd = precompute_svd
+        self.h0_var = h0_var
+        self.channel_type = channel_type
+        self.rice_factor_db = rice_factor_db
 
     def setup(self, stage: str | None = None):
         """Generate all channel matrices and split into train / val / test.
@@ -134,8 +155,38 @@ class HChannelDataModule(LightningDataModule):
         # Seed a local generator so the global RNG is unaffected.
         g = torch.Generator().manual_seed(self.seed)
 
-        # Draw n_total i.i.d. CN(0,1) matrices of shape (n_R, n_T).
-        all_H = cn_matrix(0, 1, (self.n_total, self.n_R, self.n_T), generator=g)
+        if self.h0_var is not None:
+            if self.channel_type != "rayleigh":
+                raise ValueError(
+                    "h0_var perturbation is only supported with channel_type='rayleigh'; "
+                    f"got channel_type={self.channel_type!r}"
+                )
+            # Draw a single base channel H_0 ~ CN(0,1), then perturb.
+            H0 = cn_matrix(0, 1, (self.n_R, self.n_T), generator=g)
+            noise = cn_matrix(0, 1, (self.n_total, self.n_R, self.n_T), generator=g)
+            scale = self.h0_var**0.5
+            all_H = H0.unsqueeze(0) + scale * noise
+        else:
+            all_H = _channel(
+                self.n_R,
+                self.n_T,
+                n_samples=self.n_total,
+                channel_type=self.channel_type,
+                rice_factor_db=self.rice_factor_db,
+                generator=g,
+            )
+
+        # For Rician channels: per-sample standardise each matrix so entries
+        # have zero mean and unit variance, matching the CN(0,1) assumption of
+        # the SIM optimizer.  Raw Rician has Var[H_ij]=1/(K+1) which shrinks
+        # gradients by sqrt(K+1) and breaks the learned step sizes.
+        if self.channel_type == "rician":
+            flat = all_H.reshape(self.n_total, -1)
+            mu = flat.mean(-1, keepdim=True)
+            sigma = (flat - mu).abs().pow(2).mean(-1, keepdim=True).sqrt()
+            all_H = ((all_H.reshape(self.n_total, -1) - mu) / (sigma + 1e-8)).reshape(
+                self.n_total, self.n_R, self.n_T
+            )
 
         # Compute split sizes; test gets whatever remains after train + val.
         n_train = int(self.n_total * self.train_ratio)

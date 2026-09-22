@@ -13,3 +13,5 @@ snr: null
 
 name: mono
 result_subdir: mono
+channel_type: rayleigh
+rice_factor_db: null

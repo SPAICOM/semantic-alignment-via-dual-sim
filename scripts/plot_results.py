@@ -2002,80 +2002,41 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 def unrolled_accuracy_grid() -> None:
-    """Accuracy vs iteration — Classic Adam (dashed) vs Deep Unrolling (solid).
+    """Accuracy vs K — Classic Adam (dashed) vs Deep Unrolling (solid).
 
+    Filtered to Rayleigh channels with fixed H_0 (channel_type='rayleigh', h0_var not null).
     Columns: Linear / PPFE.
-    Color:   SIM architecture.
-
-    Classic Adam curves are loaded from results/{arch}_curve/ (sim_accuracy_*_curve).
-    Unrolled curves are loaded from results/unrolled/{arch}/ (neural_acc / probe_acc),
-    filtered to variant="Unrolled (diagonal)" and constructive=True.
+    Color:   h0_var (per-element perturbation variance).
+    Linestyle: dashed = Classic Adam, solid = Deep Unrolling.
     """
     from matplotlib.lines import Line2D
 
-    # (display name, curve subdir relative to RESULTS, unrolled subdir, constructive filter)
-    _ARCHS = [
-        ("Joint", "joint_curve", "unrolled/joint", False),
-        ("Mono", "mono_curve/constructive", "unrolled/mono", True),
-        ("DisjointSym", "disjoint_sym_curve/constructive", "unrolled/disjoint_sym", True),
-    ]
-
-    def _load_classic(curve_dir: Path, strategy: str) -> list[list[float]]:
-        if not curve_dir.exists():
-            return []
-        curves = []
-        for f in sorted(curve_dir.glob("*.parquet")):
-            df = pl.read_parquet(f)
-            df = df.filter(pl.col("strategy") == strategy)
-            col = (
-                "sim_accuracy_neural_curve"
-                if "sim_accuracy_neural_curve" in df.columns
-                else "sim_accuracy_probe_curve"
-            )
-            for c in df[col]:
-                if c is not None and len(c) > 0:
-                    curves.append(list(c))
-        return curves
-
-    def _load_unrolled(unrolled_dir: Path, strategy: str, constructive: bool) -> list[list[float]]:
-        if not unrolled_dir.exists():
-            return []
-        frames = []
-        for f in sorted(unrolled_dir.glob("*.parquet")):
-            frames.append(pl.read_parquet(f))
-        if not frames:
-            return []
-        df = pl.concat(frames, how="diagonal_relaxed")
-        df = df.filter(
-            (pl.col("strategy") == strategy) & pl.col("variant").str.starts_with("Unrolled")
-        )
-        if "constructive" in df.columns:
-            df = df.filter(pl.col("constructive") == constructive)
-        col = "neural_acc" if "neural_acc" in df.columns else "probe_acc"
-        curves = []
-        for outer in df[col]:
-            if outer is None:
-                continue
-            for curve in outer:
-                if curve is not None and len(curve) > 0:
-                    curves.append(list(curve))
-        return curves
-
-    # Determine which archs have any data at all
-    present_archs = []
-    for arch_name, curve_sub, unrolled_sub, cstr in _ARCHS:
-        has_classic = (RESULTS / curve_sub).exists() and any(
-            (RESULTS / curve_sub).glob("*.parquet")
-        )
-        has_unrolled = (RESULTS / unrolled_sub).exists() and any(
-            (RESULTS / unrolled_sub).glob("*.parquet")
-        )
-        if has_classic or has_unrolled:
-            present_archs.append((arch_name, curve_sub, unrolled_sub, cstr))
-
-    if not present_archs:
-        print("No unrolled or curve results found.")
+    unrolled_root = RESULTS / "unrolled"
+    if not unrolled_root.exists():
+        print("No unrolled results found.")
         return
+    all_files = list(unrolled_root.rglob("*.parquet"))
+    if not all_files:
+        print("No unrolled results found.")
+        return
+
+    df_all = pl.concat(
+        [pl.read_parquet(f) for f in all_files],
+        how="diagonal_relaxed",
+    )
+
+    if "channel_type" not in df_all.columns or "h0_var" not in df_all.columns:
+        print("Parquets missing channel_type/h0_var columns — re-run compare_unrolled.")
+        return
+
+    df_all = df_all.filter((pl.col("channel_type") == "rayleigh") & pl.col("h0_var").is_not_null())
+    if df_all.is_empty():
+        print("No fixed-H0 Rayleigh results found.")
+        return
+
+    h0_vals = sorted(df_all["h0_var"].drop_nulls().unique().to_list())
+    palette = sns.color_palette("viridis", len(h0_vals))
+    color_map = {v: palette[i] for i, v in enumerate(h0_vals)}
 
     fig, axes = plt.subplots(
         1,
@@ -2088,58 +2049,52 @@ def unrolled_accuracy_grid() -> None:
 
     for col_idx, strat in enumerate(STRATEGIES):
         ax = axes[col_idx]
-        x_min, x_max = np.inf, -np.inf
+        df_s = (
+            df_all.filter(pl.col("strategy") == strat) if "strategy" in df_all.columns else df_all
+        )
+        if df_s.is_empty():
+            continue
 
-        for arch_name, curve_sub, unrolled_sub, cstr in present_archs:
-            color = _ARCH_PALETTE.get(arch_name, "gray")
-            marker = _ARCH_MARKERS.get(arch_name, "o")
+        for h0v in h0_vals:
+            color = color_map[h0v]
+            df_h = df_s.filter(pl.col("h0_var") == h0v)
 
-            sources = [
-                (_load_classic(RESULTS / curve_sub, strat), "--"),
-                (_load_unrolled(RESULTS / unrolled_sub, strat, cstr), "-"),
-            ]
-            for all_curves, ls in sources:
-                if not all_curves:
-                    continue
-                # Truncate to shortest curve so np.array works
-                min_len = min(len(c) for c in all_curves)
-                arr = np.array([c[:min_len] for c in all_curves])
-                mean = arr.mean(axis=0)
-                se = arr.std(axis=0) / np.sqrt(len(arr))
-                x = np.arange(len(mean))
-                every = max(1, len(mean) // 6)
-                x_min = min(x_min, x[0])
-                x_max = max(x_max, x[-1])
-
-                ax.plot(
-                    x,
-                    mean,
-                    color=color,
-                    ls=ls,
-                    linewidth=2,
-                    marker=marker,
-                    markersize=6,
-                    markevery=every,
+            for variant_key, ls in [("Classic", "--"), ("Unrolled", "-")]:
+                sub = (
+                    df_h.filter(pl.col("variant") == "Classic")
+                    if variant_key == "Classic"
+                    else df_h.filter(pl.col("variant").str.contains("Unrolled"))
                 )
+                if sub.is_empty():
+                    continue
+
+                by_K: dict[int, list[float]] = {}
+                for row in sub.iter_rows(named=True):
+                    K = int(row.get("K", 0))
+                    if K == 0:
+                        continue
+                    acc = row.get("neural_acc") or row.get("probe_acc")
+                    if acc is None:
+                        continue
+                    final_acc = float(acc) if not hasattr(acc, "__len__") else float(acc[-1])
+                    by_K.setdefault(K, []).append(final_acc)
+
+                if not by_K:
+                    continue
+                K_vals = sorted(by_K)
+                means = [np.mean(by_K[k]) for k in K_vals]
+                ses = [np.std(by_K[k]) / np.sqrt(max(len(by_K[k]), 1)) for k in K_vals]
+                x = np.array(K_vals)
+                mean = np.array(means)
+                se = np.array(ses)
+
+                ax.plot(x, mean, color=color, ls=ls, linewidth=2, marker="o", markersize=6)
                 ax.fill_between(x, mean - 1.96 * se, mean + 1.96 * se, color=color, alpha=0.12)
-                for idx in (int(np.argmin(mean)), int(np.argmax(mean))):
-                    ax.scatter(
-                        x[idx],
-                        mean[idx],
-                        color=color,
-                        marker=marker,
-                        s=80,
-                        zorder=5,
-                        edgecolors="white",
-                        linewidths=0.6,
-                    )
 
         ax.set_title(strat)
-        ax.set_xlabel("Cycle (TX step + RX step)")
+        ax.set_xlabel("K (layers / iterations)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
-        if np.isfinite(x_min) and np.isfinite(x_max):
-            ax.set_xlim(x_min, x_max)
 
     ls_handles = [
         Line2D([0], [0], color="gray", ls="--", lw=2, label="Classic Adam"),
@@ -2155,22 +2110,23 @@ def unrolled_accuracy_grid() -> None:
         framealpha=1,
     )
 
-    arch_handles = [
+    h0v_handles = [
         Line2D(
             [0],
             [0],
-            color=_ARCH_PALETTE.get(a, "gray"),
-            marker=_ARCH_MARKERS.get(a, "o"),
-            ls="none",
-            markersize=10,
-            label=a,
+            color=color_map[v],
+            ls="-",
+            lw=2,
+            marker="o",
+            markersize=8,
+            label=rf"$\sigma^2={v}$",
         )
-        for a, *_ in present_archs
+        for v in h0_vals
     ]
     fig.legend(
-        arch_handles,
-        [h.get_label() for h in arch_handles],
-        ncol=len(arch_handles),
+        h0v_handles,
+        [h.get_label() for h in h0v_handles],
+        ncol=len(h0v_handles),
         loc="lower center",
         bbox_to_anchor=(0.5, -0.20),
         frameon=True,
@@ -2179,7 +2135,7 @@ def unrolled_accuracy_grid() -> None:
         handletextpad=0.4,
     )
 
-    _save("Unrolled_AccuracyGrid")
+    _save("Unrolled_H0Var_AccuracyGrid")
 
 
 # ---------------------------------------------------------------------------

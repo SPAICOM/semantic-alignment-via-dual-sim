@@ -278,18 +278,17 @@ cls *ARGS: train-clf
 # Trains K=100 layers in blocks of m, saving results at each block endpoint.
 # Config: config/training/unrolled.yaml
 
-# Unrolled GD: joint Dual-SIM — PPFE
+# Unrolled GD: joint Dual-SIM — PPFE only
 cls-unrolled-ppfe *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=ppfe {{ARGS}}
 
-# Unrolled GD: joint Dual-SIM — Linear
+# Unrolled GD: joint Dual-SIM — Linear only
 cls-unrolled-linear *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=linear {{ARGS}}
 
-# Unrolled GD: joint Dual-SIM (both strategies)
-cls-unrolled *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=ppfe {{ARGS}}
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} alignment=linear {{ARGS}}
+# Unrolled GD: joint Dual-SIM — sweep Linear + PPFE (defined in config_compare_unrolled_joint.yaml)
+cls-unrolled-joint *ARGS: train-clf
+    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets={{dataset}} {{ARGS}}
 
 # Unrolled GD: mono-SIM (equalized)
 cls-unrolled-mono *ARGS: train-clf
@@ -316,7 +315,7 @@ cls-unrolled-disjoint-asym-c *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets={{dataset}} sim.constructive=true {{ARGS}}
 
 # Aggregate: all unrolled GD experiments
-unrolled: cls-unrolled cls-unrolled-mono cls-unrolled-mono-c cls-unrolled-disjoint-sym cls-unrolled-disjoint-sym-c cls-unrolled-disjoint-asym cls-unrolled-disjoint-asym-c
+unrolled: cls-unrolled-joint cls-unrolled-mono cls-unrolled-mono-c cls-unrolled-disjoint-sym cls-unrolled-disjoint-sym-c cls-unrolled-disjoint-asym cls-unrolled-disjoint-asym-c
 
 # ── Convergence curves (save_curve=true) ─────────────────────────────────────
 # Each recipe runs classification.py with training.save_curve=true, saving a

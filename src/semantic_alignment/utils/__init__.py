@@ -21,13 +21,17 @@ from semantic_alignment.utils.alignment import ppfe, ridge_regression
 # Channel generation, noise, SNR, equalisation, complex encoding, whitening.
 from semantic_alignment.utils.channel import (
     awgn,
+    channel,
     cn_matrix,
     pack_complex,
     prewhiten,
+    rician_los,
+    rician_matrix,
     rx_equalizer,
     sigma_from_snr,
     snr,
     solve,
+    standardize_channel,
     svd_equalizer,
     to_complex,
     unpack_complex,
@@ -38,10 +42,14 @@ from semantic_alignment.utils.io import remove_dir
 
 __all__ = [
     "awgn",
+    "channel",
     "cn_matrix",
     "pack_complex",
     "prewhiten",
+    "rician_los",
+    "rician_matrix",
     "rx_equalizer",
+    "standardize_channel",
     "sigma_from_snr",
     "snr",
     "solve",

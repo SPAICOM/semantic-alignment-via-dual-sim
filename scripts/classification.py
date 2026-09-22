@@ -40,7 +40,8 @@ from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linea
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
 from semantic_alignment.sim.original._utils import make_fname, tipology_tag
-from semantic_alignment.utils import cn_matrix
+from semantic_alignment.utils import channel as _channel_fn
+from semantic_alignment.utils import standardize_channel
 
 _RESULTS = Path("results")
 
@@ -85,6 +86,9 @@ def _out_path(cfg: DictConfig) -> Path | None:
         if "lr_search" in result_subdir and lr_tx is not None and lr_rx is not None
         else ""
     )
+    ch_type = sim.get("channel_type", "rayleigh")
+    kdb = sim.get("rice_factor_db", None)
+    ch_tag = f"_rician{kdb}dB" if ch_type == "rician" else ""
     fname = make_fname(
         strategy,
         seed,
@@ -98,7 +102,7 @@ def _out_path(cfg: DictConfig) -> Path | None:
         s_rx,
         n_clusters,
         dataset=dataset,
-        extra_tag=lr_tag,
+        extra_tag=lr_tag + ch_tag,
     )
     return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
 
@@ -280,7 +284,13 @@ def _setup(cfg: DictConfig) -> dict:
     else:
         ch_dim_cfg = cfg.sim.get("channel_dim", None)
         h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
-    H_mimo = cn_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+    _ch_type = cfg.sim.get("channel_type", "rayleigh")
+    H_mimo = standardize_channel(
+        _channel_fn(
+            h_dim, h_dim, channel_type=_ch_type, rice_factor_db=cfg.sim.get("rice_factor_db", None)
+        ).to(device),
+        channel_type=_ch_type,
+    )
 
     return dict(
         seed=seed,

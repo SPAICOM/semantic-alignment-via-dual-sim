@@ -3,6 +3,7 @@
 from collections.abc import Callable
 
 import torch
+from torch.utils.checkpoint import checkpoint as _grad_ckpt
 
 from .._cascade import (
     build_cascade_RX,
@@ -64,6 +65,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
         eps: float = 1e-12,
         phases_T_init: list | None = None,
         phases_R_init: list | None = None,
+        gradient_checkpointing: bool = False,
     ):
         """Initialize joint dual-SIM unrolled optimizer.
 
@@ -152,6 +154,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
 
         self._phT_warm: list | None = phases_T_init
         self._phR_warm: list | None = phases_R_init
+        self.gradient_checkpointing = gradient_checkpointing
 
     # ---- helpers -----------------------------------------------------------
 
@@ -230,6 +233,9 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
             ``(nmse, gT, gR)`` — NMSE and per-layer gradients for TX and RX.
         """
         with torch.inference_mode(False), torch.enable_grad():
+            # Clone inputs that may be inference tensors (e.g. when called from test_step)
+            H, A = H.clone(), A.clone()
+            A2 = (A.conj() * A).sum((-2, -1)).real
             # Flatten TX and RX phases for joint differentiation
             flat_T = torch.cat(xT, dim=1).clone().requires_grad_(True)
             flat_R = torch.cat(xR, dim=1).clone().requires_grad_(True)
@@ -377,20 +383,62 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
 
         curves = []
 
+        n_T = len(self.sizes_T)
+        n_R = len(self.sizes_R)
+        use_ckpt = self.gradient_checkpointing and self.training and not analytic
+        has_mom = vT is not None
+
         for k in range(k_run):
-            if analytic:
-                _, gT, gR = self._innovation_analytic(H, A, A2, phT, phR)
+            if use_ckpt:
+
+                def _make_step(k_):
+                    def _step(*flat):
+                        _phT = list(flat[:n_T])
+                        _phR = list(flat[n_T : n_T + n_R])
+                        _vT = list(flat[n_T + n_R : 2 * n_T + n_R]) if has_mom else None
+                        _vR = list(flat[2 * n_T + n_R :]) if has_mom else None
+                        _, _gT, _gR = self._innovation_autograd(H, A, A2, _phT, _phR, create_graph)
+                        _gT = _normalize(_gT, self.innovation_norm, self.eps)
+                        _gR = _normalize(_gR, self.innovation_norm, self.eps)
+                        _phT_new, _vT_new = self.step_T.apply(_phT, _gT, _vT, k_)
+                        _phR_new, _vR_new = self.step_R.apply(_phR, _gR, _vR, k_)
+                        out = _phT_new + _phR_new
+                        if has_mom:
+                            out = out + _vT_new + _vR_new
+                        return tuple(out)
+
+                    return _step
+
+                flat_in = tuple(phT + phR + (vT if has_mom else []) + (vR if has_mom else []))
+                flat_out = _grad_ckpt(_make_step(k), *flat_in, use_reentrant=False)
+                phT = list(flat_out[:n_T])
+                phR = list(flat_out[n_T : n_T + n_R])
+                if has_mom:
+                    vT = list(flat_out[n_T + n_R : 2 * n_T + n_R])
+                    vR = list(flat_out[2 * n_T + n_R :])
             else:
-                _, gT, gR = self._innovation_autograd(H, A, A2, phT, phR, create_graph)
-
-            gT = _normalize(gT, self.innovation_norm, self.eps)
-            gR = _normalize(gR, self.innovation_norm, self.eps)
-
-            phT, vT = self.step_T.apply(phT, gT, vT, k)
-            phR, vR = self.step_R.apply(phR, gR, vR, k)
+                if analytic:
+                    _, gT, gR = self._innovation_analytic(H, A, A2, phT, phR)
+                else:
+                    _, gT, gR = self._innovation_autograd(H, A, A2, phT, phR, create_graph)
+                gT = _normalize(gT, self.innovation_norm, self.eps)
+                gR = _normalize(gR, self.innovation_norm, self.eps)
+                phT, vT = self.step_T.apply(phT, gT, vT, k)
+                phR, vR = self.step_R.apply(phR, gR, vR, k)
 
             if deep or k == k_run - 1:
-                curves.append(_nmse(self._cascade(H, phT, phR), A, A2, self.eps))
+                if use_ckpt:
+                    _phT_cat = torch.cat(phT, dim=1)
+                    _phR_cat = torch.cat(phR, dim=1)
+
+                    def _nmse_fn(_phT_cat_, _phR_cat_):
+                        _phT_ = list(_phT_cat_.split(self.sizes_T, dim=1))
+                        _phR_ = list(_phR_cat_.split(self.sizes_R, dim=1))
+                        return _nmse(self._cascade(H, _phT_, _phR_), A, A2, self.eps)
+
+                    curves.append(_grad_ckpt(_nmse_fn, _phT_cat, _phR_cat, use_reentrant=False))
+                else:
+                    curves.append(_nmse(self._cascade(H, phT, phR), A, A2, self.eps))
 
             if step_callback is not None and not self.training:
                 step_callback(k, phT + phR)

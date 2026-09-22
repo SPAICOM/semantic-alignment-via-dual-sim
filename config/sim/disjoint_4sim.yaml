@@ -14,3 +14,5 @@ snr: null
 
 name: disjoint_4sim_layers
 result_subdir: disjoint_4sim_layers
+channel_type: rayleigh
+rice_factor_db: null

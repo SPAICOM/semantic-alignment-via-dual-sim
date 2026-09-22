@@ -1290,7 +1290,8 @@ class CompareUnrolledCallback(lg.Callback):
         )
 
         pl_module.log("val/unrolled_final_probe", probe_arr[-1].item(), prog_bar=True)
-        pl_module.log("val/classic_final_probe", self.classic_probe_curve[-1], prog_bar=False)
+        if self.classic_probe_curve is not None:
+            pl_module.log("val/classic_final_probe", self.classic_probe_curve[-1], prog_bar=False)
         if neural_arr is not None:
             pl_module.log("val/unrolled_final_neural", neural_arr[-1].item())
 
