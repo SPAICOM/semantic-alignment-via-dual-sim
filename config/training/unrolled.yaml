@@ -40,7 +40,6 @@ wandb_project: compare_unrolled
 # Unrolled step-size init and momentum
 # Can be a scalar (same for all K) or a list matching K_list (one lr per K).
 lr_w: [1e-3, 1e-3, 5e-4, 5e-4, 3e-4]
-# lr_w: [5e-4, 1e-4, 5e-5, 5e-5, 3e-5]
 init_w: 0.1
 init_mu: 0.9
 
