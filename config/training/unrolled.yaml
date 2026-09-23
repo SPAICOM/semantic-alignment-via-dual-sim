@@ -6,6 +6,12 @@ defaults:
 K: 30
 # If set, trains one model per K value sharing the same warm start. Overrides K.
 K_list: [1, 5, 10, 15, 30]
+
+# Training type for the K_list loop.
+# independent: each K trains from scratch (default).
+# progressive: K=k_{i+1} initializes its first k_i layers with the trained K=k_i parameters.
+#              A .steps.pt file is saved alongside each parquet for resume support.
+training_type: independent
 # Gradient checkpointing: recompute activations during backward to save GPU memory.
 gradient_checkpointing: false
 
@@ -51,9 +57,10 @@ innovation_mode: autograd
 
 # Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
 warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
-warm_start_H_seed: null   # seed for H_start when warm_start_use_H_los=false (null = identity matrix)
-warm_start_channel_type: null  # channel type for H_start when warm_start_H_seed is set (null = inherit channel_type)
-warm_start_use_H_los: false    # if true and channel_type=rician, warm-start on H_los (the LoS component)
+warm_start_type: average  # only_semantic | average | <int seed>
+                          #   only_semantic → H = I (semantic alignment only, no channel)
+                          #   average       → H_0 (rayleigh+h0_var) or H_los (rician)
+                          #   <int>         → random channel drawn with that seed
 
 # Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
 supervision: all      # 'final': only last step NMSE | 'all': weighted sum over all K steps

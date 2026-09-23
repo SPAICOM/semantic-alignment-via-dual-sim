@@ -154,8 +154,8 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     L = cfg.sim.get("L", 25)
     M_int = cfg.sim.get("M_int", 32)
     ws_t = cfg.training.get("warm_start_t", 0)
-    ws_h = cfg.training.get("warm_start_H_seed", None)
-    ws_h_tag = "null" if ws_h is None else str(ws_h)
+    ws_type = str(cfg.training.get("warm_start_type", "identity"))
+    ws_init_tag = "none" if ws_t == 0 else ws_type
     lr_w_tag = f"_lrw{lr_w}" if lr_w is not None else ""
     ch_type = cfg.training.get("channel_type", "rayleigh")
     kdb = cfg.training.get("rice_factor_db", None)
@@ -169,10 +169,30 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     fname = (
         f"{cfg.datasets.hf_name}_unrolled_{cfg.alignment.type}"
         f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
-        f"_ws{ws_t}_wsh{ws_h_tag}{lr_w_tag}{ch_tag}"
+        f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}"
         f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
     )
     return _RESULTS / result_subdir / fname
+
+
+def _steps_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
+    """Companion .steps.pt file for progressive training (step state dict)."""
+    return _out_path(cfg, coup, K, lr_w).with_suffix(".steps.pt")
+
+
+def _copy_progressive_init(model, state_T: dict, state_R: dict, K_prev: int) -> None:
+    """Copy first K_prev layers from saved step states into model.step_T / step_R.
+
+    All learnable parameters in UnrolledStep subclasses are indexed along dim 0
+    as the K dimension, so slicing [:K_prev] copies exactly the trained layers.
+    """
+    with torch.no_grad():
+        for name, dst_p in model.step_T.named_parameters():
+            if name in state_T:
+                dst_p.data[:K_prev].copy_(state_T[name])
+        for name, dst_p in model.step_R.named_parameters():
+            if name in state_R:
+                dst_p.data[:K_prev].copy_(state_R[name])
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -312,28 +332,35 @@ def main(cfg: DictConfig) -> None:
 
         # Pre-compute warm-start phases once for all coupling variants
         ws_t = cfg.training.get("warm_start_t", 0)
-        ws_h = cfg.training.get("warm_start_H_seed", None)
+        ws_type = str(cfg.training.get("warm_start_type", "identity"))
+        ws_init_tag = "none" if ws_t == 0 else ws_type
         ws_phT, ws_phR = None, None
         if ws_t > 0:
-            use_H_los = cfg.training.get("warm_start_use_H_los", False)
-            if use_H_los and cfg.training.get("channel_type", "rayleigh") == "rician":
-                # Reproduce the same H_los used by HChannelDataModule (same seed).
-                _g_los = torch.Generator().manual_seed(cfg.training.seed + 999)
-                H_ws = standardize_channel(
-                    rician_los(n_R, n_T, generator=_g_los).to(device),
-                    channel_type="rician",
-                )
-            elif ws_h is None:
-                H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
-            else:
-                gen = torch.Generator().manual_seed(ws_h)
-                ws_ch_type = cfg.training.get("warm_start_channel_type", None) or cfg.training.get(
-                    "channel_type", "rayleigh"
-                )
-                ws_kdb = cfg.training.get("rice_factor_db", None)
-                H_ws = _channel_fn(
-                    n_R, n_T, channel_type=ws_ch_type, rice_factor_db=ws_kdb, generator=gen
-                ).to(device)
+            _ch_type_ws = cfg.training.get("channel_type", "rayleigh")
+            match ws_type:
+                case "average":
+                    _g_avg = torch.Generator().manual_seed(cfg.training.seed + 999)
+                    match _ch_type_ws:
+                        case "rician":
+                            H_ws = standardize_channel(
+                                rician_los(n_R, n_T, generator=_g_avg).to(device),
+                                channel_type="rician",
+                            )
+                        case _ if cfg.training.get("h0_var", None) is not None:
+                            H_ws = _channel_fn(n_R, n_T, generator=_g_avg).to(device)
+                        case _:
+                            H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
+                case "only_semantic":
+                    H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
+                case _:
+                    gen = torch.Generator().manual_seed(int(ws_type))
+                    H_ws = _channel_fn(
+                        n_R,
+                        n_T,
+                        channel_type=_ch_type_ws,
+                        rice_factor_db=cfg.training.get("rice_factor_db", None),
+                        generator=gen,
+                    ).to(device)
             with torch.no_grad():
                 for p in sim.xi_T:
                     p.zero_()
@@ -371,11 +398,21 @@ def main(cfg: DictConfig) -> None:
                     reg_s_mode=cfg.training.get("reg_s_mode", "none"),
                 )
 
+            training_type = cfg.training.get("training_type", "independent")
+            prev_step_state: dict | None = None
+            prev_K: int | None = None
+
             for k_idx, K in enumerate(K_list):
                 lr_w = lr_w_list[k_idx]
                 out = _out_path(cfg, coup, K, lr_w)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
+                    if training_type == "progressive":
+                        sp = _steps_path(cfg, coup, K, lr_w)
+                        if sp.exists():
+                            ckpt = torch.load(sp, map_location=device, weights_only=True)
+                            prev_step_state = {"step_T": ckpt["step_T"], "step_R": ckpt["step_R"]}
+                            prev_K = K
                     continue
 
                 model = DualSIMUnrolledSCA(
@@ -393,6 +430,12 @@ def main(cfg: DictConfig) -> None:
                     gradient_checkpointing=cfg.training.get("gradient_checkpointing", False),
                     **conv_kwargs,
                 ).to(device)
+
+                if training_type == "progressive" and prev_step_state is not None:
+                    _copy_progressive_init(
+                        model, prev_step_state["step_T"], prev_step_state["step_R"], prev_K
+                    )
+                    print(f"  Progressive init: copied K={prev_K} → K={K} step parameters.")
 
                 dm = HChannelDataModule(
                     n_R=n_R,
@@ -443,7 +486,7 @@ def main(cfg: DictConfig) -> None:
 
                 logger = WandbLogger(
                     project=cfg.training.get("wandb_project", "compare_unrolled"),
-                    name=f"joint_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}_ws{ws_t}_wsh{'null' if ws_h is None else ws_h}{ch_tag}",
+                    name=f"joint_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}_ws{ws_t}_wsh{ws_init_tag}{ch_tag}",
                 )
 
                 trainer = Trainer(
@@ -467,7 +510,7 @@ def main(cfg: DictConfig) -> None:
                 test_probe = lightning._test_probe_curves
                 test_neural = lightning._test_neural_curves
 
-                init_tag = f"warmstart_{ws_t}" if ws_t > 0 else "random"
+                init_tag = f"warmstart_{ws_t}_{ws_init_tag}" if ws_t > 0 else "none"
                 classic_seeds_used = cfg.training.get("classic_seeds", [cfg.training.seed])
                 meta = {
                     "seed": cfg.training.seed,
@@ -482,6 +525,7 @@ def main(cfg: DictConfig) -> None:
                     "K": K,
                     "lr_w": lr_w,
                     "init": init_tag,
+                    "warm_start_type": ws_type if ws_t > 0 else "none",
                     "channel_type": ch_type,
                     "rice_factor_db": kdb,
                     "h0_var": h0v,
@@ -509,6 +553,22 @@ def main(cfg: DictConfig) -> None:
                 out.parent.mkdir(parents=True, exist_ok=True)
                 pl.DataFrame(rows).write_parquet(out)
                 print(f"Parquet saved → {out}")
+
+                if training_type == "progressive":
+                    sp = _steps_path(cfg, coup, K, lr_w)
+                    torch.save(
+                        {
+                            "step_T": {k: v.cpu() for k, v in model.step_T.state_dict().items()},
+                            "step_R": {k: v.cpu() for k, v in model.step_R.state_dict().items()},
+                        },
+                        sp,
+                    )
+                    prev_step_state = {
+                        "step_T": model.step_T.state_dict(),
+                        "step_R": model.step_R.state_dict(),
+                    }
+                    prev_K = K
+
                 del model
                 torch.cuda.empty_cache()
 
