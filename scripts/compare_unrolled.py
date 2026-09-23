@@ -201,6 +201,8 @@ def main(cfg: DictConfig) -> None:
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
+    lg.seed_everything(cfg.training.seed, workers=True)
+
     mode = cfg.sim.get("sim_type", "joint")
     print(
         f" seed={cfg.training.seed} | mode={mode} | "
@@ -347,7 +349,9 @@ def main(cfg: DictConfig) -> None:
                                 channel_type="rician",
                             )
                         case _ if cfg.training.get("h0_var", None) is not None:
-                            H_ws = _channel_fn(n_R, n_T, generator=_g_avg).to(device)
+                            H_ws = _channel_fn(
+                                n_R, n_T, channel_type=_ch_type_ws, generator=_g_avg
+                            ).to(device)
                         case _:
                             H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
                 case "only_semantic":
