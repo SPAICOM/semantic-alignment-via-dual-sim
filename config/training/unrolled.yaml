@@ -3,7 +3,17 @@ defaults:
   - coupling: diagonal # conv | conv2d | diagonal | scalar
 
 # Number of unrolled gradient layers (inference iterations)
-K: 10
+K: 30
+# If set, trains one model per K value sharing the same warm start. Overrides K.
+K_list: [1, 5, 10, 15, 30]
+
+# Training type for the K_list loop.
+# independent: each K trains from scratch (default).
+# progressive: K=k_{i+1} initializes its first k_i layers with the trained K=k_i parameters.
+#              A .steps.pt file is saved alongside each parquet for resume support.
+training_type: progressive
+# Gradient checkpointing: recompute activations during backward to save GPU memory.
+gradient_checkpointing: true
 
 # Learning rate for the classic-comparison Adam loop
 lr: 0.1
@@ -11,20 +21,44 @@ lr_tx: 0.1
 lr_rx: 0.2
 
 # Training hyper-params
-batch_size: 16
-epochs: 100
+batch_size: 32
+epochs: 150
 lr_schedule: cosine  # none | cosine
 grad_clip: 1.0
 
 # Random MIMO channel dataset
-n_channels: 1000
+n_channels: 10000
 train_ratio: 0.7
 val_ratio: 0.15
+# Channel model: rayleigh (default) | rician
+# For rician, rice_factor_db sets the K-factor in dB (e.g. 3, 10).
+channel_type: rayleigh
+rice_factor_db: null
+
+# If set (rayleigh only), generates H_i = H_0 + sqrt(h0_var) * eps_i.
+# h0_var is the per-element perturbation variance (h0_var=1 matches pure Rayleigh diversity).
+# h0_var=0 → all samples equal H_0; null → standard i.i.d. CN(0,1).
+h0_var: 1
 
 # Wandb logging
 wandb_project: compare_unrolled
 
 # Unrolled step-size init and momentum
+# Can be a scalar (same for all K) or a list matching K_list (one lr per K).
+lr_w: [1e-3, 1e-3, 5e-4, 5e-4, 3e-4]
+# lr_w override for progressive steps (K_idx > 0 when training_type=progressive).
+# null → use lr_w. Set to a list (same length as K_list) or a scalar to use lower
+# rates for inherited layers, e.g. [1e-3, 5e-4, 2.5e-4, 2.5e-4, 1.5e-4].
+lr_w_progressive: null #[1e-3, 5e-4, 2.5e-4, 2.5e-4, 1.5e-4]
+
+# Progressive layer-wise gradient scaling (only active when training_type=progressive and K_idx>0).
+# lr_inherited_ratio: scale factor applied to gradients of inherited layers (k < K_prev).
+#   1.0 = no scaling (default), 0.1 = 10x lower effective LR for inherited layers.
+lr_inherited_ratio: 0.1
+# warmup_new_layers: ramp new-layer gradients from 0 to full scale over this many epochs.
+#   0 = disabled (new layers train at full LR from epoch 0).
+warmup_new_layers: 20
+
 init_w: 0.1
 init_mu: 0.9
 
@@ -34,10 +68,17 @@ innovation_norm: rms
 # How the descent direction is computed: autograd | analytic
 innovation_mode: autograd
 
+# Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
+warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
+warm_start_type: only_semantic # only_semantic | average | <int seed>
+                          #   only_semantic → H = I (semantic alignment only, no channel)
+                          #   average       → H_0 (rayleigh+h0_var) or H_los (rician)
+                          #   <int>         → random channel drawn with that seed
+
 # Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
 supervision: all      # 'final': only last step NMSE | 'all': weighted sum over all K steps
-weight_ratio: 1.0     # w[0]/w[K-1]: ratio of first-layer to last-layer loss weight (only used when supervision=all)
-                      # 1.0=uniform; 0.0=last-layer only; 0.2 ≈ gamma=0.946 for K=30
+weight_ratio: 0.3     # w[0]/w[K-1]: ratio of first-layer to last-layer loss weight (only used when supervision=all)
+                      # 1.0=uniform; 0.0=last-layer only; 0.3 ≈ gamma=0.958 for K=30
 
 # Mixed-precision training: use bfloat16 (saves ~50% memory, needs Ampere+ GPU)
 bf16: true

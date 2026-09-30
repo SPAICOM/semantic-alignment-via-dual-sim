@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.joint.run_joint_sim
+_target_: semantic_alignment.sim.original.joint.JointSIM.run_sim
 sim_type: joint
 
 wavelength: 0.005          # lambda = 5 mm (60 GHz band)
@@ -14,3 +14,5 @@ s_rx: null                 # RX inter-layer spacing override (units of lambda); 
 
 name: joint_layers
 result_subdir: joint_layers
+channel_type: rayleigh
+rice_factor_db: null

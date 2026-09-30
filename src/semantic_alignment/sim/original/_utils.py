@@ -1,8 +1,8 @@
-"""Shared helpers for all SIM experiment runners.
+"""Shared helpers for all SIM runner classes.
 
 Provides:
-- :class:`_FixedCascade`   — thin wrapper so a pre-computed matrix satisfies
-  the ``get_cascade()`` interface of :func:`run_evaluation_disjoint_fixed`.
+- :class:`_FixedCascade`      — thin wrapper so a pre-computed matrix satisfies
+  the ``get_cascade()`` interface.
 - :func:`inter_sim_propagation` — free-space propagation matrix between two
   co-located apertures (used by the 4-SIM runner).
 - :func:`save_result`  — write a single-row result to a Parquet file.
@@ -16,55 +16,62 @@ from pathlib import Path
 import polars as pl
 import torch
 
-from semantic_alignment.sim.monosim import MonoSIMoptimizer
+from .optimizers.monosim import MonoSIMoptimizer
 
 RESULTS_DIR = Path("results")
 
 
 class _FixedCascade:
     """Minimal wrapper so a pre-computed cascade matrix satisfies the
-    ``get_cascade()`` interface expected by ``run_evaluation_disjoint_fixed``."""
+    ``get_cascade()`` interface expected by ``run_evaluation_disjoint_fixed``.
+
+    Parameters
+    ----------
+    G : torch.Tensor
+        Pre-computed cascade matrix, shape (d_out, d_in).
+    """
 
     def __init__(self, G: torch.Tensor) -> None:
         self._G = G
 
-    def eval(self):
-        """No-op to match the ``nn.Module.eval()`` interface."""
+    def eval(self) -> "_FixedCascade":
+        """Return self (no-op; satisfies ``nn.Module.eval()`` interface)."""
         return self
 
     def get_cascade(self) -> torch.Tensor:
-        """Return the pre-computed cascade matrix."""
+        """Return the stored cascade matrix."""
         return self._G
 
 
 def inter_sim_propagation(
-    n_x: int, n_y: int, slayer: float, dx: float, wavelength: float, device
+    n_x: int, n_y: int, slayer: float, dx: float, wavelength: float, device: torch.device
 ) -> torch.Tensor:
     """Compute the free-space propagation matrix between two identical n_x × n_y apertures.
 
     Used in the 4-SIM runner to model the physical gap between the two TX SIMs
-    and between the two RX SIMs.
+    and between the two RX SIMs. The propagation is computed via the Green's
+    function of a single-layer metasurface with the given thickness and spacing.
 
     Parameters
     ----------
-    n_x : int
-        Number of meta-atoms along x.
-    n_y : int
-        Number of meta-atoms along y.
+    n_x, n_y : int
+        Aperture dimensions in the x and y directions.
     slayer : float
-        Inter-layer spacing (metres).
+        Metasurface layer thickness (m).
     dx : float
-        Meta-atom spacing (metres).
+        Inter-element spacing (m).
     wavelength : float
-        Operating wavelength λ (metres).
-    device :
-        PyTorch device for the returned tensor.
+        Carrier wavelength (m).
+    device : torch.device
+        Target device for the output tensor.
 
     Returns
     -------
     torch.Tensor
-        Complex64 propagation matrix of shape ``(n_x*n_y, n_x*n_y)``.
+        Propagation matrix, shape (n_x*n_y, n_x*n_y), complex64.
     """
+    # Build a temporary MonoSIMoptimizer to compute the W matrix via its
+    # closed-form Green's function propagation
     tmp = MonoSIMoptimizer(
         num_layers=1,
         num_meta_atoms_in_x=n_x,
@@ -103,7 +110,15 @@ def tipology_tag(
 
 
 def save_result(path: Path, row: dict) -> None:
-    """Write a single result row to a Parquet file, creating parent directories as needed."""
+    """Write a single result row to a Parquet file, creating parent directories as needed.
+
+    Parameters
+    ----------
+    path : Path
+        Destination file path (will be created/overwritten).
+    row : dict
+        Key-value pairs for the result row.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     pl.DataFrame([row]).write_parquet(path)
 
@@ -127,16 +142,43 @@ def make_fname(
     n_clusters: int | None = None,
     dataset: str = "cifar10",
     preconditioner: str = "none",
+    extra_tag: str = "",
+    **_,
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
 
-    All fields are always present; ``None`` values use ``"none"`` for s-layer
-    and ``"inf"`` for SNR so filenames are self-documenting without branching.
-    When ``n_clusters`` is provided (PPFE n-clusters sweep), ``_k{n_clusters}``
-    is appended before the encoder suffix.
-    The filename is prefixed with ``{dataset}_``.
-    When ``preconditioner`` is not ``'none'``, ``_prec{preconditioner}`` is
-    appended before the encoder suffix.
+    The filename encodes every independent variable so that results are
+    self-documenting and unambiguous when stored on disk.
+
+    Parameters
+    ----------
+    strategy : str
+        Optimization strategy name (e.g. ``"joint"``, ``"mono"``).
+    seed : int
+        Random seed for reproducibility.
+    L : int
+        Number of SIM layers.
+    M_int : int
+        Intermediate dimension (number of meta-atoms per side).
+    ch_dim : int
+        Total channel dimension (n_x × n_y).
+    snr : float or None
+        Signal-to-noise ratio; ``None`` means noiseless.
+    tx_enc, rx_enc : str
+        TX and RX encoder types.
+    s_tx, s_rx : int or None
+        Sparsity parameters for TX and RX.
+    n_clusters : int or None
+        Number of clusters (for clustered experiments).
+    dataset : str
+        Dataset name (default ``"cifar10"``).
+    preconditioner : str
+        Preconditioner type (default ``"none"``).
+
+    Returns
+    -------
+    str
+        Canonical filename ending in ``.parquet``.
     """
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
@@ -145,7 +187,7 @@ def make_fname(
     return (
         f"{dataset}_{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
         f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}{prec_tag}"
-        f"_{tx_enc}_{rx_enc}.parquet"
+        f"{extra_tag}_{tx_enc}_{rx_enc}.parquet"
     )
 
 
@@ -155,17 +197,18 @@ def ch_dims(N: int) -> tuple[int, int]:
     Parameters
     ----------
     N : int
-        Total number of meta-atoms or channel elements to factorize.
+        Total channel dimension to factorize.
 
     Returns
     -------
-    tuple of int
-        ``(n_x, n_y)`` such that ``n_x * n_y == N`` and the aspect ratio
-        ``n_x / n_y`` is as close to 1 as possible.
+    tuple[int, int]
+        ``(n_x, n_y)`` with ``n_x >= n_y`` and ``n_x * n_y == N``.
     """
+    # Search downward from sqrt(N) to find the largest divisor
     for n_y in range(int(N**0.5), 0, -1):
         if N % n_y == 0:
             return N // n_y, n_y
+    # Prime N: return N×1
     return N, 1
 
 
@@ -175,21 +218,5 @@ def pct(v: float | None) -> float | None:
 
 
 def neural_str(label: str, acc_pct: float | None) -> str:
-    """Format an optional neural-classifier accuracy for console logging.
-
-    Returns an empty string when the neural classifier was not available so
-    the caller does not need to branch.
-    """
-    return f" {label}={acc_pct:.2f}%" if acc_pct is not None else ""
-
-
-if __name__ == "__main__":
-    print(
-        f"make_fname example : {make_fname('PPFE', 42, 10, 32, 20, None, 'vit_b16', 'vit_b16', n_clusters=20)}"
-    )
-    print(f"ch_dims(20)        : {ch_dims(20)}")
-    print(f"ch_dims(192)       : {ch_dims(192)}")
-    print(f"snr_tag(None)      : {snr_tag(None)!r}")
-    print(f"pct(0.875)         : {pct(0.875)}")
-    print(f"neural_str('acc', 92.3) : {neural_str('acc', 92.3)!r}")
-    print(f"neural_str('acc', None) : {neural_str('acc', None)!r}")
+    """Format an optional neural-classifier accuracy for console logging."""
+    return f" {label}={acc_pct * 100:.2f}%" if acc_pct is not None else ""

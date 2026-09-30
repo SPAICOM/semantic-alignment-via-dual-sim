@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.disjoint_4sim.run_disjoint_4sim
+_target_: semantic_alignment.sim.original.disjoint_4sim.Disjoint4SIM.run_sim
 sim_type: disjoint_4sim
 
 wavelength: 0.005
@@ -14,3 +14,5 @@ snr: null
 
 name: disjoint_4sim_layers
 result_subdir: disjoint_4sim_layers
+channel_type: rayleigh
+rice_factor_db: null

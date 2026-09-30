@@ -1,9 +1,9 @@
 """Deep-unrolling comparison entry point — Lightning version.
 
-Builds SIM(s), unrolled model(s), computes the classic (Adam-on-phases)
-baseline averaged over classic_seeds, then trains the unrolled step sizes
-on batches of random MIMO channels via ``UnrolledLightning``,
-and evaluates probe/neural accuracy on test channels.
+Builds SIM(s) and unrolled model(s), trains the unrolled step sizes on
+batches of random MIMO channels via ``UnrolledLightning``, and evaluates
+probe/neural accuracy on test channels.  Classic Adam baselines are run
+separately via ``just curve`` (classification.py with save_curve=true).
 """
 
 import os
@@ -16,33 +16,38 @@ import lightning as lg
 import polars as pl
 import torch
 from lightning import Trainer
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, TensorDataset
 
 import wandb
-from semantic_alignment.data.h_channel import HChannelDataModule
-from semantic_alignment.data.semasia import load_semasia, select_pilots
+from semantic_alignment.data import HChannelDataModule
+from semantic_alignment.data.prepare import prepare_semasia
 from semantic_alignment.evaluation.linear_probe import train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
-from semantic_alignment.experiments._utils import ch_dims, tipology_tag
-from semantic_alignment.experiments.compare_unrolled import (
+from semantic_alignment.sim.original._utils import ch_dims, tipology_tag
+from semantic_alignment.sim.original.disjoint_sym import DisjointSymSIM
+from semantic_alignment.sim.original.joint import JointSIM
+from semantic_alignment.sim.original.optimizers.monosim import (
+    MonoSIMoptimizer,
+    MonoSIMoptimizerTorch,
+)
+from semantic_alignment.sim.unrolled import (
+    DisjointAsymUnrolledSCA,
+    DisjointSymUnrolledSCA,
+    DualSIMUnrolledSCA,
+    MonoSIMUnrolledSCA,
+)
+from semantic_alignment.sim.unrolled.runner import (
     CompareUnrolledCallback,
     UnrolledLightning,
-    _classic_joint,
-    _classic_mono,
+    _build_mono_sims,
     _make_eval_fn,
     _precompute_test_data,
 )
-from semantic_alignment.experiments.joint import build_joint_sim
-from semantic_alignment.sim.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
-from semantic_alignment.sim.unrolled import DualSIMUnrolledSCA, MonoSIMUnrolledSCA
-from semantic_alignment.utils.alignment_utils import ppfe, ridge_regression
-from semantic_alignment.utils.utils import (
-    complex_compressed_tensor,
-    complex_gaussian_matrix,
-    prewhiten,
-)
+from semantic_alignment.utils import channel as _channel_fn
+from semantic_alignment.utils import pack_complex, rician_los, standardize_channel
 
 torch.set_float32_matmul_precision("high")
 
@@ -55,22 +60,36 @@ def _setup(cfg: DictConfig) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lg.seed_everything(seed, workers=True)
 
-    data = load_semasia(
+    is_csi = cfg.sim.get("sim_type", "") in ("disjoint_sym", "disjoint_4sim")
+    if cfg.alignment.type == "PPFE":
+        ch_dim_cfg = cfg.sim.get("channel_dim", None)
+        n_k = int(ch_dim_cfg) if ch_dim_cfg is not None and is_csi else cfg.alignment.n_clusters
+    else:
+        n_k = None
+
+    prep = prepare_semasia(
         hf_name=cfg.datasets.hf_name,
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
+        train_label_size=cfg.data.train_label_size,
+        alignment_type=cfg.alignment.type,
+        lmb=cfg.alignment.get("lmb", 1e-3),
+        n_clusters=n_k,
+        n_proto=cfg.alignment.get("n_proto", None),
+        keep_csi_frames=is_csi,
+        method=cfg.data.method,
+        grouping=cfg.data.grouping,
         label_col=cfg.datasets.label_col,
         train_split=cfg.datasets.train_split,
         test_split=cfg.datasets.test_split,
         save_to_disk=cfg.data.save_to_disk,
-    )
-    pilots = select_pilots(
-        data.train,
-        train_label_size=cfg.data.train_label_size,
-        method=cfg.data.method,
-        grouping=cfg.data.grouping,
         seed=seed,
+        device=device,
     )
+    data = prep.data
+    L_in, mu_in, L_out, mu_out = prep.L_in, prep.mu_in, prep.L_out, prep.mu_out
+    A_target, F_T, F_R_H = prep.A_target, prep.F_T, prep.F_R_H
+
     clf_probe = train_linear_probe(
         data.train.z_rx.to(device),
         data.train.labels.to(device),
@@ -90,40 +109,18 @@ def _setup(cfg: DictConfig) -> dict:
         shuffle=False,
     )
 
-    input_c = complex_compressed_tensor(pilots.z_tx.T, device=device)
-    output_c = complex_compressed_tensor(pilots.z_rx.T, device=device)
-    input_w, L_in, mu_in = prewhiten(input_c, device=device)
-    output_w, L_out, mu_out = prewhiten(output_c, device=device)
-
-    if cfg.alignment.type == "Linear":
-        A_target = ridge_regression(input_w, output_w, lmb=cfg.alignment.lmb)
-        F_T, F_R_H = None, None
-    else:
-        is_csi = cfg.sim.get("sim_type", "") in ("disjoint_sym", "disjoint_4sim")
-        n_k = (
-            int(cfg.sim.get("channel_dim", None))
-            if cfg.sim.get("channel_dim", None) is not None and is_csi
-            else cfg.alignment.n_clusters
-        )
-        F_T, F_R_H = ppfe(
-            input_w,
-            output_w,
-            output_real=pilots.z_rx,
-            n_clusters=n_k,
-            n_proto=cfg.alignment.n_proto,
-            seed=seed,
-        )
-        A_target = F_R_H @ F_T
-        if not is_csi:
-            F_T, F_R_H = None, None
-
     Z_test, labels = _precompute_test_data(test_loader, A_target, device)
-    Z_test = complex_compressed_tensor(Z_test, device=device)
+    Z_test = pack_complex(Z_test, device=device)
     Z_test = torch.linalg.solve_triangular(L_in, Z_test - mu_in, upper=False)
 
     ch_dim_cfg = cfg.sim.get("channel_dim", None)
     h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
-    H_mimo = complex_gaussian_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+    H_mimo = _channel_fn(
+        h_dim,
+        h_dim,
+        channel_type=cfg.training.get("channel_type", "rayleigh"),
+        rice_factor_db=cfg.training.get("rice_factor_db", None),
+    ).to(device)
 
     return dict(
         seed=seed,
@@ -141,8 +138,8 @@ def _setup(cfg: DictConfig) -> dict:
         clf_neural=clf_neural,
         strategy_name=cfg.alignment.type,
         lr=cfg.training.get("lr", 0.1),
-        lr_tx=cfg.training.get("lr_tx", 0.1),
-        lr_rx=cfg.training.get("lr_rx", 0.2),
+        lr_tx=cfg.alignment.get("lr_tx", cfg.training.get("lr_tx", 0.1)),
+        lr_rx=cfg.alignment.get("lr_rx", cfg.training.get("lr_rx", 0.2)),
         tx_enc=cfg.data.tx_enc,
         rx_enc=cfg.data.rx_enc,
         F_T=F_T,
@@ -150,19 +147,52 @@ def _setup(cfg: DictConfig) -> dict:
     )
 
 
-def _out_path(cfg: DictConfig, coup: str) -> Path:
+def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
     mode = cfg.sim.get("sim_type", "joint")
     tip = tipology_tag(mode)
     result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
-    K = int(cfg.training.get("K", 200))
     L = cfg.sim.get("L", 25)
     M_int = cfg.sim.get("M_int", 32)
+    ws_t = cfg.training.get("warm_start_t", 0)
+    ws_type = str(cfg.training.get("warm_start_type", "identity"))
+    ws_init_tag = "none" if ws_t == 0 else ws_type
+    lr_w_tag = f"_lrw{lr_w}" if lr_w is not None else ""
+    ch_type = cfg.training.get("channel_type", "rayleigh")
+    kdb = cfg.training.get("rice_factor_db", None)
+    h0v = cfg.training.get("h0_var", None)
+    if ch_type == "rician":
+        ch_tag = f"_rician{kdb}dB"
+    elif h0v is not None:
+        ch_tag = f"_rayleigh_h0var{h0v}"
+    else:
+        ch_tag = "_rayleigh"
     fname = (
         f"{cfg.datasets.hf_name}_unrolled_{cfg.alignment.type}"
         f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
+        f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}"
         f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
     )
     return _RESULTS / result_subdir / fname
+
+
+def _steps_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
+    """Companion .steps.pt file for progressive training (step state dict)."""
+    return _out_path(cfg, coup, K, lr_w).with_suffix(".steps.pt")
+
+
+def _copy_progressive_init(model, state_T: dict, state_R: dict, K_prev: int) -> None:
+    """Copy first K_prev layers from saved step states into model.step_T / step_R.
+
+    All learnable parameters in UnrolledStep subclasses are indexed along dim 0
+    as the K dimension, so slicing [:K_prev] copies exactly the trained layers.
+    """
+    with torch.no_grad():
+        for name, dst_p in model.step_T.named_parameters():
+            if name in state_T:
+                dst_p.data[:K_prev].copy_(state_T[name])
+        for name, dst_p in model.step_R.named_parameters():
+            if name in state_R:
+                dst_p.data[:K_prev].copy_(state_R[name])
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -171,6 +201,8 @@ def main(cfg: DictConfig) -> None:
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
+    lg.seed_everything(cfg.training.seed, workers=True)
+
     mode = cfg.sim.get("sim_type", "joint")
     print(
         f" seed={cfg.training.seed} | mode={mode} | "
@@ -178,17 +210,54 @@ def main(cfg: DictConfig) -> None:
         f" | K={cfg.training.get('K', 200)}"
     )
 
+    ch_type = cfg.training.get("channel_type", "rayleigh")
+    kdb = cfg.training.get("rice_factor_db", None)
+    h0v = cfg.training.get("h0_var", None)
+
     ctx = _setup(cfg)
     device = ctx["device"]
     A_target = ctx["A_target"]
     H_mimo = ctx["H_mimo"]
     strategy_name = ctx["strategy_name"]
-    lr = ctx["lr"]
     lr_tx = ctx["lr_tx"]
     lr_rx = ctx["lr_rx"]
-    K = int(cfg.training.get("K", 200))
-    constructive = cfg.sim.get("constructive", False)
+    K_default = int(cfg.training.get("K", 30))
+    K_list_cfg = list(cfg.training.get("K_list", []))
+    K_list = [int(k) for k in K_list_cfg] if K_list_cfg else [K_default]
+    lr_w_cfg = cfg.training.get("lr_w", 1e-3)
+    try:
+        lr_w_list = [float(v) for v in lr_w_cfg]
+        if len(lr_w_list) != len(K_list):
+            raise ValueError(
+                f"lr_w list length ({len(lr_w_list)}) must match K_list length ({len(K_list)})"
+            )
+    except TypeError:
+        lr_w_list = [float(lr_w_cfg)] * len(K_list)
 
+    lr_w_prog_cfg = cfg.training.get("lr_w_progressive", None)
+    if lr_w_prog_cfg is None:
+        lr_w_progressive_list = lr_w_list
+    else:
+        try:
+            lr_w_progressive_list = [float(v) for v in lr_w_prog_cfg]
+            if len(lr_w_progressive_list) != len(K_list):
+                raise ValueError(
+                    f"lr_w_progressive list length ({len(lr_w_progressive_list)}) must match K_list length ({len(K_list)})"
+                )
+        except TypeError:
+            lr_w_progressive_list = [float(lr_w_prog_cfg)] * len(K_list)
+    constructive = cfg.sim.get("constructive", False)
+    _ch_type = cfg.training.get("channel_type", "rayleigh")
+    _kdb = cfg.training.get("rice_factor_db", None)
+    _h0v = cfg.training.get("h0_var", None)
+    if _ch_type == "rician":
+        ch_tag = f"_rician{_kdb}dB"
+    elif _h0v is not None:
+        ch_tag = f"_rayleigh_h0var{_h0v}"
+    else:
+        ch_tag = "_rayleigh"
+
+    print(f" K_list={K_list}, lr_w_list={lr_w_list}, lr_w_progressive_list={lr_w_progressive_list}")
     slayer = cfg.sim.wavelength * cfg.sim.slayer_multiplier
     dx = cfg.sim.wavelength / cfg.sim.spacing_divisor
     L = cfg.sim.get("L", 25)
@@ -206,7 +275,7 @@ def main(cfg: DictConfig) -> None:
     # ---- Mode-specific build + classic baseline + training ----
 
     if mode == "joint":
-        sim = build_joint_sim(
+        sim = JointSIM.build_model(
             L,
             M_int,
             cfg.sim.wavelength,
@@ -223,31 +292,38 @@ def main(cfg: DictConfig) -> None:
         )
 
         n_R, n_T = H_mimo.shape[0], H_mimo.shape[1]
+        _ch_type_tr = cfg.training.get("channel_type", "rayleigh")
+        H_mimo = standardize_channel(H_mimo, channel_type=_ch_type_tr)
 
-        # Classic baseline on 6 seeds
+        # Classic baseline on multiple seeds — alternating Adam with k_T=1 k_R=1
+        K_max = max(K_list)
         _all_cp, _all_cn = [], []
         for _cs in cfg.training.get("classic_seeds", [cfg.training.seed]):
             lg.seed_everything(_cs)
-            _H_cs = complex_gaussian_matrix(0, 1, size=(n_R, n_T)).to(device)
-            _s = {"probe": [], "neural": []}
-            # Extract W/sizes from a throwaway model
-            _tmp = DualSIMUnrolledSCA(
-                sim, K, coupling=coupling_list[0], init_w=cfg.training.get("init_w", 0.1)
-            ).to(device)
-            _W_T, _W_R = _tmp._get_W_T(), _tmp._get_W_R()
-            _sz_T, _sz_R = _tmp.sizes_T, _tmp.sizes_R
-            del _tmp
-            _classic_joint(
-                _W_T,
-                _W_R,
-                _sz_T,
-                _sz_R,
-                _H_cs,
+            _H_cs = standardize_channel(
+                _channel_fn(
+                    n_R,
+                    n_T,
+                    channel_type=_ch_type_tr,
+                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                ).to(device),
+                channel_type=_ch_type_tr,
+            )
+            _s: dict[str, list] = {"probe": [], "neural": []}
+            with torch.no_grad():
+                for p in sim.xi_T:
+                    p.zero_()
+                for p in sim.xi_R:
+                    p.zero_()
+            sim.optimize_alternating(
                 A_target,
-                K,
-                lr_tx,
-                lr_rx,
-                _make_eval_fn(
+                _H_cs,
+                max_iters=K_max * 2,
+                k_T=1,
+                k_R=1,
+                lr_tx=lr_tx,
+                lr_rx=lr_rx,
+                eval_fn=_make_eval_fn(
                     ctx["Z_test"],
                     ctx["labels"],
                     ctx["clf"],
@@ -257,28 +333,73 @@ def main(cfg: DictConfig) -> None:
                     device,
                     _s,
                 ),
-                device,
             )
             _all_cp.append(_s["probe"])
             _all_cn.append(_s["neural"])
         lg.seed_everything(cfg.training.seed)
+        classic_probe_mean = torch.stack([torch.tensor(c) for c in _all_cp]).mean(0).tolist()
+        _classic_neural_valid = _all_cn[0][0] is not None if _all_cn else False
+        classic_neural_mean = (
+            torch.stack([torch.tensor(c) for c in _all_cn]).mean(0).tolist()
+            if _classic_neural_valid
+            else None
+        )
 
-        classic_probe = _all_cp
-        classic_neural = _all_cn if _all_cn[0][0] is not None else None
-        classic_probe_mean = torch.stack([torch.tensor(c) for c in classic_probe]).mean(0).tolist()
-        classic_neural_mean = None
-        if classic_neural is not None:
-            classic_neural_mean = (
-                torch.stack([torch.tensor(c) for c in classic_neural]).mean(0).tolist()
+        # Pre-compute warm-start phases once for all coupling variants
+        ws_t = cfg.training.get("warm_start_t", 0)
+        ws_type = str(cfg.training.get("warm_start_type", "identity"))
+        ws_init_tag = "none" if ws_t == 0 else ws_type
+        ws_phT, ws_phR = None, None
+        if ws_t > 0:
+            _ch_type_ws = cfg.training.get("channel_type", "rayleigh")
+            match ws_type:
+                case "average":
+                    _g_avg = torch.Generator().manual_seed(cfg.training.seed + 999)
+                    match _ch_type_ws:
+                        case "rician":
+                            H_ws = standardize_channel(
+                                rician_los(n_R, n_T, generator=_g_avg).to(device),
+                                channel_type="rician",
+                            )
+                        case _ if cfg.training.get("h0_var", None) is not None:
+                            H_ws = _channel_fn(
+                                n_R, n_T, channel_type=_ch_type_ws, generator=_g_avg
+                            ).to(device)
+                        case _:
+                            H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
+                case "only_semantic":
+                    H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
+                case _:
+                    gen = torch.Generator().manual_seed(int(ws_type))
+                    H_ws = _channel_fn(
+                        n_R,
+                        n_T,
+                        channel_type=_ch_type_ws,
+                        rice_factor_db=cfg.training.get("rice_factor_db", None),
+                        generator=gen,
+                    ).to(device)
+            with torch.no_grad():
+                for p in sim.xi_T:
+                    p.zero_()
+                for p in sim.xi_R:
+                    p.zero_()
+            sim.optimize_alternating(
+                A_target,
+                H_ws,
+                max_iters=ws_t,
+                lr_tx=lr_tx,
+                lr_rx=lr_rx,
             )
+            ws_phT = [p.data.clone() for p in sim.xi_T]
+            ws_phR = [p.data.clone() for p in sim.xi_R]
+            with torch.no_grad():
+                for p in sim.xi_T:
+                    p.zero_()
+                for p in sim.xi_R:
+                    p.zero_()
 
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Joint coupling='{coup}'\n{'=' * 60}")
-
-            out = _out_path(cfg, coup)
-            if out.exists():
-                print(f" Already done: {out.name} — skipping.")
-                continue
 
             conv_kwargs = {}
             if coup in ("conv", "conv2d"):
@@ -293,90 +414,127 @@ def main(cfg: DictConfig) -> None:
                     k_layer_s=cfg.training.get("k_layer_s", None),
                     reg_s_mode=cfg.training.get("reg_s_mode", "none"),
                 )
-            model = DualSIMUnrolledSCA(
-                sim,
-                K,
-                coupling=coup,
-                init_w=cfg.training.get("init_w", 0.1),
-                innovation_norm=cfg.training.get("innovation_norm", "rms"),
-                innovation_mode=cfg.training.get("innovation_mode", "autograd"),
-                momentum=cfg.training.get("momentum", True),
-                init_mu=cfg.training.get("init_mu", 0.9),
-                learn_S=cfg.training.get("learn_S", False),
-                **conv_kwargs,
-            ).to(device)
 
-            dm = HChannelDataModule(
-                n_R=n_R,
-                n_T=n_T,
-                n_total=cfg.training.get("n_channels", 10000),
-                batch_size=cfg.training.get("batch_size", 32),
-                train_ratio=cfg.training.get("train_ratio", 0.7),
-                val_ratio=cfg.training.get("val_ratio", 0.15),
-                seed=cfg.training.seed + 999,
-            )
-            dm.setup()
+            training_type = cfg.training.get("training_type", "independent")
+            prev_step_state: dict | None = None
+            prev_K: int | None = None
 
-            lightning = UnrolledLightning(
-                mode="joint",
-                A_target=A_target,
-                K=K,
-                unrolled_model=model,
-                lr_w=cfg.training.get("lr_w", 1e-2),
-                lr_schedule=cfg.training.get("lr_schedule", "cosine"),
-                grad_clip=cfg.training.get("grad_clip", 1.0),
-                epochs=epochs,
-                supervision=cfg.training.get("supervision", "final"),
-                weight_ratio=cfg.training.get("weight_ratio", 1.0),
-                learn_S=cfg.training.get("learn_S", False),
-                reg_S=cfg.training.get("reg_S", 0.01),
-                Z_test=ctx["Z_test"],
-                labels=ctx["labels"],
-                W_probe=ctx["clf"],
-                clf_neural=ctx["clf_neural"],
-                L_out=ctx["L_out"],
-                mu_out=ctx["mu_out"],
-            )
+            for k_idx, K in enumerate(K_list):
+                # Progressive steps (k_idx > 0) use lr_w_progressive_list if set.
+                is_progressive_k = training_type == "progressive" and k_idx > 0
+                lr_w = lr_w_progressive_list[k_idx] if is_progressive_k else lr_w_list[k_idx]
+                out = _out_path(cfg, coup, K, lr_w)
+                if out.exists():
+                    print(f" Already done: {out.name} — skipping.")
+                    if training_type == "progressive":
+                        sp = _steps_path(cfg, coup, K, lr_w)
+                        if sp.exists():
+                            ckpt = torch.load(sp, map_location=device, weights_only=True)
+                            prev_step_state = {"step_T": ckpt["step_T"], "step_R": ckpt["step_R"]}
+                            prev_K = K
+                    continue
 
-            eval_callback = CompareUnrolledCallback(
-                H_classic=H_mimo,
-                Z_test=ctx["Z_test"],
-                labels=ctx["labels"],
-                W_probe=ctx["clf"],
-                clf_neural=ctx["clf_neural"],
-                L_out=ctx["L_out"],
-                mu_out=ctx["mu_out"],
-                classic_probe_curve=classic_probe_mean,
-                classic_neural_curve=classic_neural_mean,
-            )
+                model = DualSIMUnrolledSCA(
+                    sim,
+                    K,
+                    coupling=coup,
+                    init_w=cfg.training.get("init_w", 0.1),
+                    innovation_norm=cfg.training.get("innovation_norm", "rms"),
+                    innovation_mode=cfg.training.get("innovation_mode", "autograd"),
+                    momentum=cfg.training.get("momentum", True),
+                    init_mu=cfg.training.get("init_mu", 0.9),
+                    learn_S=cfg.training.get("learn_S", False),
+                    phases_T_init=ws_phT,
+                    phases_R_init=ws_phR,
+                    gradient_checkpointing=cfg.training.get("gradient_checkpointing", False),
+                    **conv_kwargs,
+                ).to(device)
 
-            logger = WandbLogger(
-                project=cfg.training.get("wandb_project", "compare_unrolled"),
-                name=f"joint_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}",
-            )
+                if training_type == "progressive" and prev_step_state is not None:
+                    _copy_progressive_init(
+                        model, prev_step_state["step_T"], prev_step_state["step_R"], prev_K
+                    )
+                    print(f"  Progressive init: copied K={prev_K} → K={K} step parameters.")
 
-            trainer = Trainer(
-                max_epochs=epochs,
-                logger=logger,
-                accelerator="auto",
-                devices=1,
-                precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
-                log_every_n_steps=10,
-                gradient_clip_val=cfg.training.get("grad_clip", 1.0),
-                callbacks=[eval_callback],
-            )
+                dm = HChannelDataModule(
+                    n_R=n_R,
+                    n_T=n_T,
+                    n_total=cfg.training.get("n_channels", 10000),
+                    batch_size=cfg.training.get("batch_size", 32),
+                    train_ratio=cfg.training.get("train_ratio", 0.7),
+                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    seed=cfg.training.seed + 999,
+                    h0_var=cfg.training.get("h0_var", None),
+                    channel_type=cfg.training.get("channel_type", "rayleigh"),
+                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                )
+                dm.setup()
 
-            trainer.fit(lightning, dm)
-            trainer.test(lightning, dm)
-            wandb.finish()
+                lightning = UnrolledLightning(
+                    mode="joint",
+                    A_target=A_target,
+                    K=K,
+                    unrolled_model=model,
+                    lr_w=lr_w,
+                    lr_schedule=cfg.training.get("lr_schedule", "cosine"),
+                    grad_clip=cfg.training.get("grad_clip", 1.0),
+                    epochs=epochs,
+                    supervision=cfg.training.get("supervision", "final"),
+                    weight_ratio=cfg.training.get("weight_ratio", 1.0),
+                    learn_S=cfg.training.get("learn_S", False),
+                    reg_S=cfg.training.get("reg_S", 0.01),
+                    K_prev=prev_K if (training_type == "progressive" and prev_K is not None) else 0,
+                    lr_inherited_ratio=cfg.training.get("lr_inherited_ratio", 1.0),
+                    warmup_new_layers=cfg.training.get("warmup_new_layers", 0),
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
 
-            test_probe = lightning._test_probe_curves
-            test_neural = lightning._test_neural_curves
+                eval_callback = CompareUnrolledCallback(
+                    H_classic=H_mimo,
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                    classic_probe_curve=classic_probe_mean[:K],
+                    classic_neural_curve=classic_neural_mean[:K] if classic_neural_mean else None,
+                )
 
-            # Save parquet
-            out.parent.mkdir(parents=True, exist_ok=True)
-            rows = [
-                {
+                logger = WandbLogger(
+                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    name=f"joint_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}_ws{ws_t}_wsh{ws_init_tag}{ch_tag}",
+                )
+
+                trainer = Trainer(
+                    max_epochs=epochs,
+                    logger=logger,
+                    accelerator="auto",
+                    devices=1,
+                    precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
+                    log_every_n_steps=10,
+                    gradient_clip_val=cfg.training.get("grad_clip", 1.0),
+                    callbacks=[
+                        eval_callback,
+                        ModelCheckpoint(monitor="val/loss", mode="min", save_top_k=1),
+                    ],
+                )
+
+                trainer.fit(lightning, dm)
+                trainer.test(lightning, dm, ckpt_path="best")
+                wandb.finish()
+
+                test_probe = lightning._test_probe_curves
+                test_neural = lightning._test_neural_curves
+
+                init_tag = f"warmstart_{ws_t}_{ws_init_tag}" if ws_t > 0 else "none"
+                classic_seeds_used = cfg.training.get("classic_seeds", [cfg.training.seed])
+                meta = {
                     "seed": cfg.training.seed,
                     "dataset": cfg.datasets.hf_name,
                     "strategy": strategy_name,
@@ -386,31 +544,55 @@ def main(cfg: DictConfig) -> None:
                     "rx_enc": ctx["rx_enc"],
                     "channel_dim": ch_dim,
                     "constructive": True,
-                    "variant": "Classic Adam",
                     "K": K,
-                    "probe_acc": classic_probe,
-                    "neural_acc": classic_neural,
-                },
-                {
-                    "seed": cfg.training.seed,
-                    "dataset": cfg.datasets.hf_name,
-                    "strategy": strategy_name,
-                    "M_int": f"{M_int}x{M_int}",
-                    "L": L,
-                    "tx_enc": ctx["tx_enc"],
-                    "rx_enc": ctx["rx_enc"],
-                    "channel_dim": ch_dim,
-                    "constructive": True,
-                    "variant": f"Unrolled ({coup})",
-                    "K": K,
-                    "probe_acc": test_probe,
-                    "neural_acc": test_neural,
-                },
-            ]
-            pl.DataFrame(rows).write_parquet(out)
-            print(f"Parquet saved → {out}")
-            del model
-            torch.cuda.empty_cache()
+                    "lr_w": lr_w,
+                    "init": init_tag,
+                    "warm_start_type": ws_type if ws_t > 0 else "none",
+                    "channel_type": ch_type,
+                    "rice_factor_db": kdb,
+                    "h0_var": h0v,
+                }
+                rows = [
+                    {
+                        **meta,
+                        "variant": "Classic",
+                        "sample_id": int(s),
+                        "probe_acc": float(_all_cp[i][K - 1]),
+                        "neural_acc": float(_all_cn[i][K - 1]) if _classic_neural_valid else None,
+                    }
+                    for i, s in enumerate(classic_seeds_used)
+                ] + [
+                    {
+                        **meta,
+                        "variant": f"Unrolled ({coup})",
+                        "sample_id": i,
+                        "probe_acc": float(test_probe[i][-1]),
+                        "neural_acc": float(test_neural[i][-1]) if test_neural else None,
+                    }
+                    for i in range(len(test_probe))
+                ]
+
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pl.DataFrame(rows).write_parquet(out)
+                print(f"Parquet saved → {out}")
+
+                if training_type == "progressive":
+                    sp = _steps_path(cfg, coup, K, lr_w)
+                    torch.save(
+                        {
+                            "step_T": {k: v.cpu() for k, v in model.step_T.state_dict().items()},
+                            "step_R": {k: v.cpu() for k, v in model.step_R.state_dict().items()},
+                        },
+                        sp,
+                    )
+                    prev_step_state = {
+                        "step_T": model.step_T.state_dict(),
+                        "step_R": model.step_R.state_dict(),
+                    }
+                    prev_K = K
+
+                del model
+                torch.cuda.empty_cache()
 
     elif mode == "mono":
         mono_sim = MonoSIMoptimizerTorch(
@@ -430,180 +612,418 @@ def main(cfg: DictConfig) -> None:
 
         n_R, n_T = H_mimo.shape[0], H_mimo.shape[1]
 
-        # Classic baseline on 6 seeds
-        _all_cp, _all_cn = [], []
-        for _cs in cfg.training.get("classic_seeds", [cfg.training.seed]):
-            lg.seed_everything(_cs)
-            _H_cs = complex_gaussian_matrix(0, 1, size=(n_R, n_T)).to(device)
-            _s = {"probe": [], "neural": []}
-            _tmp = MonoSIMUnrolledSCA(
-                mono_sim, K, coupling=coupling_list[0], init_w=cfg.training.get("init_w", 0.1)
-            ).to(device)
-            _W_list, _sz = _tmp._get_W(), _tmp.sizes
-            del _tmp
-            _classic_mono(
-                _W_list,
-                _sz,
-                _H_cs,
-                A_target,
-                K,
-                lr,
-                constructive,
-                _make_eval_fn(
-                    ctx["Z_test"],
-                    ctx["labels"],
-                    ctx["clf"],
-                    ctx["clf_neural"],
-                    ctx["L_out"],
-                    ctx["mu_out"],
-                    device,
-                    _s,
-                ),
-                device,
-            )
-            _all_cp.append(_s["probe"])
-            _all_cn.append(_s["neural"])
-        lg.seed_everything(cfg.training.seed)
-
-        classic_probe = _all_cp
-        classic_neural = _all_cn if _all_cn[0][0] is not None else None
-        _cp_t = torch.stack([torch.tensor(c) for c in classic_probe])
-        classic_probe_mean = _cp_t.mean(0).tolist()
-        classic_neural_mean = None
-        if classic_neural is not None:
-            classic_neural_mean = (
-                torch.stack([torch.tensor(c) for c in classic_neural]).mean(0).tolist()
-            )
-
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Mono coupling='{coup}'\n{'=' * 60}")
 
-            out = _out_path(cfg, coup)
-            if out.exists():
-                print(f" Already done: {out.name} — skipping.")
-                continue
+            for K in K_list:
+                out = _out_path(cfg, coup, K)
+                if out.exists():
+                    print(f" Already done: {out.name} — skipping.")
+                    continue
 
-            model = MonoSIMUnrolledSCA(
-                mono_sim,
-                K,
-                coupling=coup,
-                init_w=cfg.training.get("init_w", 0.1),
-                innovation_norm=cfg.training.get("innovation_norm", "rms"),
-                innovation_mode=cfg.training.get("innovation_mode", "autograd"),
-                momentum=cfg.training.get("momentum", True),
-                init_mu=cfg.training.get("init_mu", 0.9),
-                learn_S=cfg.training.get("learn_S", False),
-            ).to(device)
+                model = MonoSIMUnrolledSCA(
+                    mono_sim,
+                    K,
+                    coupling=coup,
+                    init_w=cfg.training.get("init_w", 0.1),
+                    innovation_norm=cfg.training.get("innovation_norm", "rms"),
+                    innovation_mode=cfg.training.get("innovation_mode", "autograd"),
+                    momentum=cfg.training.get("momentum", True),
+                    init_mu=cfg.training.get("init_mu", 0.9),
+                    learn_S=cfg.training.get("learn_S", False),
+                ).to(device)
 
-            dm = HChannelDataModule(
-                n_R=n_R,
-                n_T=n_T,
-                n_total=cfg.training.get("n_channels", 10000),
-                batch_size=cfg.training.get("batch_size", 32),
-                train_ratio=cfg.training.get("train_ratio", 0.7),
-                val_ratio=cfg.training.get("val_ratio", 0.15),
-                seed=cfg.training.seed + 999,
-            )
-            dm.setup()
+                dm = HChannelDataModule(
+                    n_R=n_R,
+                    n_T=n_T,
+                    n_total=cfg.training.get("n_channels", 10000),
+                    batch_size=cfg.training.get("batch_size", 32),
+                    train_ratio=cfg.training.get("train_ratio", 0.7),
+                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    seed=cfg.training.seed + 999,
+                    h0_var=cfg.training.get("h0_var", None),
+                    channel_type=cfg.training.get("channel_type", "rayleigh"),
+                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                )
+                dm.setup()
 
-            lightning = UnrolledLightning(
-                mode="mono",
-                A_target=A_target,
-                K=K,
-                unrolled_model=model,
-                constructive=constructive,
-                lr_w=cfg.training.get("lr_w", 1e-2),
-                lr_schedule=cfg.training.get("lr_schedule", "cosine"),
-                grad_clip=cfg.training.get("grad_clip", 1.0),
-                epochs=epochs,
-                supervision=cfg.training.get("supervision", "final"),
-                weight_ratio=cfg.training.get("weight_ratio", 1.0),
-                learn_S=cfg.training.get("learn_S", False),
-                reg_S=cfg.training.get("reg_S", 0.01),
-                Z_test=ctx["Z_test"],
-                labels=ctx["labels"],
-                W_probe=ctx["clf"],
-                clf_neural=ctx["clf_neural"],
-                L_out=ctx["L_out"],
-                mu_out=ctx["mu_out"],
-            )
+                lightning = UnrolledLightning(
+                    mode="mono",
+                    A_target=A_target,
+                    K=K,
+                    unrolled_model=model,
+                    constructive=constructive,
+                    lr_w=cfg.training.get("lr_w", 1e-2),
+                    lr_schedule=cfg.training.get("lr_schedule", "cosine"),
+                    grad_clip=cfg.training.get("grad_clip", 1.0),
+                    epochs=epochs,
+                    supervision=cfg.training.get("supervision", "final"),
+                    weight_ratio=cfg.training.get("weight_ratio", 1.0),
+                    learn_S=cfg.training.get("learn_S", False),
+                    reg_S=cfg.training.get("reg_S", 0.01),
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
 
-            eval_callback = CompareUnrolledCallback(
-                H_classic=H_mimo,
-                Z_test=ctx["Z_test"],
-                labels=ctx["labels"],
-                W_probe=ctx["clf"],
-                clf_neural=ctx["clf_neural"],
-                L_out=ctx["L_out"],
-                mu_out=ctx["mu_out"],
-                classic_probe_curve=classic_probe_mean,
-                classic_neural_curve=classic_neural_mean,
-            )
+                eval_callback = CompareUnrolledCallback(
+                    H_classic=H_mimo,
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
 
-            logger = WandbLogger(
-                project=cfg.training.get("wandb_project", "compare_unrolled"),
-                name=f"mono_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}",
-            )
+                logger = WandbLogger(
+                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    name=f"mono_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}{ch_tag}",
+                )
 
-            trainer = Trainer(
-                max_epochs=epochs,
-                logger=logger,
-                accelerator="auto",
-                devices=1,
-                precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
-                log_every_n_steps=10,
-                gradient_clip_val=cfg.training.get("grad_clip", 1.0),
-                callbacks=[eval_callback],
-            )
+                trainer = Trainer(
+                    max_epochs=epochs,
+                    logger=logger,
+                    accelerator="auto",
+                    devices=1,
+                    precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
+                    log_every_n_steps=10,
+                    gradient_clip_val=cfg.training.get("grad_clip", 1.0),
+                    callbacks=[
+                        eval_callback,
+                        ModelCheckpoint(monitor="val/loss", mode="min", save_top_k=1),
+                    ],
+                )
 
-            trainer.fit(lightning, dm)
-            trainer.test(lightning, dm)
-            wandb.finish()
+                trainer.fit(lightning, dm)
+                trainer.test(lightning, dm, ckpt_path="best")
+                wandb.finish()
 
-            test_probe = lightning._test_probe_curves
-            test_neural = lightning._test_neural_curves
+                test_probe = lightning._test_probe_curves
+                test_neural = lightning._test_neural_curves
 
-            # Save parquet
-            out.parent.mkdir(parents=True, exist_ok=True)
-            rows = [
-                {
-                    "seed": cfg.training.seed,
-                    "dataset": cfg.datasets.hf_name,
-                    "strategy": strategy_name,
-                    "M_int": f"{M_int}x{M_int}",
-                    "L": L,
-                    "tx_enc": ctx["tx_enc"],
-                    "rx_enc": ctx["rx_enc"],
-                    "channel_dim": ch_dim,
-                    "constructive": constructive,
-                    "variant": "Classic Adam",
-                    "K": K,
-                    "probe_acc": classic_probe,
-                    "neural_acc": classic_neural,
-                },
-                {
-                    "seed": cfg.training.seed,
-                    "dataset": cfg.datasets.hf_name,
-                    "strategy": strategy_name,
-                    "M_int": f"{M_int}x{M_int}",
-                    "L": L,
-                    "tx_enc": ctx["tx_enc"],
-                    "rx_enc": ctx["rx_enc"],
-                    "channel_dim": ch_dim,
-                    "constructive": constructive,
-                    "variant": f"Unrolled ({coup})",
-                    "K": K,
-                    "probe_acc": test_probe,
-                    "neural_acc": test_neural,
-                },
-            ]
-            pl.DataFrame(rows).write_parquet(out)
-            print(f"Parquet saved → {out}")
-            del model
-            torch.cuda.empty_cache()
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pl.DataFrame(
+                    [
+                        {
+                            "seed": cfg.training.seed,
+                            "dataset": cfg.datasets.hf_name,
+                            "strategy": strategy_name,
+                            "M_int": f"{M_int}x{M_int}",
+                            "L": L,
+                            "tx_enc": ctx["tx_enc"],
+                            "rx_enc": ctx["rx_enc"],
+                            "channel_dim": ch_dim,
+                            "constructive": constructive,
+                            "variant": f"Unrolled ({coup})",
+                            "K": K,
+                            "probe_acc": test_probe,
+                            "neural_acc": test_neural,
+                            "channel_type": ch_type,
+                            "rice_factor_db": kdb,
+                            "h0_var": h0v,
+                        }
+                    ]
+                ).write_parquet(out)
+                print(f"Parquet saved → {out}")
+                del model
+                torch.cuda.empty_cache()
+
+    elif mode in ("disjoint_sym", "disjoint_sym_c"):
+        constructive = mode == "disjoint_sym_c"
+        tx_sim, rx_sim = _build_mono_sims(
+            L,
+            M_int,
+            tx_in_x,
+            tx_in_y,
+            ch_x,
+            ch_y,
+            rx_out_x,
+            rx_out_y,
+            cfg.sim.wavelength,
+            slayer,
+            dx,
+            device,
+        )
+        n_R = n_T = ch_dim
+
+        tx_target, rx_target = DisjointSymSIM.build_alignment_targets(
+            A_target,
+            ch_dim,
+            strategy_name,
+            device,
+            F_T=ctx["F_T"],
+            F_R_H=ctx["F_R_H"],
+        )
+
+        for coup in coupling_list:
+            print(f"\n{'=' * 60}\n DisjointSym coupling='{coup}'\n{'=' * 60}")
+
+            for K in K_list:
+                out = _out_path(cfg, coup, K)
+                if out.exists():
+                    print(f" Already done: {out.name} — skipping.")
+                    continue
+
+                model = DisjointSymUnrolledSCA(
+                    tx_sim,
+                    rx_sim,
+                    K,
+                    constructive=constructive,
+                    coupling=coup,
+                    init_w=cfg.training.get("init_w", 0.1),
+                    innovation_norm=cfg.training.get("innovation_norm", "rms"),
+                    momentum=cfg.training.get("momentum", True),
+                    init_mu=cfg.training.get("init_mu", 0.9),
+                    learn_S=cfg.training.get("learn_S", False),
+                ).to(device)
+
+                dm = HChannelDataModule(
+                    n_R=n_R,
+                    n_T=n_T,
+                    n_total=cfg.training.get("n_channels", 10000),
+                    batch_size=cfg.training.get("batch_size", 32),
+                    train_ratio=cfg.training.get("train_ratio", 0.7),
+                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    seed=cfg.training.seed + 999,
+                    precompute_svd=True,
+                    channel_type=cfg.training.get("channel_type", "rayleigh"),
+                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                )
+                dm.setup()
+
+                lightning = UnrolledLightning(
+                    mode="disjoint_sym",
+                    A_target=A_target,
+                    tx_target=tx_target,
+                    rx_target=rx_target,
+                    K=K,
+                    unrolled_model=model,
+                    constructive=constructive,
+                    lr_w=cfg.training.get("lr_w", 1e-2),
+                    lr_schedule=cfg.training.get("lr_schedule", "cosine"),
+                    grad_clip=cfg.training.get("grad_clip", 1.0),
+                    epochs=epochs,
+                    supervision=cfg.training.get("supervision", "final"),
+                    weight_ratio=cfg.training.get("weight_ratio", 1.0),
+                    learn_S=cfg.training.get("learn_S", False),
+                    reg_S=cfg.training.get("reg_S", 0.01),
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
+
+                eval_callback = CompareUnrolledCallback(
+                    H_classic=H_mimo,
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
+
+                logger = WandbLogger(
+                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    name=f"disjoint_sym_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{ch_tag}",
+                )
+
+                trainer = Trainer(
+                    max_epochs=epochs,
+                    logger=logger,
+                    accelerator="auto",
+                    devices=1,
+                    precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
+                    log_every_n_steps=10,
+                    gradient_clip_val=cfg.training.get("grad_clip", 1.0),
+                    callbacks=[
+                        eval_callback,
+                        ModelCheckpoint(monitor="val/loss", mode="min", save_top_k=1),
+                    ],
+                )
+
+                trainer.fit(lightning, dm)
+                trainer.test(lightning, dm, ckpt_path="best")
+                wandb.finish()
+
+                test_probe = lightning._test_probe_curves
+                test_neural = lightning._test_neural_curves
+
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pl.DataFrame(
+                    [
+                        {
+                            "seed": cfg.training.seed,
+                            "dataset": cfg.datasets.hf_name,
+                            "strategy": strategy_name,
+                            "M_int": f"{M_int}x{M_int}",
+                            "L": L,
+                            "tx_enc": ctx["tx_enc"],
+                            "rx_enc": ctx["rx_enc"],
+                            "channel_dim": ch_dim,
+                            "constructive": constructive,
+                            "variant": f"Unrolled ({coup})",
+                            "K": K,
+                            "probe_acc": test_probe,
+                            "neural_acc": test_neural,
+                            "channel_type": ch_type,
+                            "rice_factor_db": kdb,
+                            "h0_var": h0v,
+                        }
+                    ]
+                ).write_parquet(out)
+                print(f"Parquet saved → {out}")
+                del model
+                torch.cuda.empty_cache()
+
+    elif mode == "disjoint_asym":
+        alignment_side = cfg.sim.get("alignment_side", "tx")
+        tx_sim, rx_sim = _build_mono_sims(
+            L,
+            M_int,
+            tx_in_x,
+            tx_in_y,
+            ch_x,
+            ch_y,
+            rx_out_x,
+            rx_out_y,
+            cfg.sim.wavelength,
+            slayer,
+            dx,
+            device,
+        )
+        n_R = n_T = ch_dim
+
+        for coup in coupling_list:
+            print(f"\n{'=' * 60}\n DisjointAsym coupling='{coup}'\n{'=' * 60}")
+
+            for K in K_list:
+                out = _out_path(cfg, coup, K)
+                if out.exists():
+                    print(f" Already done: {out.name} — skipping.")
+                    continue
+
+                model = DisjointAsymUnrolledSCA(
+                    tx_sim,
+                    rx_sim,
+                    K,
+                    constructive=constructive,
+                    alignment_side=alignment_side,
+                    coupling=coup,
+                    init_w=cfg.training.get("init_w", 0.1),
+                    innovation_norm=cfg.training.get("innovation_norm", "rms"),
+                    momentum=cfg.training.get("momentum", True),
+                    init_mu=cfg.training.get("init_mu", 0.9),
+                    learn_S=cfg.training.get("learn_S", False),
+                ).to(device)
+
+                dm = HChannelDataModule(
+                    n_R=n_R,
+                    n_T=n_T,
+                    n_total=cfg.training.get("n_channels", 10000),
+                    batch_size=cfg.training.get("batch_size", 32),
+                    train_ratio=cfg.training.get("train_ratio", 0.7),
+                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    seed=cfg.training.seed + 999,
+                    h0_var=cfg.training.get("h0_var", None),
+                    channel_type=cfg.training.get("channel_type", "rayleigh"),
+                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                )
+                dm.setup()
+
+                lightning = UnrolledLightning(
+                    mode="disjoint_asym",
+                    A_target=A_target,
+                    K=K,
+                    unrolled_model=model,
+                    constructive=constructive,
+                    lr_w=cfg.training.get("lr_w", 1e-2),
+                    lr_schedule=cfg.training.get("lr_schedule", "cosine"),
+                    grad_clip=cfg.training.get("grad_clip", 1.0),
+                    epochs=epochs,
+                    supervision=cfg.training.get("supervision", "final"),
+                    weight_ratio=cfg.training.get("weight_ratio", 1.0),
+                    learn_S=cfg.training.get("learn_S", False),
+                    reg_S=cfg.training.get("reg_S", 0.01),
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
+
+                eval_callback = CompareUnrolledCallback(
+                    H_classic=H_mimo,
+                    Z_test=ctx["Z_test"],
+                    labels=ctx["labels"],
+                    W_probe=ctx["clf"],
+                    clf_neural=ctx["clf_neural"],
+                    L_out=ctx["L_out"],
+                    mu_out=ctx["mu_out"],
+                )
+
+                logger = WandbLogger(
+                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    name=f"disjoint_asym_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{ch_tag}",
+                )
+
+                trainer = Trainer(
+                    max_epochs=epochs,
+                    logger=logger,
+                    accelerator="auto",
+                    devices=1,
+                    precision="bf16-mixed" if cfg.training.get("bf16", False) else "32-true",
+                    log_every_n_steps=10,
+                    gradient_clip_val=cfg.training.get("grad_clip", 1.0),
+                    callbacks=[
+                        eval_callback,
+                        ModelCheckpoint(monitor="val/loss", mode="min", save_top_k=1),
+                    ],
+                )
+
+                trainer.fit(lightning, dm)
+                trainer.test(lightning, dm, ckpt_path="best")
+                wandb.finish()
+
+                test_probe = lightning._test_probe_curves
+                test_neural = lightning._test_neural_curves
+
+                out.parent.mkdir(parents=True, exist_ok=True)
+                pl.DataFrame(
+                    [
+                        {
+                            "seed": cfg.training.seed,
+                            "dataset": cfg.datasets.hf_name,
+                            "strategy": strategy_name,
+                            "M_int": f"{M_int}x{M_int}",
+                            "L": L,
+                            "tx_enc": ctx["tx_enc"],
+                            "rx_enc": ctx["rx_enc"],
+                            "channel_dim": ch_dim,
+                            "constructive": constructive,
+                            "variant": f"Unrolled ({coup})",
+                            "K": K,
+                            "probe_acc": test_probe,
+                            "neural_acc": test_neural,
+                            "channel_type": ch_type,
+                            "rice_factor_db": kdb,
+                            "h0_var": h0v,
+                        }
+                    ]
+                ).write_parquet(out)
+                print(f"Parquet saved → {out}")
+                del model
+                torch.cuda.empty_cache()
 
     else:
-        raise ValueError(f"Unknown sim_type: {mode} — only 'joint' and 'mono' are supported.")
+        raise ValueError(f"Unknown sim_type: {mode!r}")
 
     torch.cuda.empty_cache()
     print(" Done.")

@@ -93,7 +93,7 @@ class NeuralClassifierModule(L.LightningModule):
         self.save_hyperparameters()
         self.model = NeuralClassifier(input_dim, num_classes, hidden_dim)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass delegated to the wrapped :class:`NeuralClassifier`.
 
         Parameters
@@ -108,7 +108,7 @@ class NeuralClassifierModule(L.LightningModule):
         """
         return self.model(x)
 
-    def training_step(self, batch, _):
+    def training_step(self, batch: tuple[torch.Tensor, torch.Tensor], _: int) -> torch.Tensor:
         """Compute cross-entropy loss on a training mini-batch.
 
         Parameters
@@ -126,7 +126,7 @@ class NeuralClassifierModule(L.LightningModule):
         self.log("train_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
         return loss
 
-    def validation_step(self, batch, _):
+    def validation_step(self, batch: tuple[torch.Tensor, torch.Tensor], _: int) -> None:
         """Compute and log cross-entropy loss on a validation mini-batch.
 
         Parameters
@@ -138,7 +138,7 @@ class NeuralClassifierModule(L.LightningModule):
         loss = F.cross_entropy(self(x), y)
         self.log("val_loss", loss, on_epoch=True, on_step=False, prog_bar=True)
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> torch.optim.Optimizer:
         """Configure the Adam optimizer.
 
         Returns
@@ -265,7 +265,7 @@ def train_neural_classifier(
     val_fraction: float = 0.1,
     device: torch.device | str = "cpu",
     seed: int = 42,
-    logger=None,
+    logger: L.pytorch.loggers.Logger | None = None,
 ) -> NeuralClassifier:
     """Train a :class:`NeuralClassifier` with early stopping and return the best model.
 

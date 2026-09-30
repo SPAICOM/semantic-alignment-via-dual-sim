@@ -24,20 +24,21 @@ import math
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.linear_probe import clf_predict
-from semantic_alignment.utils.utils import (
-    a_inv_times_b,
+from semantic_alignment.utils import (
     awgn,
-    complex_compressed_tensor,
-    decompress_complex_tensor,
-    get_rx_equalizer,
+    pack_complex,
+    rx_equalizer,
+    solve,
+    unpack_complex,
 )
 
 
 def run_evaluation(
-    model,
+    model: nn.Module,
     dataloader: DataLoader,
     H_mimo: torch.Tensor,
     snr_db: float | None,
@@ -46,7 +47,7 @@ def run_evaluation(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate semantic accuracy for the joint Dual-SIM architecture.
@@ -99,8 +100,8 @@ def run_evaluation(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(G_T.dtype)
 
         y_sig = beta_opt * (G_R @ (H_mimo @ (G_T @ x_white)))
         if sigma is not None:
@@ -109,7 +110,7 @@ def run_evaluation(
             y = y_sig
 
         z_hat = (L_out @ y) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())
@@ -127,7 +128,7 @@ def run_evaluation_mmse(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate the digital MMSE baseline (no SIM, SVD-based equalizer).
@@ -164,7 +165,7 @@ def run_evaluation_mmse(
         Top-1 classification accuracy in ``[0, 1]``.
     """
     all_preds, all_labels = [], []
-    G_mmse = get_rx_equalizer(H_mimo, snr_db)
+    G_mmse = rx_equalizer(H_mimo, snr_db)
     # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
     sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
 
@@ -172,8 +173,8 @@ def run_evaluation_mmse(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(H_mimo.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(H_mimo.dtype)
 
         D_tx = x_white.shape[0]
         D_ch = H_mimo.shape[1]
@@ -189,7 +190,7 @@ def run_evaluation_mmse(
         x_recovered = (G_mmse @ y_received)[:D_tx, :]
         z_hat_complex = A_target @ x_recovered
         z_hat = (L_out @ z_hat_complex) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
         all_preds.extend(preds.cpu().numpy())
@@ -208,7 +209,7 @@ def run_evaluation_mono(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
     use_equalizer: bool = True,
     mmse: bool = False,
@@ -259,7 +260,7 @@ def run_evaluation_mono(
     """
     if use_equalizer:
         eq_snr = snr_db if mmse else None
-        G_eq = get_rx_equalizer(H_mimo, eq_snr)
+        G_eq = rx_equalizer(H_mimo, eq_snr)
 
     # σ = 1/√SNR — TX signal is whitened, so P_TX = 1
     sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
@@ -269,8 +270,8 @@ def run_evaluation_mono(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_c = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_w = a_inv_times_b(L_in, x_c - mu_in).to(G_T.dtype)
+        x_c = pack_complex(x_real_batch.T, device=device)
+        x_w = solve(L_in, x_c - mu_in).to(G_T.dtype)
 
         y = H_mimo @ (beta_opt * G_T @ x_w)
 
@@ -281,7 +282,7 @@ def run_evaluation_mono(
             y = G_eq @ y
 
         z = (L_out.to(G_T.dtype) @ y) + mu_out.to(G_T.dtype)
-        y_hat = decompress_complex_tensor(z, device=device).T
+        y_hat = unpack_complex(z, device=device).T
 
         preds = clf_predict(clf, y_hat)
         all_preds.extend(preds.cpu().numpy())
@@ -291,8 +292,8 @@ def run_evaluation_mono(
 
 
 def run_evaluation_disjoint_fixed(
-    tx_model,
-    rx_model,
+    tx_model: nn.Module,
+    rx_model: nn.Module,
     dataloader: DataLoader,
     H_mimo: torch.Tensor,
     snr_db: float | None,
@@ -301,7 +302,7 @@ def run_evaluation_disjoint_fixed(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Evaluate the disjoint Dual-SIM architecture with frozen TX and RX cascades.
@@ -358,8 +359,8 @@ def run_evaluation_disjoint_fixed(
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
 
-        x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-        x_white = a_inv_times_b(L_in, x_complex - mu_in).to(G_T.dtype)
+        x_complex = pack_complex(x_real_batch.T, device=device)
+        x_white = solve(L_in, x_complex - mu_in).to(G_T.dtype)
 
         y_sig = beta_global * (G_R @ (H_mimo @ (G_T @ x_white)))
         if sigma is not None:
@@ -368,9 +369,75 @@ def run_evaluation_disjoint_fixed(
             y = y_sig
 
         z_hat = (L_out @ y) + mu_out
-        y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+        y_hat_real = unpack_complex(z_hat, device=device).T
 
         preds = clf_predict(clf, y_hat_real)
+        all_preds.extend(preds.cpu().numpy())
+        all_labels.extend(labels_batch.cpu().numpy())
+
+    return (np.array(all_preds) == np.array(all_labels)).mean()
+
+
+def run_evaluation_cascade(
+    Z: torch.Tensor,
+    dataloader: DataLoader,
+    snr_db: float | None,
+    beta_opt: torch.Tensor,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    clf: torch.Tensor | nn.Module,
+    device: torch.device,
+) -> float:
+    """Evaluate from a precomputed effective cascade ``Z``.
+
+    Signal model: ``ŷ = β Z x + v`` — no additional channel or equalizer.
+    Works for any architecture where ``Z`` already encodes the full
+    TX-to-RX mapping (joint: ``G_R H G_T``; constructive mono: ``H G_T``).
+
+    Parameters
+    ----------
+    Z : torch.Tensor
+        Precomputed effective cascade matrix (complex).
+    dataloader : DataLoader
+        Test set yielding ``(z_tx_batch, labels)`` pairs.
+    snr_db : float or None
+        AWGN SNR in dB; ``None`` means noiseless.
+    beta_opt : torch.Tensor
+        Optimal alignment scalar.
+    L_in, mu_in : torch.Tensor
+        TX whitening statistics.
+    L_out, mu_out : torch.Tensor
+        RX whitening statistics.
+    clf : torch.Tensor or nn.Module
+        Linear probe or neural classifier.
+    device : torch.device
+        Inference device.
+
+    Returns
+    -------
+    float
+        Top-1 classification accuracy in ``[0, 1]``.
+    """
+    sigma = 1.0 / math.sqrt(10 ** (snr_db / 10)) if snr_db is not None else None
+    all_preds, all_labels = [], []
+
+    for x_real_batch, labels_batch in dataloader:
+        x_real_batch = x_real_batch.to(device)
+        labels_batch = labels_batch.to(device)
+
+        x_c = pack_complex(x_real_batch.T, device=device)
+        x_w = solve(L_in, x_c - mu_in).to(Z.dtype)
+
+        y = beta_opt * (Z @ x_w)
+        if sigma is not None:
+            y = y + awgn(sigma, y.shape, device=device)
+
+        z_hat = (L_out.to(Z.dtype) @ y) + mu_out.to(Z.dtype)
+        y_hat = unpack_complex(z_hat, device=device).T
+
+        preds = clf_predict(clf, y_hat)
         all_preds.extend(preds.cpu().numpy())
         all_labels.extend(labels_batch.cpu().numpy())
 

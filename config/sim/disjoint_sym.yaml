@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.disjoint_sym.run_disjoint_sym
+_target_: semantic_alignment.sim.original.disjoint_sym.DisjointSymSIM.run_sim
 sim_type: disjoint_sym
 
 wavelength: 0.005
@@ -15,3 +15,5 @@ snr: null
 
 name: disjoint_sym_layers
 result_subdir: disjoint_sym_layers
+channel_type: rayleigh
+rice_factor_db: null

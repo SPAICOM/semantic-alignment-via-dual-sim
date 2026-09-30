@@ -10,13 +10,14 @@ alone can achieve before any hardware or channel impairments are introduced.
 
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from semantic_alignment.evaluation.linear_probe import clf_predict
-from semantic_alignment.utils.utils import (
-    a_inv_times_b,
-    complex_compressed_tensor,
-    decompress_complex_tensor,
+from semantic_alignment.utils import (
+    pack_complex,
+    solve,
+    unpack_complex,
 )
 
 
@@ -27,7 +28,7 @@ def run_original_accuracy(
     mu_in: torch.Tensor,
     L_out: torch.Tensor,
     mu_out: torch.Tensor,
-    clf,
+    clf: torch.Tensor | nn.Module,
     device: torch.device,
 ) -> float:
     """Apply A_target to TX embeddings and evaluate classification accuracy.
@@ -64,11 +65,11 @@ def run_original_accuracy(
     with torch.no_grad():
         for x_real_batch, labels_batch in dataloader:
             x_real_batch = x_real_batch.to(device)
-            x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
-            x_white = a_inv_times_b(L_in, x_complex - mu_in)
+            x_complex = pack_complex(x_real_batch.T, device=device)
+            x_white = solve(L_in, x_complex - mu_in)
             z_hat_complex = A_target @ x_white
             z_hat = (L_out @ z_hat_complex) + mu_out
-            y_hat_real = decompress_complex_tensor(z_hat, device=device).T
+            y_hat_real = unpack_complex(z_hat, device=device).T
             preds = clf_predict(clf, y_hat_real)
             all_preds.extend(preds.cpu().numpy())
             all_labels.extend(labels_batch.numpy())

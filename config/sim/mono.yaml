@@ -1,4 +1,4 @@
-_target_: semantic_alignment.experiments.mono.run_mono_sim
+_target_: semantic_alignment.sim.original.mono.MonoSIM.run_sim
 sim_type: mono
 
 wavelength: 0.005
@@ -13,3 +13,5 @@ snr: null
 
 name: mono
 result_subdir: mono
+channel_type: rayleigh
+rice_factor_db: null
