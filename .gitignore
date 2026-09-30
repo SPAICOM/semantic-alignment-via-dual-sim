@@ -236,6 +236,9 @@ models/
 
 # Others
 img/
+paper/
+ANALYSIS.md
+Note.md
 
 *.img
 *.jpeg
