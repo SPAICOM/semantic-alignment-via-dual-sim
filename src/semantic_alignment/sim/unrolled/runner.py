@@ -732,6 +732,9 @@ class UnrolledLightning(lg.LightningModule):
         epochs: int = 30,
         learn_S: bool = False,
         reg_S: float = 0.01,
+        K_prev: int = 0,
+        lr_inherited_ratio: float = 1.0,
+        warmup_new_layers: int = 0,
         tx_target: torch.Tensor | None = None,
         rx_target: torch.Tensor | None = None,
         Z_test: torch.Tensor | None = None,
@@ -807,6 +810,9 @@ class UnrolledLightning(lg.LightningModule):
         self.weight_ratio = weight_ratio
         self.epochs = epochs
         self.reg_S_coef = reg_S
+        self.K_prev = K_prev
+        self.lr_inherited_ratio = lr_inherited_ratio
+        self.warmup_new_layers = warmup_new_layers
 
         self.unrolled_model = unrolled_model
         self.tx_target = tx_target
@@ -909,11 +915,24 @@ class UnrolledLightning(lg.LightningModule):
         return loss
 
     def on_after_backward(self) -> None:
-        """Clip gradients after backpropagation if ``grad_clip > 0``."""
+        """Clip gradients and apply progressive layer-wise gradient scaling."""
         if self.grad_clip > 0:
             for p in self.unrolled_model.parameters():
                 if p.grad is not None:
                     nn.utils.clip_grad_norm_([p], max_norm=self.grad_clip)
+
+        if self.K_prev > 0 and (self.lr_inherited_ratio != 1.0 or self.warmup_new_layers > 0):
+            warmup_factor = (
+                min(1.0, (self.current_epoch + 1) / self.warmup_new_layers)
+                if self.warmup_new_layers > 0
+                else 1.0
+            )
+            for param in self.unrolled_model.parameters():
+                if param.grad is None or param.grad.shape[0] != self.K:
+                    continue
+                param.grad[: self.K_prev].mul_(self.lr_inherited_ratio)
+                if warmup_factor < 1.0:
+                    param.grad[self.K_prev :].mul_(warmup_factor)
 
     # ---- validation ----
 

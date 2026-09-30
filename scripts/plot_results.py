@@ -1082,9 +1082,9 @@ def _arch_comparison_generic(
         sharey=True,
         sharex=True,
         squeeze=False,
-        figsize=(8 * len(strat_list), 6),
-        layout="constrained",
+        figsize=(10 * len(strat_list), 6.5),
     )
+    fig.subplots_adjust(top=0.82, bottom=0.22, left=0.06, right=0.98, wspace=0.06)
 
     family_handles: dict[str, object] = {}
     baseline_handles_dict: dict[str, object] = {}
@@ -1167,7 +1167,7 @@ def _arch_comparison_generic(
                 bl_labels,
                 ncol=len(bl_labels),
                 loc="upper left",
-                bbox_to_anchor=(0.0, 1.12),
+                bbox_to_anchor=(0.10, 1.00),
                 frameon=True,
                 framealpha=1,
             )
@@ -1181,7 +1181,7 @@ def _arch_comparison_generic(
         [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
         loc="upper center",
-        bbox_to_anchor=(0.75, 1.12),
+        bbox_to_anchor=(0.75, 1.00),
         frameon=True,
         framealpha=1,
     )
@@ -1204,7 +1204,7 @@ def _arch_comparison_generic(
         ordered_families,
         ncol=len(ordered_families),
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.12),
+        bbox_to_anchor=(0.5, -0.02),
         frameon=True,
         framealpha=1,
         columnspacing=0.8,

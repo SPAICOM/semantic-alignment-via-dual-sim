@@ -233,6 +233,19 @@ def main(cfg: DictConfig) -> None:
             )
     except TypeError:
         lr_w_list = [float(lr_w_cfg)] * len(K_list)
+
+    lr_w_prog_cfg = cfg.training.get("lr_w_progressive", None)
+    if lr_w_prog_cfg is None:
+        lr_w_progressive_list = lr_w_list
+    else:
+        try:
+            lr_w_progressive_list = [float(v) for v in lr_w_prog_cfg]
+            if len(lr_w_progressive_list) != len(K_list):
+                raise ValueError(
+                    f"lr_w_progressive list length ({len(lr_w_progressive_list)}) must match K_list length ({len(K_list)})"
+                )
+        except TypeError:
+            lr_w_progressive_list = [float(lr_w_prog_cfg)] * len(K_list)
     constructive = cfg.sim.get("constructive", False)
     _ch_type = cfg.training.get("channel_type", "rayleigh")
     _kdb = cfg.training.get("rice_factor_db", None)
@@ -244,7 +257,7 @@ def main(cfg: DictConfig) -> None:
     else:
         ch_tag = "_rayleigh"
 
-    print(f" K_list={K_list}, lr_w_list={lr_w_list}")
+    print(f" K_list={K_list}, lr_w_list={lr_w_list}, lr_w_progressive_list={lr_w_progressive_list}")
     slayer = cfg.sim.wavelength * cfg.sim.slayer_multiplier
     dx = cfg.sim.wavelength / cfg.sim.spacing_divisor
     L = cfg.sim.get("L", 25)
@@ -407,7 +420,9 @@ def main(cfg: DictConfig) -> None:
             prev_K: int | None = None
 
             for k_idx, K in enumerate(K_list):
-                lr_w = lr_w_list[k_idx]
+                # Progressive steps (k_idx > 0) use lr_w_progressive_list if set.
+                is_progressive_k = training_type == "progressive" and k_idx > 0
+                lr_w = lr_w_progressive_list[k_idx] if is_progressive_k else lr_w_list[k_idx]
                 out = _out_path(cfg, coup, K, lr_w)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
@@ -468,6 +483,9 @@ def main(cfg: DictConfig) -> None:
                     weight_ratio=cfg.training.get("weight_ratio", 1.0),
                     learn_S=cfg.training.get("learn_S", False),
                     reg_S=cfg.training.get("reg_S", 0.01),
+                    K_prev=prev_K if (training_type == "progressive" and prev_K is not None) else 0,
+                    lr_inherited_ratio=cfg.training.get("lr_inherited_ratio", 1.0),
+                    warmup_new_layers=cfg.training.get("warmup_new_layers", 0),
                     Z_test=ctx["Z_test"],
                     labels=ctx["labels"],
                     W_probe=ctx["clf"],
