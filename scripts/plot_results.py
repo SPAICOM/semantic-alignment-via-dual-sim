@@ -551,7 +551,7 @@ def accuracy_vs_thickness() -> None:
 
     df = df.with_columns(
         pl.col("sim_accuracy_neural").alias("accuracy"),
-        pl.col("s_rx").cast(pl.Utf8).str.concat(r"$\lambda$").alias(r"$s_{\rm layer}^{\rm RX}$"),
+        (pl.col("s_rx").cast(pl.Utf8) + pl.lit(r"$\lambda$")).alias(r"$s_{\rm layer}^{\rm RX}$"),
     ).sort([r"$s_{\rm layer}^{\rm RX}$", "s_tx"])
 
     ticks = df["s_tx"].unique().sort().to_list()
@@ -596,7 +596,8 @@ def accuracy_vs_thickness() -> None:
     plt.xlabel(r"$s_{\rm layer}^{\rm TX}$")
     plt.ylabel("Accuracy")
     plt.xticks(ticks, labels=ticks_labels)
-    plt.xlim(min(ticks), max(ticks))
+    if len(ticks) > 1:
+        plt.xlim(min(ticks), max(ticks))
     plt.ylim(None, 1.0)
     _save("AccuracyVsThickness")
 
@@ -728,15 +729,13 @@ def _accuracy_vs_thickness_grid_one(acc_col: str, kind: str, suffix: str) -> Non
             ax.set_xticks(ticks)
             ax.set_xticklabels(ticks_labels)
             ax.set_xlim(min(ticks), max(ticks))
-        ax.set_ylim(None, 1.0)
-
     # Compute subplot centers in figure coordinates for legend anchoring
     _pos0 = axes[0][0].get_position()
     _cx0 = (_pos0.x0 + _pos0.x1) / 2
     _pos1 = axes[0][-1].get_position()
     _cx1 = (_pos1.x0 + _pos1.x1) / 2
 
-    # Baseline legend — centered above first subplot
+    # Baseline legend — left-anchored at left edge of first subplot
     bl_order = ["No Mismatch", "Oracle"]
     bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
     if bl_labels:
@@ -745,10 +744,35 @@ def _accuracy_vs_thickness_grid_one(acc_col: str, kind: str, suffix: str) -> Non
             bl_labels,
             ncol=len(bl_labels),
             loc="upper center",
-            bbox_to_anchor=(_cx0, 1.00),
+            bbox_to_anchor=(_pos0.x0 + 5 * (_pos0.x1 - _pos0.x0) / 12, 1.00),
             frameon=True,
             framealpha=1,
         )
+
+    # SIM family legend — centered in figure
+    family_legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=_ARCH_FAMILY_COLORS[s],
+            marker=_ARCH_FAMILY_MARKERS[s],
+            ls="none",
+            markersize=10,
+        )
+        for s in sim_order
+        if s in sim_handles
+    ]
+    fig.legend(
+        family_legend_handles,
+        [s for s in sim_order if s in sim_handles],
+        ncol=len(sim_order),
+        loc="upper center",
+        bbox_to_anchor=((_cx0 + _cx1) / 2, 1.00),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
 
     # s_RX legend — centered above last subplot
     class _HandlerEmpty(HandlerBase):
@@ -769,35 +793,10 @@ def _accuracy_vs_thickness_grid_one(acc_col: str, kind: str, suffix: str) -> Non
         _all_labels,
         handler_map={_invis: _HandlerEmpty()},
         ncol=len(ordered_srx) + 1,
-        loc="upper center",
-        bbox_to_anchor=(_cx1, 1.00),
+        loc="upper right",
+        bbox_to_anchor=(_pos1.x1, 1.00),
         frameon=True,
         framealpha=1,
-        handletextpad=0.4,
-    )
-
-    # SIM family legend (bottom)
-    family_legend_handles = [
-        Line2D(
-            [0],
-            [0],
-            color=_ARCH_FAMILY_COLORS[s],
-            marker=_ARCH_FAMILY_MARKERS[s],
-            ls="none",
-            markersize=10,
-        )
-        for s in sim_order
-        if s in sim_handles
-    ]
-    fig.legend(
-        family_legend_handles,
-        [s for s in sim_order if s in sim_handles],
-        ncol=len(sim_order),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.02),
-        frameon=True,
-        framealpha=1,
-        columnspacing=0.8,
         handletextpad=0.4,
     )
 
@@ -2627,7 +2626,6 @@ def _plot_all() -> None:
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
-    accuracy_vs_thickness()
     accuracy_vs_thickness_grid()
     unrolled_accuracy_grid()
     joint_lr_search_heatmap()
