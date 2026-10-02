@@ -47,9 +47,16 @@ cls-joint-layers *ARGS: train-clf
 cls-joint-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_snr datasets={{dataset}} {{ARGS}}
 
-# Joint Dual-SIM: sweep over inter-layer spacing
+# Joint Dual-SIM: sweep over inter-layer spacing (linear + ppfe)
 cls-joint-slayer *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_joint_slayer datasets={{dataset}} {{ARGS}}
+
+# Disjoint Sym (constructive): sweep over inter-layer spacing (linear + ppfe)
+cls-disjoint-sym-slayer-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_disjoint_sym_slayer datasets={{dataset}} {{ARGS}}
+
+# Aggregate: joint + disjoint-sym-constructive slayer sweeps
+slayer: cls-joint-slayer cls-disjoint-sym-slayer-c
 
 # Joint Dual-SIM: sweep over channel dimension
 cls-joint-channel-dim *ARGS: train-clf
@@ -183,43 +190,53 @@ disjoint-constructive: disjoint-asym-c disjoint-sym-c
 cls-all-layers: cls-joint-layers \
                 cls-disjoint-asym-layers cls-disjoint-asym-layers-c cls-disjoint-asym-rx-layers-c \
                 cls-disjoint-sym-layers cls-disjoint-sym-layers-c \
-                cls-mono-layers cls-mono-layers-c
+                cls-mono-layers cls-mono-layers-c cls-mono-rx-layers-c
 
 # SNR sweep across all methods (joint + asym + sym + mono, excl. 4-SIM)
 cls-all-snr: cls-joint-snr \
              cls-disjoint-asym-snr cls-disjoint-asym-snr-c cls-disjoint-asym-snr-rx-c \
              cls-disjoint-sym-snr cls-disjoint-sym-snr-c \
-             cls-mono-snr cls-mono-snr-c
+             cls-mono-snr cls-mono-snr-c cls-mono-rx-snr-c
 
-# ── Mono-SIM (TX-only ablation) ───────────────────────────────────────────────
-# Tipology: constructive ∈ {false, true}
-# Results go to results/mono*/equalized|constructive/
+# ── Mono-SIM ─────────────────────────────────────────────────────────────────
+# TX side: equalized (G_T≈A + ZF/MMSE at RX) and constructive (H·G_T≈A, no G_eq)
+# RX side: constructive only (G_R·H≈A, no equalized variant)
+# Results go to results/mono/{equalized|constructive}/{tx|rx}/
 
-# Mono-SIM (equalized): sweep over SIM layers
+# Mono-SIM TX (equalized): sweep over SIM layers
 cls-mono-layers *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} {{ARGS}}
 
-# Mono-SIM (equalized): sweep over SNR
+# Mono-SIM TX (equalized): sweep over SNR
 cls-mono-snr *ARGS: train-clf
     uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} {{ARGS}}
 
-# constructive=true  →  tipology: constructive (loss ‖β H G_T − A‖², no G_eq at RX)
-# Mono-SIM (constructive): sweep over SIM layers
+# Mono-SIM TX (constructive, loss ‖β H G_T − A‖²): sweep over SIM layers
 cls-mono-layers-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} sim.constructive=true {{ARGS}}
+    uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} sim.constructive=true sim.alignment_side=tx {{ARGS}}
 
-# Mono-SIM (constructive): sweep over SNR
+# Mono-SIM TX (constructive): sweep over SNR
 cls-mono-snr-c *ARGS: train-clf
-    uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} sim.constructive=true {{ARGS}}
+    uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} sim.constructive=true sim.alignment_side=tx {{ARGS}}
 
-# Aggregate: mono-SIM (equalized) — layers + SNR
+# Mono-SIM RX (constructive, loss ‖β G_R H − A‖²): sweep over SIM layers
+cls-mono-rx-layers-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_layers datasets={{dataset}} sim=mono_rx {{ARGS}}
+
+# Mono-SIM RX (constructive): sweep over SNR
+cls-mono-rx-snr-c *ARGS: train-clf
+    uv run python scripts/classification.py --config-name config_mono_snr datasets={{dataset}} sim=mono_rx {{ARGS}}
+
+# Aggregate: mono-SIM TX (equalized) — layers + SNR
 mono: cls-mono-layers cls-mono-snr
-# Aggregate: mono-SIM (constructive) — layers + SNR
+# Aggregate: mono-SIM TX (constructive) — layers + SNR
 mono-c: cls-mono-layers-c cls-mono-snr-c
-# Aggregate: mono-SIM — equalized + constructive (layers + SNR, no channel-dim)
+# Aggregate: mono-SIM RX (constructive) — layers + SNR
+mono-rx-c: cls-mono-rx-layers-c cls-mono-rx-snr-c
+# Aggregate: mono-SIM — equalized/tx + constructive/tx (layers + SNR)
 mono-full: mono mono-c
-# Aggregate: all mono-SIM sweeps
-mono-all: mono mono-c
+# Aggregate: all mono-SIM sweeps (TX equalized + TX constructive + RX constructive)
+mono-all: mono mono-c mono-rx-c
 
 # ── n_proto sweep (PPFE only) ─────────────────────────────────────────────────
 

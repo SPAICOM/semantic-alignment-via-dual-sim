@@ -104,8 +104,12 @@ def tipology_tag(
         side = alignment_side or "tx"
         prefix = "constructive" if constructive else "equalized"
         return f"{prefix}/{side}"
-    if sim_type in ("disjoint_sym", "disjoint_4sim", "mono"):
+    if sim_type in ("disjoint_sym", "disjoint_4sim"):
         return "constructive" if constructive else "equalized"
+    if sim_type == "mono":
+        side = alignment_side or "tx"
+        prefix = "constructive" if constructive else "equalized"
+        return f"{prefix}/{side}"
     return ""
 
 

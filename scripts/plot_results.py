@@ -43,7 +43,15 @@ _ARCH_MARKERS = {
 # ── Arch comparison (all tipologies) ─────────────────────────────────────────
 # Families: color encodes arch, linestyle encodes constructive (solid) vs standard (dashed).
 # Joint is constructive by design. Asym TX and Asym RX are separate families.
-_ARCH_FAMILIES = ["Joint", "Disjoint Asym TX", "Disjoint Asym RX", "Disjoint Sym", "4-SIM", "Mono"]
+_ARCH_FAMILIES = [
+    "Joint",
+    "Disjoint Asym TX",
+    "Disjoint Asym RX",
+    "Disjoint Sym",
+    "4-SIM",
+    "Mono TX",
+    "Mono RX",
+]
 _ARCH_FAMILY_COLORS = dict(zip(_ARCH_FAMILIES, sns.color_palette("tab10", len(_ARCH_FAMILIES))))
 _ARCH_FAMILY_MARKERS = {
     "Joint": "o",
@@ -51,7 +59,8 @@ _ARCH_FAMILY_MARKERS = {
     "Disjoint Asym RX": "s",
     "Disjoint Sym": "X",
     "4-SIM": "^",
-    "Mono": "v",
+    "Mono TX": "v",
+    "Mono RX": "D",
 }
 
 # Each entry: (arch_key, tipology, family, constructive, subdir_layers, subdir_snr, subdir_ch, double_L)
@@ -127,8 +136,27 @@ _ARCH_COMPARE_VARIANTS = [
         "disjoint_4sim_channel_dim",
         True,
     ),
-    ("mono", "equalized", "Mono", False, "mono_layers", "mono_snr", None, False),
-    ("mono", "constructive", "Mono", True, "mono_layers", "mono_snr", None, False),
+    (
+        "mono",
+        ["equalized", "equalized/tx"],
+        "Mono TX",
+        False,
+        "mono_layers",
+        "mono_snr",
+        None,
+        False,
+    ),
+    (
+        "mono",
+        ["constructive", "constructive/tx"],
+        "Mono TX",
+        True,
+        "mono_layers",
+        "mono_snr",
+        None,
+        False,
+    ),
+    ("mono", "constructive/rx", "Mono RX", True, "mono_layers", "mono_snr", None, False),
 ]
 _SUBDIR_IDX = {"layers": 4, "snr": 5, "channel_dim": 6}
 
@@ -195,18 +223,20 @@ def _get(result_subdir: str) -> pl.DataFrame | None:
     return out if not out.is_empty() else None
 
 
-def _get_tipology(result_subdir: str, tipology: str) -> pl.DataFrame | None:
+def _get_tipology(result_subdir: str, tipology: str | list[str]) -> pl.DataFrame | None:
     """Return rows matching ``result_subdir`` and ``tipology``.
 
-    Falls back to all rows for that subdir when the ``tipology`` column is
-    absent (backward-compatible with results saved before tipology subfolders).
+    ``tipology`` may be a single string or a list of accepted strings (for
+    backward-compatibility when the same logical variant has multiple tag values).
+    Falls back to all rows for that subdir when the ``tipology`` column is absent.
     """
     df = _get(result_subdir)
     if df is None:
         return None
     if "tipology" not in df.columns:
         return df
-    out = df.filter(pl.col("tipology") == tipology)
+    tips = [tipology] if isinstance(tipology, str) else tipology
+    out = df.filter(pl.col("tipology").is_in(tips))
     return out if not out.is_empty() else None
 
 
@@ -240,16 +270,16 @@ def _add_baseline_hlines(df: pl.DataFrame, kind: str = "neural") -> list[str]:
             added.append("No Mismatch")
 
     if orig_col in df.columns:
-        for strat, linestyle, label in [
-            ("Linear", "-.", "Oracle Linear"),
-            ("PPFE", ":", "Oracle PPFE"),
-        ]:
+        oracle_added = False
+        for strat in ["Linear", "PPFE"]:
             vals = df.filter(pl.col("strategy") == strat)[orig_col].drop_nulls()
             if vals.len() > 0:
                 plt.axhline(
-                    y=vals.mean(), color="gray", linestyle=linestyle, linewidth=2.5, label=label
+                    y=vals.mean(), color="gray", linestyle="-.", linewidth=2.5, label="Oracle"
                 )
-                added.append(label)
+                if not oracle_added:
+                    added.append("Oracle")
+                    oracle_added = True
 
     return added
 
@@ -521,8 +551,8 @@ def accuracy_vs_thickness() -> None:
 
     df = df.with_columns(
         pl.col("sim_accuracy_neural").alias("accuracy"),
-        pl.col("s_rx").cast(pl.Utf8).str.concat(r"$\lambda$").alias(r"$s_{\rm RX}$"),
-    ).sort([r"$s_{\rm RX}$", "s_tx"])
+        pl.col("s_rx").cast(pl.Utf8).str.concat(r"$\lambda$").alias(r"$s_{\rm layer}^{\rm RX}$"),
+    ).sort([r"$s_{\rm layer}^{\rm RX}$", "s_tx"])
 
     ticks = df["s_tx"].unique().sort().to_list()
     ticks_labels = [rf"${t}\lambda$" for t in ticks]
@@ -531,22 +561,26 @@ def accuracy_vs_thickness() -> None:
         df.to_pandas(),
         x="s_tx",
         y="accuracy",
-        hue=r"$s_{\rm RX}$",
-        style=r"$s_{\rm RX}$",
+        hue=r"$s_{\rm layer}^{\rm RX}$",
+        style=r"$s_{\rm layer}^{\rm RX}$",
         markers=True,
         dashes=False,
     )
     baseline_labels = _add_baseline_hlines(df)
 
     handles, labels = ax.get_legend_handles_labels()
-    srx_labels = sorted(df[r"$s_{\rm RX}$"].unique().to_list())
+    srx_labels = sorted(df[r"$s_{\rm layer}^{\rm RX}$"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
     leg1 = _make_legend(
-        srx_labels, r"$s_{\rm layer}$ (RX)", ncol=3, loc="upper center", bbox_to_anchor=(0.5, 1.12)
+        srx_labels,
+        r"$s_{\rm layer}^{\rm RX}$",
+        ncol=3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.12),
     )
     leg2 = _make_legend(
         baseline_labels,
@@ -559,7 +593,7 @@ def accuracy_vs_thickness() -> None:
     ax.add_artist(leg2)
 
     ax.tick_params(axis="y", pad=10)
-    plt.xlabel(r"$s_{\mathrm{layer}}$ (TX)")
+    plt.xlabel(r"$s_{\rm layer}^{\rm TX}$")
     plt.ylabel("Accuracy")
     plt.xticks(ticks, labels=ticks_labels)
     plt.xlim(min(ticks), max(ticks))
@@ -567,14 +601,255 @@ def accuracy_vs_thickness() -> None:
     _save("AccuracyVsThickness")
 
 
+def accuracy_vs_thickness_grid() -> None:
+    """Grid plot: accuracy vs s_TX — Neural and Probe versions."""
+    for acc_col, kind, suffix in [
+        ("sim_accuracy_neural", "neural", "Neural"),
+        ("sim_accuracy_probe", "probe", "Probe"),
+    ]:
+        _accuracy_vs_thickness_grid_one(acc_col, kind, suffix)
+
+
+def _accuracy_vs_thickness_grid_one(acc_col: str, kind: str, suffix: str) -> None:
+    """Inner: one pass of the slayer grid plot for a given accuracy column."""
+    from matplotlib.legend_handler import HandlerBase
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Rectangle as _Rect
+
+    df_joint = _get("joint_slayer")
+    df_dsym = _get("disjoint_sym_slayer")
+
+    if df_joint is None and df_dsym is None:
+        print("No slayer grid results found.")
+        return
+
+    frames = []
+    if df_joint is not None:
+        frames.append(df_joint.with_columns(pl.lit("Joint").alias("SIM")))
+    if df_dsym is not None:
+        frames.append(df_dsym.with_columns(pl.lit("Disjoint Sym").alias("SIM")))
+
+    df = pl.concat(frames, how="diagonal")
+    if acc_col not in df.columns:
+        print(f"No {acc_col} column in slayer data.")
+        return
+
+    df = df.filter(pl.col("strategy").is_in(STRATEGIES)).with_columns(
+        pl.col(acc_col).alias("accuracy"),
+        (pl.col("s_rx").cast(pl.Utf8) + pl.lit(r"$\lambda$")).alias("s_RX"),
+    )
+
+    if df.is_empty():
+        print("No slayer grid data after filtering.")
+        return
+
+    strat_list = [s for s in STRATEGIES if s in df["strategy"].unique().to_list()]
+    sim_order = [s for s in ["Joint", "Disjoint Sym"] if s in df["SIM"].unique().to_list()]
+    srx_vals = sorted(
+        df["s_RX"].unique().to_list(),
+        key=lambda s: float(s.replace(r"$\lambda$", "").strip()),
+    )
+    ticks = sorted(df["s_tx"].unique().to_list())
+    ticks_labels = [rf"${t}\lambda$" for t in ticks]
+
+    _srx_ls = ["-", "--", ":"]
+    _srx_mk = ["o", "s", "^"]
+    srx_linestyles = {v: _srx_ls[i % len(_srx_ls)] for i, v in enumerate(srx_vals)}
+    srx_markers = {v: _srx_mk[i % len(_srx_mk)] for i, v in enumerate(srx_vals)}
+
+    n_cols = len(strat_list)
+    fig, axes = plt.subplots(
+        1, n_cols, sharey=True, sharex=True, squeeze=False, figsize=(10 * n_cols, 6.5)
+    )
+    fig.subplots_adjust(top=0.82, bottom=0.22, left=0.06, right=0.98, wspace=0.06)
+
+    sim_handles: dict[str, object] = {}
+    srx_handles: dict[str, object] = {}
+    baseline_handles_dict: dict[str, object] = {}
+
+    for c, strategy in enumerate(strat_list):
+        ax = axes[0][c]
+        df_s = df.filter(pl.col("strategy") == strategy)
+
+        for sim in sim_order:
+            color = _ARCH_FAMILY_COLORS.get(sim, "gray")
+            df_sim = df_s.filter(pl.col("SIM") == sim)
+
+            for srx in srx_vals:
+                ls = srx_linestyles[srx]
+                mk = srx_markers[srx]
+                df_cur = df_sim.filter(pl.col("s_RX") == srx)
+                if df_cur.is_empty():
+                    continue
+
+                xs = sorted(df_cur["s_tx"].unique().to_list())
+                ys, ys_se = [], []
+                for x in xs:
+                    vals = df_cur.filter(pl.col("s_tx") == x)["accuracy"]
+                    n = vals.len()
+                    ys.append(vals.mean())
+                    ys_se.append(vals.std() / (n**0.5) if n > 1 else 0.0)
+
+                (line,) = ax.plot(
+                    xs,
+                    ys,
+                    color=color,
+                    linestyle=ls,
+                    marker=mk,
+                    markersize=10,
+                    linewidth=1.5,
+                    alpha=0.9,
+                )
+                ax.fill_between(
+                    xs,
+                    [y - 1.96 * se for y, se in zip(ys, ys_se)],
+                    [y + 1.96 * se for y, se in zip(ys, ys_se)],
+                    color=color,
+                    alpha=0.12,
+                )
+                if sim not in sim_handles:
+                    sim_handles[sim] = line
+                if srx not in srx_handles:
+                    srx_handles[srx] = Line2D(
+                        [0], [0], color="gray", ls=ls, marker=mk, lw=1.5, markersize=8
+                    )
+
+        plt.sca(ax)
+        bl_added = _add_baseline_hlines(df_s, kind=kind)
+        h_all, l_all = ax.get_legend_handles_labels()
+        for hi, li in zip(h_all, l_all):
+            if li in bl_added and li not in baseline_handles_dict:
+                baseline_handles_dict[li] = hi
+
+        ax.set_title(strategy)
+        ax.set_xlabel(r"$s_{\rm layer}^{\rm TX}$")
+        ax.set_ylabel("Accuracy" if c == 0 else "")
+        if ticks:
+            ax.set_xticks(ticks)
+            ax.set_xticklabels(ticks_labels)
+            ax.set_xlim(min(ticks), max(ticks))
+        ax.set_ylim(None, 1.0)
+
+    # Compute subplot centers in figure coordinates for legend anchoring
+    _pos0 = axes[0][0].get_position()
+    _cx0 = (_pos0.x0 + _pos0.x1) / 2
+    _pos1 = axes[0][-1].get_position()
+    _cx1 = (_pos1.x0 + _pos1.x1) / 2
+
+    # Baseline legend — centered above first subplot
+    bl_order = ["No Mismatch", "Oracle"]
+    bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
+    if bl_labels:
+        fig.legend(
+            [baseline_handles_dict[lbl] for lbl in bl_labels],
+            bl_labels,
+            ncol=len(bl_labels),
+            loc="upper center",
+            bbox_to_anchor=(_cx0, 1.00),
+            frameon=True,
+            framealpha=1,
+        )
+
+    # s_RX legend — centered above last subplot
+    class _HandlerEmpty(HandlerBase):
+        def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+            patch = _Rect((0, 0), 0, 0, fill=False, edgecolor="none", linewidth=0)
+            handlebox.add_artist(patch)
+            return patch
+
+    ordered_srx = sorted(
+        srx_handles.keys(),
+        key=lambda s: float(s.replace(r"$\lambda$", "").strip()),
+    )
+    _invis = Line2D([], [], alpha=0)
+    _all_handles = [_invis] + [srx_handles[s] for s in ordered_srx]
+    _all_labels = [r"$s_{\rm layer}^{\rm RX}$"] + ordered_srx
+    fig.legend(
+        _all_handles,
+        _all_labels,
+        handler_map={_invis: _HandlerEmpty()},
+        ncol=len(ordered_srx) + 1,
+        loc="upper center",
+        bbox_to_anchor=(_cx1, 1.00),
+        frameon=True,
+        framealpha=1,
+        handletextpad=0.4,
+    )
+
+    # SIM family legend (bottom)
+    family_legend_handles = [
+        Line2D(
+            [0],
+            [0],
+            color=_ARCH_FAMILY_COLORS[s],
+            marker=_ARCH_FAMILY_MARKERS[s],
+            ls="none",
+            markersize=10,
+        )
+        for s in sim_order
+        if s in sim_handles
+    ]
+    fig.legend(
+        family_legend_handles,
+        [s for s in sim_order if s in sim_handles],
+        ncol=len(sim_order),
+        loc="lower center",
+        bbox_to_anchor=(0.5, -0.02),
+        frameon=True,
+        framealpha=1,
+        columnspacing=0.8,
+        handletextpad=0.4,
+    )
+
+    _save(f"AccuracyVsThicknessGrid_{suffix}")
+
+
 # ---------------------------------------------------------------------------
 # Accuracy vs Layers — Mono-SIM (TX-only ablation)
 # ---------------------------------------------------------------------------
 
 
+_MONO_TIPOLOGY_LABELS = {
+    "equalized/tx": "TX Equalized",
+    "constructive/tx": "TX Constructive",
+    "constructive/rx": "RX Constructive",
+}
+
+
+def _get_mono_all(result_subdir: str) -> pl.DataFrame | None:
+    """Load all mono tipology variants for a given subdir, adding a 'Variant' column.
+
+    Accepts both old tipology strings ("equalized", "constructive") and new ones
+    ("equalized/tx", "constructive/tx") for TX side so migrated results are included.
+    """
+    df_all = _get(result_subdir)
+    if df_all is None:
+        return None
+    if "tipology" not in df_all.columns:
+        return df_all.with_columns(pl.lit("TX Equalized").alias("Variant"))
+
+    frames = []
+    # TX Equalized: old "equalized" or new "equalized/tx"
+    part = df_all.filter(pl.col("tipology").is_in(["equalized", "equalized/tx"]))
+    if not part.is_empty():
+        frames.append(part.with_columns(pl.lit("TX Equalized").alias("Variant")))
+    # TX Constructive: old "constructive" or new "constructive/tx"
+    part = df_all.filter(pl.col("tipology").is_in(["constructive", "constructive/tx"]))
+    if not part.is_empty():
+        frames.append(part.with_columns(pl.lit("TX Constructive").alias("Variant")))
+    # RX Constructive: new string only
+    part = df_all.filter(pl.col("tipology") == "constructive/rx")
+    if not part.is_empty():
+        frames.append(part.with_columns(pl.lit("RX Constructive").alias("Variant")))
+
+    if not frames:
+        return None
+    return pl.concat(frames, how="diagonal")
+
+
 def accuracy_vs_mono_layers() -> None:
-    """Accuracy vs $L$ — Mono-SIM, standard tipology."""
-    df = _get_tipology("mono_layers", "equalized")
+    """Accuracy vs $L$ — Mono-SIM, all tipologies (TX Eq, TX C, RX C)."""
+    df = _get_mono_all("mono_layers")
     if df is None:
         print("No mono-SIM results found.")
         return
@@ -585,7 +860,7 @@ def accuracy_vs_mono_layers() -> None:
             pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").alias("Intermediate Atoms"),
         )
-        .sort(["Intermediate Atoms", "strategy", "L"])
+        .sort(["Variant", "strategy", "L"])
     )
     if df.is_empty():
         print("No mono-SIM (no-channel) results found.")
@@ -597,7 +872,7 @@ def accuracy_vs_mono_layers() -> None:
         df.to_pandas(),
         x="L",
         y="accuracy",
-        hue="Intermediate Atoms",
+        hue="Variant",
         style="strategy",
         markers=True,
         dashes=True,
@@ -605,7 +880,7 @@ def accuracy_vs_mono_layers() -> None:
     baseline_labels = _add_baseline_hlines(df)
 
     handles, labels = ax.get_legend_handles_labels()
-    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    variant_labels = list(_MONO_TIPOLOGY_LABELS.values())
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
@@ -623,7 +898,7 @@ def accuracy_vs_mono_layers() -> None:
         bbox_to_anchor=(0.5, 1.12),
     )
     leg3 = _make_legend(
-        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+        variant_labels, "SIM Variant", ncol=1, loc="upper center", bbox_to_anchor=(0.76, 0.22)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
@@ -638,8 +913,8 @@ def accuracy_vs_mono_layers() -> None:
 
 
 def accuracy_vs_mono_snr() -> None:
-    """Accuracy vs SNR [dB] — Mono-SIM, standard tipology."""
-    df = _get_tipology("mono_snr", "equalized")
+    """Accuracy vs SNR [dB] — Mono-SIM, all tipologies (TX Eq, TX C, RX C)."""
+    df = _get_mono_all("mono_snr")
     if df is None:
         print("No mono-SIM SNR results found.")
         return
@@ -650,7 +925,7 @@ def accuracy_vs_mono_snr() -> None:
             pl.col("sim_accuracy_neural").alias("accuracy"),
             pl.col("M_int").alias("Intermediate Atoms"),
         )
-        .sort(["Intermediate Atoms", "strategy", "snr"])
+        .sort(["Variant", "strategy", "snr"])
     )
     if df.is_empty():
         print("No mono-SIM (channel) results found.")
@@ -662,7 +937,7 @@ def accuracy_vs_mono_snr() -> None:
         df.to_pandas(),
         x="snr",
         y="accuracy",
-        hue="Intermediate Atoms",
+        hue="Variant",
         style="strategy",
         markers=True,
         dashes=True,
@@ -670,7 +945,7 @@ def accuracy_vs_mono_snr() -> None:
     baseline_labels = _add_baseline_hlines(df)
 
     handles, labels = ax.get_legend_handles_labels()
-    atoms_labels = sorted(df["Intermediate Atoms"].unique().to_list())
+    variant_labels = list(_MONO_TIPOLOGY_LABELS.values())
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
@@ -688,7 +963,7 @@ def accuracy_vs_mono_snr() -> None:
         bbox_to_anchor=(0.5, 1.12),
     )
     leg3 = _make_legend(
-        atoms_labels, "Intermediate Atoms", ncol=3, loc="upper center", bbox_to_anchor=(0.76, 0.18)
+        variant_labels, "SIM Variant", ncol=1, loc="upper center", bbox_to_anchor=(0.76, 0.22)
     )
     ax.add_artist(leg1)
     ax.add_artist(leg2)
@@ -1157,21 +1432,28 @@ def _arch_comparison_generic(
         ax.set_xlim(min(ticks), max(ticks))
         ax.set_ylim(y_min, 1.0)
 
-    # Baseline legend (top)
+    # Compute subplot centers in figure coordinates for legend anchoring
+    _pos0 = axes[0][0].get_position()
+    _cx0 = (_pos0.x0 + _pos0.x1) / 2
+    _pos1 = axes[0][-1].get_position()
+    _cx1 = (_pos1.x0 + _pos1.x1) / 2
+
+    # Baseline legend (top) — centered above first subplot
     if show_baselines:
-        bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+        bl_order = ["No Mismatch", "Oracle"]
         bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
         if bl_labels:
             fig.legend(
                 [baseline_handles_dict[lbl] for lbl in bl_labels],
                 bl_labels,
                 ncol=len(bl_labels),
-                loc="upper left",
-                bbox_to_anchor=(0.10, 1.00),
+                loc="upper center",
+                bbox_to_anchor=(_cx0, 1.00),
                 frameon=True,
                 framealpha=1,
             )
 
+    # Constructive/Equalized linestyle legend — centered above last subplot
     ls_handles = [
         Line2D([0], [0], color="gray", ls="-", lw=1.5),
         Line2D([0], [0], color="gray", ls="--", lw=1.5),
@@ -1181,7 +1463,7 @@ def _arch_comparison_generic(
         [r"$\mathbf{H}$ Constructive", r"$\mathbf{H}$ Equalized"],
         ncol=2,
         loc="upper center",
-        bbox_to_anchor=(0.75, 1.00),
+        bbox_to_anchor=(_cx1, 1.00),
         frameon=True,
         framealpha=1,
     )
@@ -1449,8 +1731,9 @@ _N_PROTO_VARIANTS = [
     ("n_proto_disjoint_asym", "equalized/tx", "Disjoint Asym TX", False, "n_clusters"),
     ("n_proto_disjoint_asym", "constructive/tx", "Disjoint Asym TX", True, "n_clusters"),
     ("n_proto_disjoint_asym", "constructive/rx", "Disjoint Asym RX", True, "n_clusters"),
-    ("n_proto_mono", "equalized", "Mono", False, "n_clusters"),
-    ("n_proto_mono", "constructive", "Mono", True, "n_clusters"),
+    ("n_proto_mono", ["equalized", "equalized/tx"], "Mono TX", False, "n_clusters"),
+    ("n_proto_mono", ["constructive", "constructive/tx"], "Mono TX", True, "n_clusters"),
+    ("n_proto_mono", "constructive/rx", "Mono RX", True, "n_clusters"),
     ("n_proto_disjoint_sym", "equalized", "Disjoint Sym", False, "channel_dim"),
     ("n_proto_disjoint_sym", "constructive", "Disjoint Sym", True, "channel_dim"),
 ]
@@ -1918,7 +2201,7 @@ def _arch_comparison_asym_vs_sym(
         ax.set_ylim(y_min, 1.0)
 
     if show_baselines:
-        bl_order = ["No Mismatch", "Oracle Linear", "Oracle PPFE"]
+        bl_order = ["No Mismatch", "Oracle"]
         bl_labels = [lbl for lbl in bl_order if lbl in baseline_handles_dict]
         if bl_labels:
             fig.legend(
@@ -2344,6 +2627,8 @@ def _plot_all() -> None:
     arch_comparison_layers()
     arch_comparison_snr()
     arch_comparison_channel_dim()
+    accuracy_vs_thickness()
+    accuracy_vs_thickness_grid()
     unrolled_accuracy_grid()
     joint_lr_search_heatmap()
     joint_lr_search_curves()

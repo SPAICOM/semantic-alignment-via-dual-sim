@@ -6,6 +6,7 @@ probe/neural accuracy on test channels.  Classic Adam baselines are run
 separately via ``just curve`` (classification.py with save_curve=true).
 """
 
+import math
 import os
 
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -162,7 +163,9 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     h0v = cfg.training.get("h0_var", None)
     if ch_type == "rician":
         ch_tag = f"_rician{kdb}dB"
-    elif h0v is not None:
+    elif h0v == 0:
+        ch_tag = "_det"
+    elif h0v is not None and not math.isinf(h0v):
         ch_tag = f"_rayleigh_h0var{h0v}"
     else:
         ch_tag = "_rayleigh"
@@ -252,7 +255,9 @@ def main(cfg: DictConfig) -> None:
     _h0v = cfg.training.get("h0_var", None)
     if _ch_type == "rician":
         ch_tag = f"_rician{_kdb}dB"
-    elif _h0v is not None:
+    elif _h0v == 0:
+        ch_tag = "_det"
+    elif _h0v is not None and not math.isinf(_h0v):
         ch_tag = f"_rayleigh_h0var{_h0v}"
     else:
         ch_tag = "_rayleigh"
@@ -361,7 +366,7 @@ def main(cfg: DictConfig) -> None:
                                 rician_los(n_R, n_T, generator=_g_avg).to(device),
                                 channel_type="rician",
                             )
-                        case _ if cfg.training.get("h0_var", None) is not None:
+                        case _ if h0v is not None and not math.isinf(h0v):
                             H_ws = _channel_fn(
                                 n_R, n_T, channel_type=_ch_type_ws, generator=_g_avg
                             ).to(device)

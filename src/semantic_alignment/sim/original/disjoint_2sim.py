@@ -101,6 +101,8 @@ class Disjoint2SIM(SIMRunner):
         n_clusters: int | None = None,
         lr_tx: float = 0.1,
         lr_rx: float = 0.1,
+        s_tx: int | None = None,
+        s_rx: int | None = None,
         dataset: str = "cifar10",
         save_curve: bool = False,
         **kwargs,
@@ -149,6 +151,7 @@ class Disjoint2SIM(SIMRunner):
         tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
         rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
+        is_slayer = s_tx is not None and s_rx is not None
         fname = make_fname(
             strategy_name,
             seed,
@@ -160,6 +163,8 @@ class Disjoint2SIM(SIMRunner):
             rx_enc,
             n_clusters=n_clusters,
             dataset=dataset,
+            s_tx=s_tx,
+            s_rx=s_rx,
         )
         out_path = (
             RESULTS_DIR / result_subdir / tipology_subdir / fname
@@ -183,6 +188,8 @@ class Disjoint2SIM(SIMRunner):
             **kwargs,
         )
 
+        slayer_tx = s_tx * wavelength if is_slayer else slayer
+        slayer_rx = s_rx * wavelength if is_slayer else slayer
         tx_model = MonoSIM.build_model(
             L,
             M_int,
@@ -191,7 +198,7 @@ class Disjoint2SIM(SIMRunner):
             ch_x,
             ch_y,
             "tx",
-            slayer,
+            slayer_tx,
             wavelength,
             dx,
             device,
@@ -204,7 +211,7 @@ class Disjoint2SIM(SIMRunner):
             rx_out_x,
             rx_out_y,
             "rx",
-            slayer,
+            slayer_rx,
             wavelength,
             dx,
             device,
@@ -366,8 +373,8 @@ class Disjoint2SIM(SIMRunner):
                 "M_int": f"{M_int}x{M_int}",
                 "L": L,
                 "snr": snr,
-                "s_tx": None,
-                "s_rx": None,
+                "s_tx": s_tx,
+                "s_rx": s_rx,
                 "tx_enc": tx_enc,
                 "rx_enc": rx_enc,
                 "no_mismatch_probe": no_mismatch_probe,

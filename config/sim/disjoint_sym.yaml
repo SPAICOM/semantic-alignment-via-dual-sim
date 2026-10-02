@@ -12,6 +12,8 @@ L: 10
 M_int: 32
 channel_dim: 20
 snr: null
+s_tx: null   # TX inter-layer spacing override (units of λ); null = slayer_multiplier
+s_rx: null   # RX inter-layer spacing override (units of λ); null = slayer_multiplier
 
 name: disjoint_sym_layers
 result_subdir: disjoint_sym_layers

@@ -1,0 +1,24 @@
+defaults:
+  - sim: disjoint_sym
+  - alignment: ppfe
+  - datasets: cifar10
+  - data: default
+  - training: disjoint
+  - classifier: default
+  - _self_
+
+sim:
+  name: disjoint_sym_slayer
+  result_subdir: disjoint_sym_slayer
+  constructive: true
+  s_tx: 5
+  s_rx: 5
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment: linear,ppfe
+      sim.s_tx: 4,5,6,7,8,9,10
+      sim.s_rx: 4,7,10
+      training.seed: 27,42,100,123,144,200

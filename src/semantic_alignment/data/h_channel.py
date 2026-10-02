@@ -18,8 +18,12 @@ Rayleigh perturbation (``h0_var``, Rayleigh only):
   is ``H_i = H_0 + sqrt(h0_var) * eps_i`` where ``eps_i ~ CN(0, 1)``.
   ``h0_var`` is the per-element perturbation variance; with ``h0_var=1``
   each entry has the same variance as a pure Rayleigh channel.
+  Limit cases: ``h0_var=0`` → all realisations equal ``H_0`` (deterministic);
+  ``h0_var=inf`` → pure i.i.d. Rayleigh (same as ``h0_var=None``).
   Not compatible with Rician.
 """
+
+import math
 
 import torch
 from lightning import LightningDataModule
@@ -155,18 +159,20 @@ class HChannelDataModule(LightningDataModule):
         # Seed a local generator so the global RNG is unaffected.
         g = torch.Generator().manual_seed(self.seed)
 
-        if self.h0_var is not None:
+        if self.h0_var is not None and not math.isinf(self.h0_var):
             if self.channel_type != "rayleigh":
                 raise ValueError(
                     "h0_var perturbation is only supported with channel_type='rayleigh'; "
                     f"got channel_type={self.channel_type!r}"
                 )
             # Draw a single base channel H_0 ~ CN(0,1), then perturb.
+            # h0_var=0 → scale=0 → all realisations equal H_0 (deterministic).
             H0 = cn_matrix(0, 1, (self.n_R, self.n_T), generator=g)
             noise = cn_matrix(0, 1, (self.n_total, self.n_R, self.n_T), generator=g)
             scale = self.h0_var**0.5
             all_H = H0.unsqueeze(0) + scale * noise
         else:
+            # h0_var=None or h0_var=inf → pure i.i.d. Rayleigh
             all_H = _channel(
                 self.n_R,
                 self.n_T,

@@ -1,0 +1,17 @@
+_target_: semantic_alignment.sim.original.mono.MonoSIM.run_sim
+sim_type: mono
+name: mono_rx
+
+wavelength: 0.005
+slayer_multiplier: 5
+spacing_divisor: 2
+constructive: true       # RX side only supports constructive: G_R·H ≈ A
+alignment_side: rx
+
+L: 10
+M_int: 32
+snr: null
+
+result_subdir: mono
+channel_type: rayleigh
+rice_factor_db: null

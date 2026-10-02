@@ -4,7 +4,8 @@ sim_type: mono
 wavelength: 0.005
 slayer_multiplier: 5
 spacing_divisor: 2
-constructive: false    # false: G_T≈A + G_eq at RX | true: HG_T≈A loss, no G_eq at RX
+constructive: false      # false: G_T≈A + G_eq at RX | true: HG_T≈A loss, no G_eq at RX
+alignment_side: tx       # tx (default) or rx (only constructive=true supported for rx)
 use_mmse: false        # false: ZF equalizer (H†); true: MMSE (uses snr for regularization)
 
 L: 10
