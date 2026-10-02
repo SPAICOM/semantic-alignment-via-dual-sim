@@ -1,7 +1,7 @@
 defaults:
   - sim: disjoint_4sim
   - alignment: ppfe
-  - datasets: cifar10
+  - datasets/classification: cifar10
   - data: default
   - training: disjoint
   - classifier: default

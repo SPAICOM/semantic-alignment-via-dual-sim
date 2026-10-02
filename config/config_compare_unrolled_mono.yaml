@@ -1,7 +1,7 @@
 defaults:
   - sim: mono
   - alignment: ppfe
-  - datasets: cifar10
+  - datasets/classification: cifar10
   - data: default
   - training: unrolled
   - classifier: default

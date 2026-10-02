@@ -1,7 +1,7 @@
 defaults:
   - sim: joint
   - alignment: ppfe
-  - datasets: cifar10
+  - datasets/classification: cifar10
   - data: default
   - training: joint
   - classifier: default
