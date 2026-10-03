@@ -169,10 +169,23 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
         ch_tag = f"_rayleigh_h0var{h0v}"
     else:
         ch_tag = "_rayleigh"
+    tt = cfg.training.get("training_type", "independent")
+    wr = cfg.training.get("weight_ratio", 1.0)
+    wn = cfg.training.get("warmup_new_layers", 0)
+    li = cfg.training.get("lr_inherited_ratio", 1.0)
+    hparam_tag = ""
+    if tt != "independent":
+        hparam_tag += "_prog"
+    if wr != 1.0:
+        hparam_tag += f"_wr{wr}"
+    if wn != 0:
+        hparam_tag += f"_wn{wn}"
+    if li != 1.0:
+        hparam_tag += f"_li{li}"
     fname = (
         f"{cfg.datasets.hf_name}_unrolled_{cfg.alignment.type}"
         f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
-        f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}"
+        f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}{hparam_tag}"
         f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
     )
     return _RESULTS / result_subdir / fname
