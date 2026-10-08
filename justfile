@@ -311,7 +311,7 @@ cls-unrolled-ppfe *ARGS: train-clf
 cls-unrolled-linear *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} alignment=linear {{ARGS}}
 
-# Unrolled GD: joint Dual-SIM — sweep Linear + PPFE (defined in config_compare_unrolled_joint.yaml)
+# Unrolled GD: joint Dual-SIM — sweep h0_var × warm_start_type (PPFE, 8 multirun jobs)
 cls-unrolled-joint *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} {{ARGS}}
 
@@ -340,7 +340,7 @@ cls-unrolled-disjoint-asym-c *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets/classification={{dataset}} sim.constructive=true {{ARGS}}
 
 # Aggregate: all unrolled GD experiments
-unrolled: cls-unrolled-joint cls-unrolled-mono cls-unrolled-mono-c cls-unrolled-disjoint-sym cls-unrolled-disjoint-sym-c cls-unrolled-disjoint-asym cls-unrolled-disjoint-asym-c
+unrolled: cls-unrolled-joint
 
 # ── Convergence curves (save_curve=true) ─────────────────────────────────────
 # Each recipe runs classification.py with training.save_curve=true, saving a
