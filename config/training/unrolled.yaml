@@ -13,7 +13,7 @@ K_list: [1, 5, 10, 15, 30]
 #              A .steps.pt file is saved alongside each parquet for resume support.
 training_type: progressive
 # Gradient checkpointing: recompute activations during backward to save GPU memory.
-gradient_checkpointing: true
+gradient_checkpointing: false
 
 # Learning rate for the classic-comparison Adam loop
 lr: 0.1
