@@ -27,4 +27,4 @@ hydra:
   sweeper:
     params:
       channel_dm.h0_var: 1,0.5,0,null
-      training.warm_start_type: only_semantic #,average
+      training.warm_start_type: only_semantic,average
