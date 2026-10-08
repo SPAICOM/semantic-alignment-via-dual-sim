@@ -1240,79 +1240,130 @@ class CompareUnrolledCallback(lg.Callback):
     # ---- eval curve ----
 
     def on_validation_epoch_end(self, trainer: lg.Trainer, pl_module: lg.LightningModule) -> None:
-        """Evaluate per-step accuracy on H_classic and log to wandb.
+        """Evaluate final-step accuracy and log to wandb.
 
-        Runs the unrolled model's forward pass with a step callback that
-        records probe and neural accuracies at each unrolled iteration,
-        then logs the final values as metrics.
+        Joint mode: iterates over the val dataloader and averages per-channel
+        accuracy at step K (same logic as test_step).
+        Other modes: evaluates on H_classic as a single-channel proxy.
         """
         if trainer.sanity_checking:
             return
 
-        store: dict[str, list] = {"probe": [], "neural": []}
-        eval_fn = _make_eval_fn(
-            self.Z_test,
-            self.labels,
-            self.W_probe,
-            self.clf_neural,
-            self.L_out,
-            self.mu_out,
-            pl_module.device,
-            store,
-        )
+        device = pl_module.device
 
         if pl_module.mode == "joint":
-            _unrolled_eval_curve_joint(
-                pl_module.unrolled_model,
-                self.H_classic,
-                pl_module.A_target,
-                eval_fn,
-                pl_module.device,
-                k_max=pl_module.K,
-            )
-        elif pl_module.mode == "mono":
-            _unrolled_eval_curve_mono(
-                pl_module.unrolled_model,
-                self.H_classic,
-                pl_module.A_target,
-                pl_module.constructive,
-                eval_fn,
-                pl_module.device,
-                k_max=pl_module.K,
-            )
-        elif pl_module.mode == "disjoint_sym":
-            _unrolled_eval_curve_disjoint_sym(
-                pl_module.unrolled_model,
-                self.H_classic,
-                pl_module.A_target,
-                pl_module.tx_target,
-                pl_module.rx_target,
-                eval_fn,
-                pl_module.device,
-                k_max=pl_module.K,
-            )
-        elif pl_module.mode == "disjoint_asym":
-            _unrolled_eval_curve_disjoint_asym(
-                pl_module.unrolled_model,
-                self.H_classic,
-                pl_module.A_target,
-                eval_fn,
-                pl_module.device,
-                k_max=pl_module.K,
-            )
+            val_dl = trainer.val_dataloaders
+            if isinstance(val_dl, (list, tuple)):
+                val_dl = val_dl[0]
+            if val_dl is None:
+                return
 
-        probe_arr = torch.tensor(store["probe"], dtype=torch.float32, device=pl_module.device)
-        neural_arr = (
-            torch.tensor(store["neural"], dtype=torch.float32, device=pl_module.device)
-            if store["neural"][0] is not None
-            else None
-        )
+            probe_finals: list[float] = []
+            neural_finals: list[float] = []
+            n_T = len(pl_module.unrolled_model.sizes_T)
+            K_last = pl_module.K - 1
 
-        pl_module.log("val/unrolled_final_probe", probe_arr[-1].item(), prog_bar=True)
-        if self.classic_probe_curve is not None:
-            pl_module.log("val/classic_final_probe", self.classic_probe_curve[-1], prog_bar=False)
-        if neural_arr is not None:
-            pl_module.log("val/unrolled_final_neural", neural_arr[-1].item())
+            for batch in val_dl:
+                H_batch = batch[0].to(device)
+                B = H_batch.shape[0]
+                _probe_buf: list[float] = []
+                _neural_buf: list[float] = []
+
+                def _step_cb(
+                    k: int, phases: list[torch.Tensor], _buf_p=_probe_buf, _buf_n=_neural_buf
+                ) -> None:
+                    if k != K_last:
+                        return
+                    Z_eff = pl_module.unrolled_model._cascade(H_batch, phases[:n_T], phases[n_T:])
+                    ip = (Z_eff.conj() * pl_module.A_target).sum((-2, -1))
+                    s = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
+                    beta = ip / (s + 1e-12)
+                    z_aw = beta[:, None, None] * (Z_eff @ self.Z_test.to(device))
+                    z_a = self.L_out.to(device) @ z_aw + self.mu_out.to(device)
+                    z_real = unpack_complex(z_a, device).transpose(-1, -2).float()
+                    W = self.W_probe.to(device)
+                    lbls = self.labels.to(device)
+                    preds = (z_real @ W).argmax(dim=-1)
+                    _buf_p.extend((preds == lbls[None, :]).float().mean(dim=-1).tolist())
+                    if self.clf_neural is not None:
+                        dev = next(self.clf_neural.parameters()).device
+                        N_test = z_real.shape[1]
+                        z_flat = z_real.reshape(B * N_test, -1).to(dev)
+                        preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
+                        _buf_n.extend(
+                            (preds_n == lbls[None, :].to(dev)).float().mean(dim=-1).tolist()
+                        )
+
+                with torch.no_grad():
+                    pl_module.unrolled_model.forward(
+                        H_batch,
+                        pl_module.A_target,
+                        B=B,
+                        step_callback=_step_cb,
+                        k_max=pl_module.K,
+                    )
+                probe_finals.extend(_probe_buf)
+                neural_finals.extend(_neural_buf)
+
+            if probe_finals:
+                pl_module.log(
+                    "val/unrolled_final_probe", sum(probe_finals) / len(probe_finals), prog_bar=True
+                )
+            if neural_finals:
+                pl_module.log("val/unrolled_final_neural", sum(neural_finals) / len(neural_finals))
+
+        else:
+            # Non-joint modes: single H_classic proxy (fast, avoids iterating the full val set)
+            store: dict[str, list] = {"probe": [], "neural": []}
+            eval_fn = _make_eval_fn(
+                self.Z_test,
+                self.labels,
+                self.W_probe,
+                self.clf_neural,
+                self.L_out,
+                self.mu_out,
+                device,
+                store,
+            )
+            if pl_module.mode == "mono":
+                _unrolled_eval_curve_mono(
+                    pl_module.unrolled_model,
+                    self.H_classic,
+                    pl_module.A_target,
+                    pl_module.constructive,
+                    eval_fn,
+                    device,
+                    k_max=pl_module.K,
+                )
+            elif pl_module.mode == "disjoint_sym":
+                _unrolled_eval_curve_disjoint_sym(
+                    pl_module.unrolled_model,
+                    self.H_classic,
+                    pl_module.A_target,
+                    pl_module.tx_target,
+                    pl_module.rx_target,
+                    eval_fn,
+                    device,
+                    k_max=pl_module.K,
+                )
+            elif pl_module.mode == "disjoint_asym":
+                _unrolled_eval_curve_disjoint_asym(
+                    pl_module.unrolled_model,
+                    self.H_classic,
+                    pl_module.A_target,
+                    eval_fn,
+                    device,
+                    k_max=pl_module.K,
+                )
+            probe_arr = torch.tensor(store["probe"], dtype=torch.float32, device=device)
+            neural_arr = (
+                torch.tensor(store["neural"], dtype=torch.float32, device=device)
+                if store["neural"][0] is not None
+                else None
+            )
+            pl_module.log("val/unrolled_final_probe", probe_arr[-1].item(), prog_bar=True)
+            if neural_arr is not None:
+                pl_module.log("val/unrolled_final_neural", neural_arr[-1].item())
 
         # Log learnable S values
         unrolled = pl_module.unrolled_model

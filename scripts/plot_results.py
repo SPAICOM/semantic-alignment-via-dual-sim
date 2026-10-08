@@ -2290,27 +2290,65 @@ def unrolled_accuracy_grid() -> None:
     Columns: Linear / PPFE.
     Color:   h0_var (per-element perturbation variance).
     Linestyle: dashed = Classic Adam, solid = Deep Unrolling.
+
+    Unrolled parquets: results/unrolled/**/*.parquet (excluding baseline/).
+    Baseline parquets: results/unrolled/baseline/**/*.parquet — one per test channel,
+      probe_curve is a list; exploded here to get one row per alternating cycle.
     """
     from matplotlib.lines import Line2D
 
     unrolled_root = RESULTS / "unrolled"
+    baseline_root = unrolled_root / "baseline"
+
     if not unrolled_root.exists():
         print("No unrolled results found.")
         return
-    all_files = list(unrolled_root.rglob("*.parquet"))
-    if not all_files:
+
+    unrolled_files = [f for f in unrolled_root.rglob("*.parquet") if "baseline" not in f.parts]
+    baseline_files = list(baseline_root.rglob("*.parquet")) if baseline_root.exists() else []
+
+    if not unrolled_files and not baseline_files:
         print("No unrolled results found.")
         return
 
-    df_all = pl.concat(
-        [pl.read_parquet(f) for f in all_files],
-        how="diagonal_relaxed",
-    )
+    dfs: list[pl.DataFrame] = []
 
-    if "channel_type" not in df_all.columns or "h0_var" not in df_all.columns:
-        print("Parquets missing channel_type/h0_var columns — re-run compare_unrolled.")
+    if unrolled_files:
+        df_u = pl.concat(
+            [pl.read_parquet(f) for f in unrolled_files],
+            how="diagonal_relaxed",
+        )
+        if "channel_type" not in df_u.columns or "h0_var" not in df_u.columns:
+            print("Unrolled parquets missing channel_type/h0_var — re-run compare_unrolled.")
+        else:
+            df_u = df_u.with_columns(
+                pl.coalesce(["neural_acc", "probe_acc"]).cast(pl.Float64).alias("acc")
+            ).select(["strategy", "K", "h0_var", "channel_type", "variant", "acc"])
+            dfs.append(df_u)
+
+    if baseline_files:
+        frames = [
+            pl.read_parquet(f).with_columns(pl.lit(i).alias("_fid"))
+            for i, f in enumerate(baseline_files)
+        ]
+        df_b = pl.concat(frames, how="diagonal_relaxed")
+        df_b = (
+            df_b.explode("probe_curve")
+            .with_row_index("_i")
+            .with_columns(
+                (pl.col("_i") - pl.col("_i").min().over("_fid") + 1).alias("K"),
+                pl.lit("Classic").alias("variant"),
+                pl.col("probe_curve").cast(pl.Float64).alias("acc"),
+            )
+            .drop(["_i", "_fid"])
+            .select(["strategy", "K", "h0_var", "channel_type", "variant", "acc"])
+        )
+        dfs.append(df_b)
+
+    if not dfs:
         return
 
+    df_all = pl.concat(dfs, how="diagonal_relaxed")
     df_all = df_all.filter((pl.col("channel_type") == "rayleigh") & pl.col("h0_var").is_not_null())
     if df_all.is_empty():
         print("No fixed-H0 Rayleigh results found.")
@@ -2319,6 +2357,8 @@ def unrolled_accuracy_grid() -> None:
     h0_vals = sorted(df_all["h0_var"].drop_nulls().unique().to_list())
     palette = sns.color_palette("viridis", len(h0_vals))
     color_map = {v: palette[i] for i, v in enumerate(h0_vals)}
+
+    df_pd = df_all.to_pandas()
 
     fig, axes = plt.subplots(
         1,
@@ -2331,47 +2371,43 @@ def unrolled_accuracy_grid() -> None:
 
     for col_idx, strat in enumerate(STRATEGIES):
         ax = axes[col_idx]
-        df_s = (
-            df_all.filter(pl.col("strategy") == strat) if "strategy" in df_all.columns else df_all
-        )
-        if df_s.is_empty():
+        df_s = df_pd[df_pd["strategy"] == strat] if "strategy" in df_pd.columns else df_pd
+        if df_s.empty:
             continue
 
         for h0v in h0_vals:
             color = color_map[h0v]
-            df_h = df_s.filter(pl.col("h0_var") == h0v)
+            df_h = df_s[df_s["h0_var"] == h0v]
 
-            for variant_key, ls in [("Classic", "--"), ("Unrolled", "-")]:
-                sub = (
-                    df_h.filter(pl.col("variant") == "Classic")
-                    if variant_key == "Classic"
-                    else df_h.filter(pl.col("variant").str.contains("Unrolled"))
+            classic = df_h[df_h["variant"] == "Classic"]
+            if not classic.empty:
+                sns.lineplot(
+                    data=classic,
+                    x="K",
+                    y="acc",
+                    ax=ax,
+                    color=color,
+                    linestyle="--",
+                    linewidth=2,
+                    errorbar=("ci", 95),
+                    n_boot=200,
                 )
-                if sub.is_empty():
-                    continue
 
-                by_K: dict[int, list[float]] = {}
-                for row in sub.iter_rows(named=True):
-                    K = int(row.get("K", 0))
-                    if K == 0:
-                        continue
-                    acc = row.get("neural_acc") or row.get("probe_acc")
-                    if acc is None:
-                        continue
-                    final_acc = float(acc) if not hasattr(acc, "__len__") else float(acc[-1])
-                    by_K.setdefault(K, []).append(final_acc)
-
-                if not by_K:
-                    continue
-                K_vals = sorted(by_K)
-                means = [np.mean(by_K[k]) for k in K_vals]
-                ses = [np.std(by_K[k]) / np.sqrt(max(len(by_K[k]), 1)) for k in K_vals]
-                x = np.array(K_vals)
-                mean = np.array(means)
-                se = np.array(ses)
-
-                ax.plot(x, mean, color=color, ls=ls, linewidth=2, marker="o", markersize=6)
-                ax.fill_between(x, mean - 1.96 * se, mean + 1.96 * se, color=color, alpha=0.12)
+            unrolled = df_h[df_h["variant"].str.contains("Unrolled", na=False)]
+            if not unrolled.empty:
+                sns.lineplot(
+                    data=unrolled,
+                    x="K",
+                    y="acc",
+                    ax=ax,
+                    color=color,
+                    linestyle="-",
+                    linewidth=2,
+                    marker="o",
+                    markersize=6,
+                    errorbar=("ci", 95),
+                    n_boot=200,
+                )
 
         ax.set_title(strat)
         ax.set_xlabel("K (layers / iterations)")

@@ -2,6 +2,7 @@ defaults:
   - sim: joint
   - alignment: ppfe
   - datasets/classification: cifar10
+  - datasets/channel: default
   - data: default
   - training: unrolled
   - classifier: default
@@ -15,8 +16,15 @@ sim:
   result_subdir: compare_unrolled_joint
   init_mode: random
 
+training:
+  epochs: 200
+  lr_schedule: none
+  weight_ratio: 1.0
+  training_type: independent
+
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      alignment: linear,ppfe
+      channel_dm.h0_var: 1,0.5,0,~
+      training.warm_start_type: only_semantic,average

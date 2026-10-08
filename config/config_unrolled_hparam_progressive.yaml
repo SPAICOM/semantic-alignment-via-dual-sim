@@ -1,0 +1,29 @@
+defaults:
+  - sim: joint
+  - alignment: ppfe
+  - datasets/classification: cifar10
+  - data: default
+  - training: unrolled_hparam
+  - classifier: default
+  - _self_
+
+sim:
+  L: 5
+  M_int: 32
+  channel_dim: 20
+  name: unrolled_hparam
+  result_subdir: unrolled_hparam
+  init_mode: random
+
+training:
+  training_type: progressive
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      training.seed: 42,100
+      training.weight_ratio: 0.0,0.1,0.3,1.0
+      training.warm_start_type: only_semantic,average
+      training.warmup_new_layers: 0,10,20,40
+      training.lr_inherited_ratio: 0.01,0.1,1.0

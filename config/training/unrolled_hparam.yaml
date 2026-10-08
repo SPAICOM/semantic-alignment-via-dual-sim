@@ -1,0 +1,10 @@
+defaults:
+  - unrolled
+
+# Small-sim overrides for hparam search
+K_list: [10]
+lr_w: [5e-4]
+lr_w_progressive: null
+n_channels: 1000
+batch_size: 32
+epochs: 150

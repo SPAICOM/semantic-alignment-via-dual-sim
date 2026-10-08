@@ -44,7 +44,6 @@ from semantic_alignment.sim.unrolled.runner import (
     CompareUnrolledCallback,
     UnrolledLightning,
     _build_mono_sims,
-    _make_eval_fn,
     _precompute_test_data,
 )
 from semantic_alignment.utils import channel as _channel_fn
@@ -119,8 +118,8 @@ def _setup(cfg: DictConfig) -> dict:
     H_mimo = _channel_fn(
         h_dim,
         h_dim,
-        channel_type=cfg.training.get("channel_type", "rayleigh"),
-        rice_factor_db=cfg.training.get("rice_factor_db", None),
+        channel_type=cfg.channel_dm.get("channel_type", "rayleigh"),
+        rice_factor_db=cfg.channel_dm.get("rice_factor_db", None),
     ).to(device)
 
     return dict(
@@ -158,17 +157,18 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     ws_type = str(cfg.training.get("warm_start_type", "identity"))
     ws_init_tag = "none" if ws_t == 0 else ws_type
     lr_w_tag = f"_lrw{lr_w}" if lr_w is not None else ""
-    ch_type = cfg.training.get("channel_type", "rayleigh")
-    kdb = cfg.training.get("rice_factor_db", None)
-    h0v = cfg.training.get("h0_var", None)
-    if ch_type == "rician":
-        ch_tag = f"_rician{kdb}dB"
-    elif h0v == 0:
-        ch_tag = "_det"
-    elif h0v is not None and not math.isinf(h0v):
-        ch_tag = f"_rayleigh_h0var{h0v}"
-    else:
-        ch_tag = "_rayleigh"
+    ch_type = cfg.channel_dm.get("channel_type", "rayleigh")
+    kdb = cfg.channel_dm.get("rice_factor_db", None)
+    h0v = cfg.channel_dm.get("h0_var", None)
+    match (ch_type, h0v):
+        case ("rician", _):
+            ch_tag = f"_rician{kdb}dB"
+        case (_, 0):
+            ch_tag = "_det"
+        case (_, h) if h is not None and not math.isinf(h):
+            ch_tag = f"_rayleigh_h0var{h}"
+        case _:
+            ch_tag = "_rayleigh"
     tt = cfg.training.get("training_type", "independent")
     wr = cfg.training.get("weight_ratio", 1.0)
     wn = cfg.training.get("warmup_new_layers", 0)
@@ -226,9 +226,9 @@ def main(cfg: DictConfig) -> None:
         f" | K={cfg.training.get('K', 200)}"
     )
 
-    ch_type = cfg.training.get("channel_type", "rayleigh")
-    kdb = cfg.training.get("rice_factor_db", None)
-    h0v = cfg.training.get("h0_var", None)
+    ch_type = cfg.channel_dm.get("channel_type", "rayleigh")
+    kdb = cfg.channel_dm.get("rice_factor_db", None)
+    h0v = cfg.channel_dm.get("h0_var", None)
 
     ctx = _setup(cfg)
     device = ctx["device"]
@@ -263,17 +263,15 @@ def main(cfg: DictConfig) -> None:
         except TypeError:
             lr_w_progressive_list = [float(lr_w_prog_cfg)] * len(K_list)
     constructive = cfg.sim.get("constructive", False)
-    _ch_type = cfg.training.get("channel_type", "rayleigh")
-    _kdb = cfg.training.get("rice_factor_db", None)
-    _h0v = cfg.training.get("h0_var", None)
-    if _ch_type == "rician":
-        ch_tag = f"_rician{_kdb}dB"
-    elif _h0v == 0:
-        ch_tag = "_det"
-    elif _h0v is not None and not math.isinf(_h0v):
-        ch_tag = f"_rayleigh_h0var{_h0v}"
-    else:
-        ch_tag = "_rayleigh"
+    match (ch_type, h0v):
+        case ("rician", _):
+            ch_tag = f"_rician{kdb}dB"
+        case (_, 0):
+            ch_tag = "_det"
+        case (_, h) if h is not None and not math.isinf(h):
+            ch_tag = f"_rayleigh_h0var{h}"
+        case _:
+            ch_tag = "_rayleigh"
 
     print(f" K_list={K_list}, lr_w_list={lr_w_list}, lr_w_progressive_list={lr_w_progressive_list}")
     slayer = cfg.sim.wavelength * cfg.sim.slayer_multiplier
@@ -310,66 +308,14 @@ def main(cfg: DictConfig) -> None:
         )
 
         n_R, n_T = H_mimo.shape[0], H_mimo.shape[1]
-        _ch_type_tr = cfg.training.get("channel_type", "rayleigh")
-        H_mimo = standardize_channel(H_mimo, channel_type=_ch_type_tr)
-
-        # Classic baseline on multiple seeds — alternating Adam with k_T=1 k_R=1
-        K_max = max(K_list)
-        _all_cp, _all_cn = [], []
-        for _cs in cfg.training.get("classic_seeds", [cfg.training.seed]):
-            lg.seed_everything(_cs)
-            _H_cs = standardize_channel(
-                _channel_fn(
-                    n_R,
-                    n_T,
-                    channel_type=_ch_type_tr,
-                    rice_factor_db=cfg.training.get("rice_factor_db", None),
-                ).to(device),
-                channel_type=_ch_type_tr,
-            )
-            _s: dict[str, list] = {"probe": [], "neural": []}
-            with torch.no_grad():
-                for p in sim.xi_T:
-                    p.zero_()
-                for p in sim.xi_R:
-                    p.zero_()
-            sim.optimize_alternating(
-                A_target,
-                _H_cs,
-                max_iters=K_max * 2,
-                k_T=1,
-                k_R=1,
-                lr_tx=lr_tx,
-                lr_rx=lr_rx,
-                eval_fn=_make_eval_fn(
-                    ctx["Z_test"],
-                    ctx["labels"],
-                    ctx["clf"],
-                    ctx["clf_neural"],
-                    ctx["L_out"],
-                    ctx["mu_out"],
-                    device,
-                    _s,
-                ),
-            )
-            _all_cp.append(_s["probe"])
-            _all_cn.append(_s["neural"])
-        lg.seed_everything(cfg.training.seed)
-        classic_probe_mean = torch.stack([torch.tensor(c) for c in _all_cp]).mean(0).tolist()
-        _classic_neural_valid = _all_cn[0][0] is not None if _all_cn else False
-        classic_neural_mean = (
-            torch.stack([torch.tensor(c) for c in _all_cn]).mean(0).tolist()
-            if _classic_neural_valid
-            else None
-        )
-
+        H_mimo = standardize_channel(H_mimo, channel_type=ch_type)
         # Pre-compute warm-start phases once for all coupling variants
         ws_t = cfg.training.get("warm_start_t", 0)
         ws_type = str(cfg.training.get("warm_start_type", "identity"))
         ws_init_tag = "none" if ws_t == 0 else ws_type
         ws_phT, ws_phR = None, None
         if ws_t > 0:
-            _ch_type_ws = cfg.training.get("channel_type", "rayleigh")
+            _ch_type_ws = ch_type
             match ws_type:
                 case "average":
                     _g_avg = torch.Generator().manual_seed(cfg.training.seed + 999)
@@ -393,7 +339,7 @@ def main(cfg: DictConfig) -> None:
                         n_R,
                         n_T,
                         channel_type=_ch_type_ws,
-                        rice_factor_db=cfg.training.get("rice_factor_db", None),
+                        rice_factor_db=kdb,
                         generator=gen,
                     ).to(device)
             with torch.no_grad():
@@ -477,14 +423,14 @@ def main(cfg: DictConfig) -> None:
                 dm = HChannelDataModule(
                     n_R=n_R,
                     n_T=n_T,
-                    n_total=cfg.training.get("n_channels", 10000),
+                    n_total=cfg.channel_dm.get("n_total", 10000),
                     batch_size=cfg.training.get("batch_size", 32),
-                    train_ratio=cfg.training.get("train_ratio", 0.7),
-                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
+                    val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
                     seed=cfg.training.seed + 999,
-                    h0_var=cfg.training.get("h0_var", None),
-                    channel_type=cfg.training.get("channel_type", "rayleigh"),
-                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                    h0_var=h0v,
+                    channel_type=ch_type,
+                    rice_factor_db=kdb,
                 )
                 dm.setup()
 
@@ -520,8 +466,6 @@ def main(cfg: DictConfig) -> None:
                     clf_neural=ctx["clf_neural"],
                     L_out=ctx["L_out"],
                     mu_out=ctx["mu_out"],
-                    classic_probe_curve=classic_probe_mean[:K],
-                    classic_neural_curve=classic_neural_mean[:K] if classic_neural_mean else None,
                 )
 
                 logger = WandbLogger(
@@ -551,7 +495,6 @@ def main(cfg: DictConfig) -> None:
                 test_neural = lightning._test_neural_curves
 
                 init_tag = f"warmstart_{ws_t}_{ws_init_tag}" if ws_t > 0 else "none"
-                classic_seeds_used = cfg.training.get("classic_seeds", [cfg.training.seed])
                 meta = {
                     "seed": cfg.training.seed,
                     "dataset": cfg.datasets.hf_name,
@@ -571,15 +514,6 @@ def main(cfg: DictConfig) -> None:
                     "h0_var": h0v,
                 }
                 rows = [
-                    {
-                        **meta,
-                        "variant": "Classic",
-                        "sample_id": int(s),
-                        "probe_acc": float(_all_cp[i][K - 1]),
-                        "neural_acc": float(_all_cn[i][K - 1]) if _classic_neural_valid else None,
-                    }
-                    for i, s in enumerate(classic_seeds_used)
-                ] + [
                     {
                         **meta,
                         "variant": f"Unrolled ({coup})",
@@ -654,14 +588,14 @@ def main(cfg: DictConfig) -> None:
                 dm = HChannelDataModule(
                     n_R=n_R,
                     n_T=n_T,
-                    n_total=cfg.training.get("n_channels", 10000),
+                    n_total=cfg.channel_dm.get("n_total", 10000),
                     batch_size=cfg.training.get("batch_size", 32),
-                    train_ratio=cfg.training.get("train_ratio", 0.7),
-                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
+                    val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
                     seed=cfg.training.seed + 999,
-                    h0_var=cfg.training.get("h0_var", None),
-                    channel_type=cfg.training.get("channel_type", "rayleigh"),
-                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                    h0_var=h0v,
+                    channel_type=ch_type,
+                    rice_factor_db=kdb,
                 )
                 dm.setup()
 
@@ -802,14 +736,14 @@ def main(cfg: DictConfig) -> None:
                 dm = HChannelDataModule(
                     n_R=n_R,
                     n_T=n_T,
-                    n_total=cfg.training.get("n_channels", 10000),
+                    n_total=cfg.channel_dm.get("n_total", 10000),
                     batch_size=cfg.training.get("batch_size", 32),
-                    train_ratio=cfg.training.get("train_ratio", 0.7),
-                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
+                    val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
                     seed=cfg.training.seed + 999,
                     precompute_svd=True,
-                    channel_type=cfg.training.get("channel_type", "rayleigh"),
-                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                    channel_type=ch_type,
+                    rice_factor_db=kdb,
                 )
                 dm.setup()
 
@@ -944,14 +878,14 @@ def main(cfg: DictConfig) -> None:
                 dm = HChannelDataModule(
                     n_R=n_R,
                     n_T=n_T,
-                    n_total=cfg.training.get("n_channels", 10000),
+                    n_total=cfg.channel_dm.get("n_total", 10000),
                     batch_size=cfg.training.get("batch_size", 32),
-                    train_ratio=cfg.training.get("train_ratio", 0.7),
-                    val_ratio=cfg.training.get("val_ratio", 0.15),
+                    train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
+                    val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
                     seed=cfg.training.seed + 999,
-                    h0_var=cfg.training.get("h0_var", None),
-                    channel_type=cfg.training.get("channel_type", "rayleigh"),
-                    rice_factor_db=cfg.training.get("rice_factor_db", None),
+                    h0_var=h0v,
+                    channel_type=ch_type,
+                    rice_factor_db=kdb,
                 )
                 dm.setup()
 

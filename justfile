@@ -295,6 +295,14 @@ cls *ARGS: train-clf
 # Trains K=100 layers in blocks of m, saving results at each block endpoint.
 # Config: config/training/unrolled.yaml
 
+# Unrolled GD: hparam search (L=5, K=10, PPFE, n_channels=1000) — warm start shared across inner loop
+cls-unrolled-hparam *ARGS: train-clf
+    uv run python scripts/hparam_search_unrolled.py --config-name config_unrolled_hparam_base datasets/classification={{dataset}} {{ARGS}}
+
+# Unrolled GD: classic Adam baseline — sweeps h0_var ∈ {1, 0.5, 0, ~} (4 multirun jobs, K=150)
+cls-unrolled-baseline *ARGS: train-clf
+    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} {{ARGS}}
+
 # Unrolled GD: joint Dual-SIM — PPFE only
 cls-unrolled-ppfe *ARGS: train-clf
     uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} alignment=ppfe {{ARGS}}
