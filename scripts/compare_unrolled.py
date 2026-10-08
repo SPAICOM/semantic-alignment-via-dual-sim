@@ -220,10 +220,13 @@ def main(cfg: DictConfig) -> None:
     lg.seed_everything(cfg.training.seed, workers=True)
 
     mode = cfg.sim.get("sim_type", "joint")
+    K_default = int(cfg.training.get("K", 30))
+    K_list_cfg = list(cfg.training.get("K_list", []))
+    _k_display = K_list_cfg if K_list_cfg else [K_default]
     print(
         f" seed={cfg.training.seed} | mode={mode} | "
         f"dataset={cfg.datasets.hf_name} | align={cfg.alignment.type}"
-        f" | K={cfg.training.get('K', 200)}"
+        f" | K={_k_display}"
     )
 
     ch_type = cfg.channel_dm.get("channel_type", "rayleigh")
