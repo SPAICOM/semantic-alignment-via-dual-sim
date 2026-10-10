@@ -5,13 +5,13 @@ defaults:
 # Number of unrolled gradient layers (inference iterations)
 K: 30
 # If set, trains one model per K value sharing the same warm start. Overrides K.
-K_list: [1, 5, 10, 15, 30]
+K_list: [1, 5, 10, 15] #, 30]
 
 # Training type for the K_list loop.
 # independent: each K trains from scratch (default).
 # progressive: K=k_{i+1} initializes its first k_i layers with the trained K=k_i parameters.
 #              A .steps.pt file is saved alongside each parquet for resume support.
-training_type: progressive
+training_type: independent
 # Gradient checkpointing: recompute activations during backward to save GPU memory.
 gradient_checkpointing: false
 
@@ -23,7 +23,7 @@ lr_rx: 0.2
 # Training hyper-params
 batch_size: 32
 epochs: 150
-lr_schedule: cosine  # none | cosine
+lr_schedule: none # none | cosine
 grad_clip: 1.0
 
 # Random MIMO channel dataset
@@ -45,7 +45,7 @@ wandb_project: compare_unrolled
 
 # Unrolled step-size init and momentum
 # Can be a scalar (same for all K) or a list matching K_list (one lr per K).
-lr_w: [1e-3, 1e-3, 5e-4, 5e-4, 3e-4]
+lr_w: [1e-3, 1e-3, 5e-4, 5e-4] #, 3e-4]
 # lr_w override for progressive steps (K_idx > 0 when training_type=progressive).
 # null → use lr_w. Set to a list (same length as K_list) or a scalar to use lower
 # rates for inherited layers, e.g. [1e-3, 5e-4, 2.5e-4, 2.5e-4, 1.5e-4].
@@ -78,7 +78,7 @@ warm_start_type: only_semantic # only_semantic | average | <int seed>
 
 # Deep supervision: 'all' averages per-layer NMSE across all K steps; 'final' uses only the last.
 supervision: all      # 'final': only last step NMSE | 'all': weighted sum over all K steps
-weight_ratio: 0.3     # w[0]/w[K-1]: ratio of first-layer to last-layer loss weight (only used when supervision=all)
+weight_ratio: 1.0     # w[0]/w[K-1]: ratio of first-layer to last-layer loss weight (only used when supervision=all)
                       # 1.0=uniform; 0.0=last-layer only; 0.3 ≈ gamma=0.958 for K=30
 
 # Mixed-precision training: use bfloat16 (saves ~50% memory, needs Ampere+ GPU)
