@@ -85,11 +85,11 @@ weight_ratio: 1.0     # w[0]/w[K-1]: ratio of first-layer to last-layer loss wei
 bf16: true
 
 # Adam-style momentum on the innovation
-momentum: true
+momentum: false
 
 # Learnable phase momentum S: phi^{k+1} = s * phi^k + w * g^k
 # When enabled, s is a learnable vector (1 x n_phases) initialised to 1,
 # shared across all K layers.
-learn_S: true
-reg_S: 0.01
+learn_S: false
+reg_S: 0.1
 
