@@ -91,5 +91,5 @@ momentum: true
 # When enabled, s is a learnable vector (1 x n_phases) initialised to 1,
 # shared across all K layers.
 learn_S: true
-reg_S: 0.1
+reg_S: 0.0
 
