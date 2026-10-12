@@ -45,7 +45,8 @@ wandb_project: compare_unrolled
 
 # Unrolled step-size init and momentum
 # Can be a scalar (same for all K) or a list matching K_list (one lr per K).
-lr_w: [1e-3, 1e-3, 5e-4, 5e-4] #, 3e-4]
+lr_w: 1e-3
+#lr_w: [1e-3, 1e-3, 5e-4, 5e-4] #, 3e-4]
 # lr_w override for progressive steps (K_idx > 0 when training_type=progressive).
 # null → use lr_w. Set to a list (same length as K_list) or a scalar to use lower
 # rates for inherited layers, e.g. [1e-3, 5e-4, 2.5e-4, 2.5e-4, 1.5e-4].
