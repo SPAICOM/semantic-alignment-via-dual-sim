@@ -155,6 +155,10 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
         self._phT_warm: list | None = phases_T_init
         self._phR_warm: list | None = phases_R_init
         self.gradient_checkpointing = gradient_checkpointing
+        # When > 0, detach phases/momentums after step detach_before-1 so the
+        # backward graph covers only steps [detach_before, K). Set by the runner
+        # when progressive training with lr_inherited_ratio == 0.0.
+        self.detach_before: int = 0
 
     # ---- helpers -----------------------------------------------------------
 
@@ -426,7 +430,15 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
                 phT, vT = self.step_T.apply(phT, gT, vT, k)
                 phR, vR = self.step_R.apply(phR, gR, vR, k)
 
-            if deep or k == k_run - 1:
+            if self.detach_before > 0 and k == self.detach_before - 1:
+                phT = [p.detach() for p in phT]
+                phR = [p.detach() for p in phR]
+                if vT is not None:
+                    vT = [v.detach() for v in vT]
+                if vR is not None:
+                    vR = [v.detach() for v in vR]
+
+            if (deep or k == k_run - 1) and k >= self.detach_before:
                 if use_ckpt:
                     _phT_cat = torch.cat(phT, dim=1)
                     _phR_cat = torch.cat(phR, dim=1)
@@ -444,9 +456,10 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
                 step_callback(k, phT + phR)
 
         if deep:
-            if gamma < 1.0:
+            n_curves = len(curves)
+            if gamma < 1.0 and n_curves > 1:
                 w = torch.tensor(
-                    [gamma ** (k_run - 1 - k) for k in range(k_run)],
+                    [gamma ** (n_curves - 1 - i) for i in range(n_curves)],
                     device=dev,
                     dtype=torch.float32,
                 )

@@ -815,6 +815,8 @@ class UnrolledLightning(lg.LightningModule):
         self.warmup_new_layers = warmup_new_layers
 
         self.unrolled_model = unrolled_model
+        if K_prev > 0 and lr_inherited_ratio == 0.0 and hasattr(unrolled_model, "detach_before"):
+            unrolled_model.detach_before = K_prev
         self.tx_target = tx_target
         self.rx_target = rx_target
 
