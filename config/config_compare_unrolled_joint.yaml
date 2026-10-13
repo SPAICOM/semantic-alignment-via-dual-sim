@@ -20,5 +20,5 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      channel_dm.h0_var: 0,0.1,1,null
       training.warm_start_type: only_semantic,average
+      channel_dm.h0_var: 0.001,0.01,0.1,1,null
