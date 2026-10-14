@@ -28,6 +28,7 @@ import lightning as lg
 import polars as pl
 import torch
 from omegaconf import DictConfig
+from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
 from compare_unrolled import _setup
@@ -126,7 +127,8 @@ def main(cfg: DictConfig) -> None:
     print(f" Baseline: {N_test} test channels, K_max={K_max}")
     print(f" Output → {out_dir}")
 
-    for i, H_raw in enumerate(test_channels):
+    n_done = sum(1 for i in range(N_test) if (out_dir / f"{i:04d}.parquet").exists())
+    for i, H_raw in enumerate(tqdm(test_channels, desc="baseline", initial=n_done, total=N_test)):
         out = out_dir / f"{i:04d}.parquet"
         if out.exists():
             continue
@@ -180,9 +182,6 @@ def main(cfg: DictConfig) -> None:
                 }
             ]
         ).write_parquet(out)
-
-        if i % 10 == 0:
-            print(f"  [{i + 1}/{N_test}] saved {out.name}")
 
     print(" Done.")
 
