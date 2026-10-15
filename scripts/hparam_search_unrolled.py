@@ -25,6 +25,8 @@ from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig, open_dict
 
 sys.path.insert(0, str(Path(__file__).parent))
+from warm_start_cache import _run_warm_start, _run_warm_start_cached  # noqa: F401 (re-export)
+
 import wandb
 from compare_unrolled import _setup
 from semantic_alignment.data import HChannelDataModule
@@ -35,7 +37,6 @@ from semantic_alignment.sim.unrolled.runner import (
     CompareUnrolledCallback,
     UnrolledLightning,
 )
-from semantic_alignment.utils import channel as _channel_fn
 from semantic_alignment.utils import standardize_channel
 
 torch.set_float32_matmul_precision("high")
@@ -89,57 +90,6 @@ def _out_path(
         f"{sched_tag}_{COUP}.parquet"
     )
     return _RESULTS / RESULT_SUBDIR / fname
-
-
-def _run_warm_start(
-    sim: JointSIM,
-    A_target: torch.Tensor,
-    n_R: int,
-    n_T: int,
-    ws_t: int,
-    ws_type: str,
-    h0v: float | None,
-    ch_type: str,
-    lr_tx: float,
-    lr_rx: float,
-    seed: int,
-    device: torch.device,
-) -> tuple[list, list]:
-    """Run ws_t Adam steps and return (ws_phT, ws_phR). Resets sim phases after."""
-    with torch.no_grad():
-        for p in sim.xi_T:
-            p.zero_()
-        for p in sim.xi_R:
-            p.zero_()
-    if ws_t == 0:
-        return [], []
-    match ws_type:
-        case "only_semantic":
-            H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
-        case "average":
-            _g = torch.Generator().manual_seed(seed + 999)
-            if h0v is not None and not math.isinf(h0v):
-                H_ws = _channel_fn(n_R, n_T, channel_type=ch_type, generator=_g).to(device)
-            else:
-                H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
-        case _:
-            gen = torch.Generator().manual_seed(int(ws_type))
-            H_ws = _channel_fn(n_R, n_T, channel_type=ch_type, generator=gen).to(device)
-    sim.optimize_alternating(
-        A_target,
-        H_ws,
-        max_iters=ws_t,
-        lr_tx=lr_tx,
-        lr_rx=lr_rx,
-    )
-    ws_phT = [p.data.clone() for p in sim.xi_T]
-    ws_phR = [p.data.clone() for p in sim.xi_R]
-    with torch.no_grad():
-        for p in sim.xi_T:
-            p.zero_()
-        for p in sim.xi_R:
-            p.zero_()
-    return ws_phT, ws_phR
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config_unrolled_hparam_base")
@@ -212,7 +162,7 @@ def main(cfg: DictConfig) -> None:
                     f"\n{'=' * 60}\n seed={seed} | h0v={h0v_active} | warm_start_type={ws_type}\n{'=' * 60}"
                 )
 
-                ws_phT, ws_phR = _run_warm_start(
+                ws_phT, ws_phR = _run_warm_start_cached(
                     sim,
                     A_target,
                     n_R,
@@ -225,6 +175,10 @@ def main(cfg: DictConfig) -> None:
                     lr_rx,
                     seed,
                     device,
+                    tx_enc=cfg.data.tx_enc,
+                    rx_enc=cfg.data.rx_enc,
+                    L=L,
+                    M_int=M_int,
                 )
 
                 for weight_ratio in wr_list:

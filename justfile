@@ -301,7 +301,7 @@ cls-unrolled-hparam *ARGS: train-clf
 
 # Unrolled GD: classic Adam baseline — sweeps h0_var ∈ {1, 0.5, 0, ~} (4 multirun jobs, K=150)
 cls-unrolled-baseline *ARGS: train-clf
-    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} {{ARGS}}
+    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} training.warm_start_type=none {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — PPFE only
 cls-unrolled-ppfe *ARGS: train-clf
@@ -397,4 +397,3 @@ cls-joint-lr-search *ARGS: train-clf
 # Generate publication-ready result plots
 plot:
     uv run python scripts/plot_results.py
-

@@ -5,17 +5,19 @@ and records probe/neural accuracy at every step.  Saves one parquet per test
 channel so the job is resumable: existing files are skipped.
 
 Output directory:
-  results/unrolled/baseline/{config_tag}/
+  results/unrolled/baseline/{ws_type}/{config_tag}/
     0000.parquet  ← test channel 0
     0001.parquet
     ...
 
 Each parquet has one row with columns:
-  test_id, probe_curve (list[float]), neural_curve (list[float]), + metadata.
+  test_id, probe_curve (list[float]), neural_curve (list[float]),
+  warm_start_type, + metadata.
 
 Usage:
   uv run python scripts/compute_unrolled_baseline.py \\
     datasets/channel=default training.gpu=0
+    [training.warm_start_type=none|only_semantic|average]
 """
 
 import math
@@ -31,6 +33,8 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
+from warm_start_cache import _run_warm_start_cached
+
 from compare_unrolled import _setup
 from semantic_alignment.data import HChannelDataModule
 from semantic_alignment.sim.original._utils import ch_dims
@@ -84,9 +88,14 @@ def main(cfg: DictConfig) -> None:
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
     n_R = n_T = ch_dim
 
-    K_max = cfg.training.get("baseline_iters", 150)
+    K_max = cfg.training.get("baseline_iters", 500)
+    ws_t = cfg.training.get("warm_start_t", 150)
+    ws_type = str(cfg.training.get("warm_start_type", "none"))
 
     dm_cfg = cfg.channel_dm
+    h0v = dm_cfg.get("h0_var", None)
+    ch_type = dm_cfg.get("channel_type", "rayleigh")
+
     dm = HChannelDataModule(
         n_R=n_R,
         n_T=n_T,
@@ -95,8 +104,8 @@ def main(cfg: DictConfig) -> None:
         train_ratio=dm_cfg.get("train_ratio", 0.7),
         val_ratio=dm_cfg.get("val_ratio", 0.15),
         seed=cfg.training.seed + 999,
-        h0_var=dm_cfg.get("h0_var", None),
-        channel_type=dm_cfg.get("channel_type", "rayleigh"),
+        h0_var=h0v,
+        channel_type=ch_type,
         rice_factor_db=dm_cfg.get("rice_factor_db", None),
     )
     dm.setup()
@@ -118,13 +127,39 @@ def main(cfg: DictConfig) -> None:
         rx_out_y,
     )
 
-    ch_type = dm_cfg.get("channel_type", "rayleigh")
+    # ── Warm-start phases (cached) ────────────────────────────────────────────
+    if ws_type != "none" and ws_t > 0:
+        ws_phT, ws_phR = _run_warm_start_cached(
+            sim,
+            A_target,
+            n_R,
+            n_T,
+            ws_t,
+            ws_type,
+            h0v,
+            ch_type,
+            lr_tx,
+            lr_rx,
+            cfg.training.seed,
+            device,
+            tx_enc=ctx["tx_enc"],
+            rx_enc=ctx["rx_enc"],
+            L=L,
+            M_int=M_int,
+        )
+    else:
+        ws_phT, ws_phR = [], []
+        ws_type = "none"
+
     tag = _config_tag(cfg, ch_dim, K_max)
-    out_dir = _RESULTS / "unrolled" / "baseline" / tag
+    out_dir = _RESULTS / "unrolled" / "baseline" / ws_type / tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    n_limit = cfg.training.get("n_test_channels", None)
+    if n_limit is not None:
+        test_channels = test_channels[: int(n_limit)]
     N_test = len(test_channels)
-    print(f" Baseline: {N_test} test channels, K_max={K_max}")
+    print(f" Baseline: {N_test} test channels, K_max={K_max}, warm_start={ws_type}")
     print(f" Output → {out_dir}")
 
     n_done = sum(1 for i in range(N_test) if (out_dir / f"{i:04d}.parquet").exists())
@@ -135,13 +170,14 @@ def main(cfg: DictConfig) -> None:
 
         H = standardize_channel(H_raw.to(device), channel_type=ch_type)
 
-        store: dict[str, list] = {"probe": [], "neural": []}
+        # Reset phases then apply warm-start init
         with torch.no_grad():
-            for p in sim.xi_T:
-                p.zero_()
-            for p in sim.xi_R:
-                p.zero_()
+            for j, p in enumerate(sim.xi_T):
+                p.data.copy_(ws_phT[j]) if ws_phT else p.zero_()
+            for j, p in enumerate(sim.xi_R):
+                p.data.copy_(ws_phR[j]) if ws_phR else p.zero_()
 
+        store: dict[str, list] = {"probe": [], "neural": []}
         sim.optimize_alternating(
             A_target,
             H,
@@ -174,11 +210,14 @@ def main(cfg: DictConfig) -> None:
                     "tx_enc": ctx["tx_enc"],
                     "rx_enc": ctx["rx_enc"],
                     "seed": cfg.training.seed,
-                    "h0_var": dm_cfg.get("h0_var", None),
+                    "h0_var": h0v,
                     "channel_type": ch_type,
+                    "warm_start_type": ws_type,
                     "K_max": K_max,
                     "probe_curve": store["probe"],
-                    "neural_curve": store["neural"] if store["neural"][0] is not None else None,
+                    "neural_curve": store["neural"]
+                    if store["neural"] and store["neural"][0] is not None
+                    else None,
                 }
             ]
         ).write_parquet(out)

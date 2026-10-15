@@ -18,3 +18,9 @@ sim:
 
 channel_dm:
   h0_var: null
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      training.warm_start_type: none,only_semantic,average

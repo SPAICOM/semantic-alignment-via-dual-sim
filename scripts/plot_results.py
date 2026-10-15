@@ -2283,151 +2283,198 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 # ---------------------------------------------------------------------------
 
 
-def unrolled_accuracy_grid() -> None:
-    """Accuracy vs K — Classic Adam (dashed) vs Deep Unrolling (solid).
+_WS_LABELS = {
+    "only_semantic": "Semantic Only",
+    "average": "Average",
+}
+_WS_ORDER = ["only_semantic", "average"]
+_H0V_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
-    Filtered to Rayleigh channels with fixed H_0 (channel_type='rayleigh', h0_var not null).
-    Columns: Linear / PPFE.
-    Color:   h0_var (per-element perturbation variance).
-    Linestyle: dashed = Classic Adam, solid = Deep Unrolling.
+
+def unrolled_accuracy_grid() -> None:
+    """Probe and Neural accuracy vs K grids — one file each."""
+    for acc_col, curve_col, kind, suffix in [
+        ("probe_acc", "probe_curve", "probe", "Probe"),
+        ("neural_acc", "neural_curve", "neural", "Neural"),
+    ]:
+        _unrolled_accuracy_grid_one(acc_col, curve_col, suffix)
+
+
+def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> None:
+    """Accuracy vs K grid.
+
+    Columns: warm_start_type (Semantic Only / Average).
+    Hue + marker: h0_var.
+    Linestyle: solid = Unrolled (colored), dashed black = Classic Adam (no marker).
+    Classic baseline replicated across all warm_start columns (it has no warm_start).
 
     Unrolled parquets: results/unrolled/**/*.parquet (excluding baseline/).
-    Baseline parquets: results/unrolled/baseline/**/*.parquet — one per test channel,
-      probe_curve is a list; exploded here to get one row per alternating cycle.
+    Baseline parquets: results/unrolled/baseline/**/*.parquet
     """
     from matplotlib.lines import Line2D
 
     unrolled_root = RESULTS / "unrolled"
     baseline_root = unrolled_root / "baseline"
 
-    if not unrolled_root.exists():
-        print("No unrolled results found.")
-        return
-
     unrolled_files = [f for f in unrolled_root.rglob("*.parquet") if "baseline" not in f.parts]
     baseline_files = list(baseline_root.rglob("*.parquet")) if baseline_root.exists() else []
 
     if not unrolled_files and not baseline_files:
-        print("No unrolled results found.")
+        print(f"No unrolled results found for {suffix}.")
         return
 
-    dfs: list[pl.DataFrame] = []
-
+    # ── Unrolled data ─────────────────────────────────────────────────────────
+    df_u: pl.DataFrame | None = None
     if unrolled_files:
-        df_u = pl.concat(
-            [pl.read_parquet(f) for f in unrolled_files],
-            how="diagonal_relaxed",
-        )
-        if "channel_type" not in df_u.columns or "h0_var" not in df_u.columns:
-            print("Unrolled parquets missing channel_type/h0_var — re-run compare_unrolled.")
+        raw = pl.concat([pl.read_parquet(f) for f in unrolled_files], how="diagonal_relaxed")
+        needed = {"channel_type", "h0_var", "warm_start_type", "K", "variant", acc_col}
+        missing = needed - set(raw.columns)
+        if missing:
+            print(f"Unrolled parquets missing columns {missing} — re-run compare_unrolled.")
         else:
-            df_u = df_u.with_columns(
-                pl.coalesce(["neural_acc", "probe_acc"]).cast(pl.Float64).alias("acc")
-            ).select(["strategy", "K", "h0_var", "channel_type", "variant", "acc"])
-            dfs.append(df_u)
+            df_u = (
+                raw.filter(pl.col("channel_type") == "rayleigh")
+                .with_columns(pl.col(acc_col).cast(pl.Float64).alias("acc"))
+                .select(["warm_start_type", "K", "h0_var", "variant", "acc"])
+            )
+            if df_u.is_empty():
+                df_u = None
 
-    if baseline_files:
+    # ── Baseline data (Classic Adam, may include warm_start_type) ────────────
+    df_b: pl.DataFrame | None = None
+    if baseline_files and curve_col in pl.read_parquet(baseline_files[0]).columns:
         frames = [
             pl.read_parquet(f).with_columns(pl.lit(i).alias("_fid"))
             for i, f in enumerate(baseline_files)
         ]
-        df_b = pl.concat(frames, how="diagonal_relaxed")
-        df_b = (
-            df_b.explode("probe_curve")
-            .with_row_index("_i")
-            .with_columns(
-                (pl.col("_i") - pl.col("_i").min().over("_fid") + 1).alias("K"),
-                pl.lit("Classic").alias("variant"),
-                pl.col("probe_curve").cast(pl.Float64).alias("acc"),
+        raw_b = pl.concat(frames, how="diagonal_relaxed")
+        if curve_col in raw_b.columns:
+            ch_filter = (
+                (pl.col("channel_type") == "rayleigh")
+                if "channel_type" in raw_b.columns
+                else pl.lit(True)
             )
-            .drop(["_i", "_fid"])
-            .select(["strategy", "K", "h0_var", "channel_type", "variant", "acc"])
-        )
-        dfs.append(df_b)
+            # Backfill warm_start_type for old baseline files that lack it
+            if "warm_start_type" not in raw_b.columns:
+                raw_b = raw_b.with_columns(pl.lit("none").alias("warm_start_type"))
+            df_b = (
+                raw_b.filter(ch_filter)
+                .explode(curve_col)
+                .with_row_index("_i")
+                .with_columns(
+                    ((pl.col("_i") - pl.col("_i").min().over("_fid")) // 2 + 1).alias("K"),
+                    pl.lit("Classic").alias("variant"),
+                    pl.col(curve_col).cast(pl.Float64).alias("acc"),
+                )
+                .drop(["_i", "_fid"])
+                .select(["K", "variant", "acc", "warm_start_type"])
+            )
+            if df_b.is_empty():
+                df_b = None
 
-    if not dfs:
+    if df_u is None and df_b is None:
+        print(f"No data to plot for {suffix}.")
         return
 
-    df_all = pl.concat(dfs, how="diagonal_relaxed")
-    df_all = df_all.filter((pl.col("channel_type") == "rayleigh") & pl.col("h0_var").is_not_null())
-    if df_all.is_empty():
-        print("No fixed-H0 Rayleigh results found.")
-        return
+    # Determine columns (warm_start_type values present in unrolled data)
+    ws_vals = (
+        [w for w in _WS_ORDER if w in df_u["warm_start_type"].unique().to_list()]
+        if df_u is not None
+        else list(_WS_ORDER)
+    )
+    if not ws_vals:
+        ws_vals = list(_WS_ORDER)
 
-    h0_vals = sorted(df_all["h0_var"].drop_nulls().unique().to_list())
+    # h0_var values and visual encoding (None = full Rayleigh, sorted last)
+    h0_src = df_u if df_u is not None else df_b
+    _h0_raw = h0_src["h0_var"].unique().to_list()  # type: ignore[union-attr]
+    h0_vals = sorted([v for v in _h0_raw if v is not None]) + ([None] if None in _h0_raw else [])
     palette = sns.color_palette("viridis", len(h0_vals))
     color_map = {v: palette[i] for i, v in enumerate(h0_vals)}
+    marker_map = {v: _H0V_MARKERS[i % len(_H0V_MARKERS)] for i, v in enumerate(h0_vals)}
 
-    df_pd = df_all.to_pandas()
-
+    n_cols = len(ws_vals)
     fig, axes = plt.subplots(
         1,
-        len(STRATEGIES),
+        n_cols,
         sharey=True,
-        figsize=(7 * len(STRATEGIES), 5),
+        sharex=True,
+        figsize=(7 * n_cols, 5),
         layout="constrained",
+        squeeze=False,
     )
-    axes = list(np.atleast_1d(axes))
 
-    for col_idx, strat in enumerate(STRATEGIES):
-        ax = axes[col_idx]
-        df_s = df_pd[df_pd["strategy"] == strat] if "strategy" in df_pd.columns else df_pd
-        if df_s.empty:
-            continue
+    for col_idx, ws in enumerate(ws_vals):
+        ax = axes[0][col_idx]
+        ax.set_title(_WS_LABELS.get(ws, ws))
 
         for h0v in h0_vals:
             color = color_map[h0v]
-            df_h = df_s[df_s["h0_var"] == h0v]
+            mk = marker_map[h0v]
 
-            classic = df_h[df_h["variant"] == "Classic"]
-            if not classic.empty:
+            # Unrolled line: solid, colored, with marker
+            if df_u is not None:
+                h0_expr = pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
+                sub = df_u.filter(
+                    (pl.col("warm_start_type") == ws)
+                    & h0_expr
+                    & pl.col("variant").str.contains("Unrolled")
+                ).to_pandas()
+                if not sub.empty:
+                    sns.lineplot(
+                        data=sub,
+                        x="K",
+                        y="acc",
+                        ax=ax,
+                        color=color,
+                        linestyle="-",
+                        linewidth=2,
+                        marker=mk,
+                        markersize=7,
+                        errorbar=("ci", 95),
+                        n_boot=200,
+                    )
+
+        # Classic Adam: black, dashed, no marker — match warm_start_type to column
+        if df_b is not None:
+            ws_types_b = df_b["warm_start_type"].unique().to_list()
+            # prefer matching ws, fall back to "none", else use all
+            b_ws = ws if ws in ws_types_b else ("none" if "none" in ws_types_b else None)
+            sub_b = df_b.filter(pl.col("warm_start_type") == b_ws) if b_ws else df_b
+            if not sub_b.is_empty():
                 sns.lineplot(
-                    data=classic,
+                    data=sub_b.to_pandas(),
                     x="K",
                     y="acc",
                     ax=ax,
-                    color=color,
+                    color="black",
                     linestyle="--",
-                    linewidth=2,
+                    linewidth=1.5,
                     errorbar=("ci", 95),
                     n_boot=200,
                 )
 
-            unrolled = df_h[df_h["variant"].str.contains("Unrolled", na=False)]
-            if not unrolled.empty:
-                sns.lineplot(
-                    data=unrolled,
-                    x="K",
-                    y="acc",
-                    ax=ax,
-                    color=color,
-                    linestyle="-",
-                    linewidth=2,
-                    marker="o",
-                    markersize=6,
-                    errorbar=("ci", 95),
-                    n_boot=200,
-                )
-
-        ax.set_title(strat)
         ax.set_xlabel("K (layers / iterations)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
 
+    # ── Legends ───────────────────────────────────────────────────────────────
+    # Linestyle legend (top center)
     ls_handles = [
-        Line2D([0], [0], color="gray", ls="--", lw=2, label="Classic Adam"),
         Line2D([0], [0], color="gray", ls="-", lw=2, label="Deep Unrolling"),
+        Line2D([0], [0], color="black", ls="--", lw=1.5, label="Classic Adam"),
     ]
     fig.legend(
         ls_handles,
         [h.get_label() for h in ls_handles],
         ncol=2,
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.12),
+        bbox_to_anchor=(0.5, 1.10),
         frameon=True,
         framealpha=1,
     )
 
+    # h0_var legend (bottom center)
     h0v_handles = [
         Line2D(
             [0],
@@ -2435,9 +2482,9 @@ def unrolled_accuracy_grid() -> None:
             color=color_map[v],
             ls="-",
             lw=2,
-            marker="o",
+            marker=marker_map[v],
             markersize=8,
-            label=rf"$\sigma^2={v}$",
+            label="Full Rayleigh" if v is None else rf"$\sigma^2={v}$",
         )
         for v in h0_vals
     ]
@@ -2446,14 +2493,14 @@ def unrolled_accuracy_grid() -> None:
         [h.get_label() for h in h0v_handles],
         ncol=len(h0v_handles),
         loc="lower center",
-        bbox_to_anchor=(0.5, -0.20),
+        bbox_to_anchor=(0.5, -0.12),
         frameon=True,
         framealpha=1,
         columnspacing=0.8,
         handletextpad=0.4,
     )
 
-    _save("Unrolled_H0Var_AccuracyGrid")
+    _save(f"Unrolled_AccuracyGrid_{suffix}")
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, TensorDataset
+from warm_start_cache import _run_warm_start_cached as _ws_cached
 
 import wandb
 from semantic_alignment.data import HChannelDataModule
@@ -47,7 +48,7 @@ from semantic_alignment.sim.unrolled.runner import (
     _precompute_test_data,
 )
 from semantic_alignment.utils import channel as _channel_fn
-from semantic_alignment.utils import pack_complex, rician_los, standardize_channel
+from semantic_alignment.utils import pack_complex, standardize_channel
 
 torch.set_float32_matmul_precision("high")
 
@@ -196,19 +197,38 @@ def _steps_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -
     return _out_path(cfg, coup, K, lr_w).with_suffix(".steps.pt")
 
 
-def _copy_progressive_init(model, state_T: dict, state_R: dict, K_prev: int) -> None:
+def _copy_progressive_init(
+    model,
+    state_T: dict,
+    state_R: dict,
+    K_prev: int,
+    last_layer_init: bool = False,
+) -> None:
     """Copy first K_prev layers from saved step states into model.step_T / step_R.
 
     All learnable parameters in UnrolledStep subclasses are indexed along dim 0
     as the K dimension, so slicing [:K_prev] copies exactly the trained layers.
+
+    If last_layer_init=True, new layers [K_prev:] are initialised from the last
+    trained layer (K_prev-1) instead of the fixed default (init_w, init_mu, s=1).
     """
     with torch.no_grad():
         for name, dst_p in model.step_T.named_parameters():
             if name in state_T:
                 dst_p.data[:K_prev].copy_(state_T[name])
+                if last_layer_init and dst_p.data.shape[0] > K_prev:
+                    last = state_T[name][-1:]  # (1, ...)
+                    dst_p.data[K_prev:].copy_(
+                        last.expand(dst_p.data.shape[0] - K_prev, *last.shape[1:])
+                    )
         for name, dst_p in model.step_R.named_parameters():
             if name in state_R:
                 dst_p.data[:K_prev].copy_(state_R[name])
+                if last_layer_init and dst_p.data.shape[0] > K_prev:
+                    last = state_R[name][-1:]
+                    dst_p.data[K_prev:].copy_(
+                        last.expand(dst_p.data.shape[0] - K_prev, *last.shape[1:])
+                    )
 
 
 @hydra.main(version_base=None, config_path="../config", config_name="config")
@@ -316,54 +336,27 @@ def main(cfg: DictConfig) -> None:
         ws_t = cfg.training.get("warm_start_t", 0)
         ws_type = str(cfg.training.get("warm_start_type", "identity"))
         ws_init_tag = "none" if ws_t == 0 else ws_type
-        ws_phT, ws_phR = None, None
+        ws_phT: list | None = None
+        ws_phR: list | None = None
         if ws_t > 0:
-            _ch_type_ws = ch_type
-            match ws_type:
-                case "average":
-                    _g_avg = torch.Generator().manual_seed(cfg.training.seed + 999)
-                    match _ch_type_ws:
-                        case "rician":
-                            H_ws = standardize_channel(
-                                rician_los(n_R, n_T, generator=_g_avg).to(device),
-                                channel_type="rician",
-                            )
-                        case _ if h0v is not None and not math.isinf(h0v):
-                            H_ws = _channel_fn(
-                                n_R, n_T, channel_type=_ch_type_ws, generator=_g_avg
-                            ).to(device)
-                        case _:
-                            H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
-                case "only_semantic":
-                    H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
-                case _:
-                    gen = torch.Generator().manual_seed(int(ws_type))
-                    H_ws = _channel_fn(
-                        n_R,
-                        n_T,
-                        channel_type=_ch_type_ws,
-                        rice_factor_db=kdb,
-                        generator=gen,
-                    ).to(device)
-            with torch.no_grad():
-                for p in sim.xi_T:
-                    p.zero_()
-                for p in sim.xi_R:
-                    p.zero_()
-            sim.optimize_alternating(
+            ws_phT, ws_phR = _ws_cached(
+                sim,
                 A_target,
-                H_ws,
-                max_iters=ws_t,
-                lr_tx=lr_tx,
-                lr_rx=lr_rx,
+                n_R,
+                n_T,
+                ws_t,
+                ws_type,
+                h0v,
+                ch_type,
+                lr_tx,
+                lr_rx,
+                cfg.training.seed,
+                device,
+                tx_enc=ctx["tx_enc"],
+                rx_enc=ctx["rx_enc"],
+                L=L,
+                M_int=M_int,
             )
-            ws_phT = [p.data.clone() for p in sim.xi_T]
-            ws_phR = [p.data.clone() for p in sim.xi_R]
-            with torch.no_grad():
-                for p in sim.xi_T:
-                    p.zero_()
-                for p in sim.xi_R:
-                    p.zero_()
 
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Joint coupling='{coup}'\n{'=' * 60}")
@@ -418,10 +411,18 @@ def main(cfg: DictConfig) -> None:
                 ).to(device)
 
                 if training_type == "progressive" and prev_step_state is not None:
+                    lli = cfg.training.get("init_new_from_last", False)
                     _copy_progressive_init(
-                        model, prev_step_state["step_T"], prev_step_state["step_R"], prev_K
+                        model,
+                        prev_step_state["step_T"],
+                        prev_step_state["step_R"],
+                        prev_K,
+                        last_layer_init=lli,
                     )
-                    print(f"  Progressive init: copied K={prev_K} → K={K} step parameters.")
+                    lli_tag = " (last-layer init)" if lli else ""
+                    print(
+                        f"  Progressive init: copied K={prev_K} → K={K} step parameters{lli_tag}."
+                    )
 
                 dm = HChannelDataModule(
                     n_R=n_R,

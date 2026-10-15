@@ -59,6 +59,9 @@ lr_inherited_ratio: 1.0
 # warmup_new_layers: ramp new-layer gradients from 0 to full scale over this many epochs.
 #   0 = disabled (new layers train at full LR from epoch 0).
 warmup_new_layers: 0
+# init_new_from_last: initialise new layers (K_prev:K) from the last trained layer
+# instead of the fixed defaults. Only active when training_type=progressive.
+init_new_from_last: false
 
 init_w: 0.1
 init_mu: 0.9
@@ -71,7 +74,8 @@ innovation_mode: autograd
 
 # Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
 warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
-baseline_iters: 150        # alternating cycles for the classic-Adam baseline script
+baseline_iters: 1000       # alternating cycles for the classic-Adam baseline script (→ max_iters=2000 steps)
+n_test_channels: null      # limit test channels for the baseline script (null = all)
 warm_start_type: only_semantic # only_semantic | average | <int seed>
                           #   only_semantic → H = I (semantic alignment only, no channel)
                           #   average       → H_0 (rayleigh+h0_var) or H_los (rician)
