@@ -22,7 +22,7 @@ lr_rx: 0.2
 
 # Training hyper-params
 batch_size: 32
-epochs: 150
+epochs: 100
 lr_schedule: none # none | cosine
 grad_clip: 1.0
 
@@ -55,7 +55,7 @@ lr_w_progressive: null #[1e-3, 5e-4, 2.5e-4, 2.5e-4, 1.5e-4]
 # Progressive layer-wise gradient scaling (only active when training_type=progressive and K_idx>0).
 # lr_inherited_ratio: scale factor applied to gradients of inherited layers (k < K_prev).
 #   1.0 = no scaling (default), 0.1 = 10x lower effective LR for inherited layers.
-lr_inherited_ratio: 0.0
+lr_inherited_ratio: 1.0
 # warmup_new_layers: ramp new-layer gradients from 0 to full scale over this many epochs.
 #   0 = disabled (new layers train at full LR from epoch 0).
 warmup_new_layers: 0
