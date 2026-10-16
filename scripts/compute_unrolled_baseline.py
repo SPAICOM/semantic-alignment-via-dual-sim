@@ -33,9 +33,9 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
+from unrolled import _setup
 from warm_start_cache import _run_warm_start_cached
 
-from compare_unrolled import _setup
 from semantic_alignment.data import HChannelDataModule
 from semantic_alignment.sim.original._utils import ch_dims
 from semantic_alignment.sim.original.joint import JointSIM
@@ -88,7 +88,7 @@ def main(cfg: DictConfig) -> None:
     rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
     n_R = n_T = ch_dim
 
-    K_max = cfg.training.get("baseline_iters", 500)
+    K_max = cfg.training.get("baseline_iters", 1000)
     ws_t = cfg.training.get("warm_start_t", 150)
     ws_type = str(cfg.training.get("warm_start_type", "none"))
 

@@ -41,7 +41,7 @@ rice_factor_db: null
 h0_var: 1
 
 # Wandb logging
-wandb_project: compare_unrolled
+wandb_project: unrolled
 
 # Unrolled step-size init and momentum
 # Can be a scalar (same for all K) or a list matching K_list (one lr per K).

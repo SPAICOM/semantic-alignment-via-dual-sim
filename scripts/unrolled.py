@@ -231,7 +231,7 @@ def _copy_progressive_init(
                     )
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="config")
+@hydra.main(version_base=None, config_path="../config", config_name="config_unrolled_joint")
 def main(cfg: DictConfig) -> None:
     gpu = cfg.training.get("gpu", None)
     if gpu is not None:
@@ -473,7 +473,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 logger = WandbLogger(
-                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    project=cfg.training.get("wandb_project", "unrolled"),
                     name=f"joint_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}_ws{ws_t}_wsh{ws_init_tag}{ch_tag}",
                 )
 
@@ -636,7 +636,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 logger = WandbLogger(
-                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    project=cfg.training.get("wandb_project", "unrolled"),
                     name=f"mono_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{'_S' if cfg.training.get('learn_S', False) else ''}{ch_tag}",
                 )
 
@@ -786,7 +786,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 logger = WandbLogger(
-                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    project=cfg.training.get("wandb_project", "unrolled"),
                     name=f"disjoint_sym_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{ch_tag}",
                 )
 
@@ -926,7 +926,7 @@ def main(cfg: DictConfig) -> None:
                 )
 
                 logger = WandbLogger(
-                    project=cfg.training.get("wandb_project", "compare_unrolled"),
+                    project=cfg.training.get("wandb_project", "unrolled"),
                     name=f"disjoint_asym_K{K}_L{L}_M{M_int}_{strategy_name}_{coup}{ch_tag}",
                 )
 

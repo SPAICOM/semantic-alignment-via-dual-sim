@@ -295,49 +295,31 @@ cls *ARGS: train-clf
 # Trains K=100 layers in blocks of m, saving results at each block endpoint.
 # Config: config/training/unrolled.yaml
 
-# Unrolled GD: hparam search (L=5, K=10, PPFE, n_channels=1000) — warm start shared across inner loop
-cls-unrolled-hparam *ARGS: train-clf
-    uv run python scripts/hparam_search_unrolled.py --config-name config_unrolled_hparam_base datasets/classification={{dataset}} {{ARGS}}
 
-# Unrolled GD: classic Adam baseline — sweeps h0_var ∈ {1, 0.5, 0, ~} (4 multirun jobs, K=150)
+# Unrolled GD: classic Adam baseline — sweeps over warm_start_type: none,only_semantic,average
 cls-unrolled-baseline *ARGS: train-clf
-    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} training.warm_start_type=none {{ARGS}}
+    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} {{ARGS}}
+
+# Unrolled GD: classic Adam baseline — only_semantic warm-start
+cls-unrolled-baseline-ws-sem *ARGS: train-clf
+    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=only_semantic {{ARGS}}
+
+# Unrolled GD: classic Adam baseline — average warm-start
+cls-unrolled-baseline-ws-avg *ARGS: train-clf
+    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=average {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — PPFE only
 cls-unrolled-ppfe *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} alignment=ppfe {{ARGS}}
+    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment=ppfe {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — Linear only
 cls-unrolled-linear *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} alignment=linear {{ARGS}}
+    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment=linear {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — sweep h0_var × warm_start_type (PPFE, 8 multirun jobs)
 cls-unrolled-joint *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_joint datasets/classification={{dataset}} {{ARGS}}
+    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} {{ARGS}}
 
-# Unrolled GD: mono-SIM (equalized)
-cls-unrolled-mono *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_mono datasets/classification={{dataset}} {{ARGS}}
-
-# Unrolled GD: mono-SIM (constructive)
-cls-unrolled-mono-c *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_mono datasets/classification={{dataset}} sim.constructive=true {{ARGS}}
-
-# Unrolled GD: disjoint sym (equalized)
-cls-unrolled-disjoint-sym *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_sym datasets/classification={{dataset}} {{ARGS}}
-
-# Unrolled GD: disjoint sym (constructive)
-cls-unrolled-disjoint-sym-c *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_sym datasets/classification={{dataset}} sim.constructive=true {{ARGS}}
-
-# Unrolled GD: disjoint asym (tx, equalized)
-cls-unrolled-disjoint-asym *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets/classification={{dataset}} {{ARGS}}
-
-# Unrolled GD: disjoint asym (tx, constructive)
-cls-unrolled-disjoint-asym-c *ARGS: train-clf
-    uv run python scripts/compare_unrolled.py --config-name config_compare_unrolled_disjoint_asym datasets/classification={{dataset}} sim.constructive=true {{ARGS}}
 
 # Aggregate: all unrolled GD experiments
 unrolled: cls-unrolled-joint
@@ -397,3 +379,4 @@ cls-joint-lr-search *ARGS: train-clf
 # Generate publication-ready result plots
 plot:
     uv run python scripts/plot_results.py
+

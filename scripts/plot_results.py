@@ -2330,7 +2330,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         needed = {"channel_type", "h0_var", "warm_start_type", "K", "variant", acc_col}
         missing = needed - set(raw.columns)
         if missing:
-            print(f"Unrolled parquets missing columns {missing} — re-run compare_unrolled.")
+            print(f"Unrolled parquets missing columns {missing} — re-run unrolled.")
         else:
             df_u = (
                 raw.filter(pl.col("channel_type") == "rayleigh")
@@ -2340,34 +2340,46 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             if df_u.is_empty():
                 df_u = None
 
-    # ── Baseline data (Classic Adam, may include warm_start_type) ────────────
+    # ── Baseline data — lazy scan + streaming aggregation ────────────────────
+    # Pre-aggregate to (K, warm_start_type) → mean/std/n/lo/hi so we never
+    # materialise the full N_test × K_max exploded frame (can be millions of rows).
     df_b: pl.DataFrame | None = None
-    if baseline_files and curve_col in pl.read_parquet(baseline_files[0]).columns:
-        frames = [
-            pl.read_parquet(f).with_columns(pl.lit(i).alias("_fid"))
-            for i, f in enumerate(baseline_files)
-        ]
-        raw_b = pl.concat(frames, how="diagonal_relaxed")
-        if curve_col in raw_b.columns:
-            ch_filter = (
-                (pl.col("channel_type") == "rayleigh")
-                if "channel_type" in raw_b.columns
-                else pl.lit(True)
+    if baseline_files:
+        _sample = pl.read_parquet(baseline_files[0])
+        if curve_col in _sample.columns:
+            _curve_len = len(_sample[curve_col][0].to_list())
+            _has_ws = "warm_start_type" in _sample.columns
+            _has_ch = "channel_type" in _sample.columns
+            lf = pl.scan_parquet(baseline_files, hive_partitioning=False)
+            # backfill warm_start_type for old files that lack it
+            lf = lf.with_columns(
+                pl.col("warm_start_type").fill_null("none")
+                if _has_ws
+                else pl.lit("none").alias("warm_start_type")
             )
-            # Backfill warm_start_type for old baseline files that lack it
-            if "warm_start_type" not in raw_b.columns:
-                raw_b = raw_b.with_columns(pl.lit("none").alias("warm_start_type"))
+            if _has_ch:
+                lf = lf.filter(pl.col("channel_type") == "rayleigh")
             df_b = (
-                raw_b.filter(ch_filter)
+                lf.select([curve_col, "warm_start_type"])
                 .explode(curve_col)
-                .with_row_index("_i")
+                .with_row_index("_gi")
                 .with_columns(
-                    ((pl.col("_i") - pl.col("_i").min().over("_fid")) // 2 + 1).alias("K"),
-                    pl.lit("Classic").alias("variant"),
+                    # K = local position within each file's curve (all files share _curve_len)
+                    (pl.col("_gi") % _curve_len // 2 + 1).alias("K"),
                     pl.col(curve_col).cast(pl.Float64).alias("acc"),
                 )
-                .drop(["_i", "_fid"])
-                .select(["K", "variant", "acc", "warm_start_type"])
+                .group_by(["K", "warm_start_type"])
+                .agg(
+                    pl.col("acc").mean().alias("mean"),
+                    pl.col("acc").std().alias("std"),
+                    pl.col("acc").count().alias("n"),
+                )
+                .sort("K")
+                .with_columns(
+                    (pl.col("mean") - 1.96 * pl.col("std") / pl.col("n").sqrt()).alias("lo"),
+                    (pl.col("mean") + 1.96 * pl.col("std") / pl.col("n").sqrt()).alias("hi"),
+                )
+                .collect(engine="streaming")
             )
             if df_b.is_empty():
                 df_b = None
@@ -2375,6 +2387,16 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     if df_u is None and df_b is None:
         print(f"No data to plot for {suffix}.")
         return
+
+    # x-axis range from actual data
+    k_mins, k_maxs = [], []
+    if df_u is not None:
+        k_mins.append(int(df_u["K"].min()))
+        k_maxs.append(int(df_u["K"].max()))
+    if df_b is not None:
+        k_mins.append(int(df_b["K"].min()))
+        k_maxs.append(int(df_b["K"].max()))
+    x_min, x_max = min(k_mins), max(k_maxs)
 
     # Determine columns (warm_start_type values present in unrolled data)
     ws_vals = (
@@ -2436,24 +2458,18 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     )
 
         # Classic Adam: black, dashed, no marker — match warm_start_type to column
+        # df_b is already aggregated (mean/lo/hi per K), no further groupby needed
         if df_b is not None:
             ws_types_b = df_b["warm_start_type"].unique().to_list()
-            # prefer matching ws, fall back to "none", else use all
             b_ws = ws if ws in ws_types_b else ("none" if "none" in ws_types_b else None)
             sub_b = df_b.filter(pl.col("warm_start_type") == b_ws) if b_ws else df_b
             if not sub_b.is_empty():
-                sns.lineplot(
-                    data=sub_b.to_pandas(),
-                    x="K",
-                    y="acc",
-                    ax=ax,
-                    color="black",
-                    linestyle="--",
-                    linewidth=1.5,
-                    errorbar=("ci", 95),
-                    n_boot=200,
-                )
+                agg_b = sub_b.sort("K").to_pandas()
+                ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="--", linewidth=1.5)
+                ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
+        ax.set_xscale("log")
+        ax.set_xlim(x_min, x_max)
         ax.set_xlabel("K (layers / iterations)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
