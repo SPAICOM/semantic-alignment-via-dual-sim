@@ -51,7 +51,10 @@ If you find this code useful for your research, please consider citing the follo
 
 ## Authors
 
-- [EXAMPLE](https://scholar.google.com/citations?user=EXAMPLE)
+- [Mario Edoardo Pandolfo](https://scholar.google.com/citations?user=wAeScL8AAAAJ)
+- [Kyriakos Stylianopoulos](https://scholar.google.com/citations?user=42KAgRMAAAAJ)
+- [George C. Alexandropoulos](https://scholar.google.com/citations?user=3Ltyd9sAAAAJ)
+- [Paolo Di Lorenzo](https://scholar.google.com/citations?&user=VZYvspQAAAAJ)
 
 ## Used Technologies
 
