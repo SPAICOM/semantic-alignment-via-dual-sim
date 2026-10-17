@@ -33,7 +33,6 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
-from unrolled import _setup
 from warm_start_cache import _run_warm_start_cached
 
 from semantic_alignment.data import HChannelDataModule
@@ -41,6 +40,7 @@ from semantic_alignment.sim.original._utils import ch_dims
 from semantic_alignment.sim.original.joint import JointSIM
 from semantic_alignment.sim.unrolled.runner import _make_eval_fn
 from semantic_alignment.utils import standardize_channel
+from unrolled import _setup
 
 torch.set_float32_matmul_precision("high")
 
@@ -155,7 +155,7 @@ def main(cfg: DictConfig) -> None:
     out_dir = _RESULTS / "unrolled" / "baseline" / ws_type / tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    n_limit = cfg.training.get("n_test_channels", None)
+    n_limit = cfg.training.get("n_baselines", None)
     if n_limit is not None:
         test_channels = test_channels[: int(n_limit)]
     N_test = len(test_channels)

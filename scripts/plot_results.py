@@ -2284,10 +2284,11 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 _WS_LABELS = {
+    "none": "No Warmstart",
     "only_semantic": "Semantic Only",
     "average": "Average",
 }
-_WS_ORDER = ["only_semantic", "average"]
+_WS_ORDER = ["none", "only_semantic", "average"]
 _H0V_MARKERS = ["o", "s", "^", "D", "v", "P", "X", "*"]
 
 
@@ -2398,12 +2399,13 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         k_maxs.append(int(df_b["K"].max()))
     x_min, x_max = min(k_mins), max(k_maxs)
 
-    # Determine columns (warm_start_type values present in unrolled data)
-    ws_vals = (
-        [w for w in _WS_ORDER if w in df_u["warm_start_type"].unique().to_list()]
-        if df_u is not None
-        else list(_WS_ORDER)
-    )
+    # Columns = union of warm_start_types in unrolled OR baseline, restricted to _WS_ORDER
+    _ws_present: set[str] = set()
+    if df_u is not None:
+        _ws_present |= set(df_u["warm_start_type"].unique().to_list())
+    if df_b is not None:
+        _ws_present |= set(df_b["warm_start_type"].unique().to_list())
+    ws_vals = [w for w in _WS_ORDER if w in _ws_present]
     if not ws_vals:
         ws_vals = list(_WS_ORDER)
 
@@ -2452,19 +2454,16 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         linestyle="-",
                         linewidth=2,
                         marker=mk,
-                        markersize=7,
+                        markersize=10,
                         errorbar=("ci", 95),
                         n_boot=200,
                     )
 
-        # Classic Adam: black, dashed, no marker — match warm_start_type to column
-        # df_b is already aggregated (mean/lo/hi per K), no further groupby needed
-        if df_b is not None:
-            ws_types_b = df_b["warm_start_type"].unique().to_list()
-            b_ws = ws if ws in ws_types_b else ("none" if "none" in ws_types_b else None)
-            sub_b = df_b.filter(pl.col("warm_start_type") == b_ws) if b_ws else df_b
+        # Classic Adam: black, dashed, no marker — exact match on warm_start_type, no fallback
+        if df_b is not None and ws in df_b["warm_start_type"].unique().to_list():
+            sub_b = df_b.filter(pl.col("warm_start_type") == ws).sort("K")
             if not sub_b.is_empty():
-                agg_b = sub_b.sort("K").to_pandas()
+                agg_b = sub_b.to_pandas()
                 ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="--", linewidth=1.5)
                 ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
@@ -2475,7 +2474,12 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             ax.set_ylabel("Accuracy")
 
     # ── Legends ───────────────────────────────────────────────────────────────
-    # Linestyle legend (top center)
+    # ── Legends — linestyle left, h_var right, anchored to subplot positions ──
+    _pos_l = axes[0][0].get_position()
+    _pos_r = axes[0][-1].get_position()
+    _cx_l = (_pos_l.x0 + _pos_l.x1) / 2
+    _cx_r = (_pos_r.x0 + _pos_r.x1) / 2
+
     ls_handles = [
         Line2D([0], [0], color="gray", ls="-", lw=2, label="Deep Unrolling"),
         Line2D([0], [0], color="black", ls="--", lw=1.5, label="Classic Adam"),
@@ -2485,12 +2489,11 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         [h.get_label() for h in ls_handles],
         ncol=2,
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.10),
+        bbox_to_anchor=(_cx_l, 1.15),
         frameon=True,
         framealpha=1,
     )
 
-    # h0_var legend (bottom center)
     h0v_handles = [
         Line2D(
             [0],
@@ -2499,8 +2502,10 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             ls="-",
             lw=2,
             marker=marker_map[v],
-            markersize=8,
-            label="Full Rayleigh" if v is None else rf"$\sigma^2={v}$",
+            markersize=10,
+            label="Full Rayleigh"
+            if v is None
+            else ("Fixed $H_0$" if v == 0 else rf"$h_{{\mathrm{{var}}}}={v}$"),
         )
         for v in h0_vals
     ]
@@ -2508,8 +2513,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         h0v_handles,
         [h.get_label() for h in h0v_handles],
         ncol=len(h0v_handles),
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.12),
+        loc="upper center",
+        bbox_to_anchor=(_cx_r, 1.15),
         frameon=True,
         framealpha=1,
         columnspacing=0.8,

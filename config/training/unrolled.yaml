@@ -75,7 +75,7 @@ innovation_mode: autograd
 # Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
 warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
 baseline_iters: 1000       # alternating cycles for the classic-Adam baseline script (→ max_iters=2000 steps)
-n_test_channels: null      # limit test channels for the baseline script (null = all)
+n_baselines: null          # max number of test channels to process (null = all)
 warm_start_type: only_semantic # only_semantic | average | <int seed>
                           #   only_semantic → H = I (semantic alignment only, no channel)
                           #   average       → H_0 (rayleigh+h0_var) or H_los (rician)
