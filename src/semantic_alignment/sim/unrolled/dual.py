@@ -66,6 +66,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
         phases_T_init: list | None = None,
         phases_R_init: list | None = None,
         gradient_checkpointing: bool = False,
+        phi_init: str = "zero",
     ):
         """Initialize joint dual-SIM unrolled optimizer.
 
@@ -154,6 +155,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
 
         self._phT_warm: list | None = phases_T_init
         self._phR_warm: list | None = phases_R_init
+        self.phi_init = phi_init
         self.gradient_checkpointing = gradient_checkpointing
         # When > 0, detach phases/momentums after step detach_before-1 so the
         # backward graph covers only steps [detach_before, K). Set by the runner
@@ -379,6 +381,15 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
         if self._phT_warm is not None:
             phT = [p.unsqueeze(0).expand(B, -1).clone() for p in self._phT_warm]
             phR = [p.unsqueeze(0).expand(B, -1).clone() for p in self._phR_warm]
+        elif self.phi_init == "uniform":
+            import math as _math
+
+            phT = [
+                torch.zeros(B, m, device=dev).uniform_(-_math.pi, _math.pi) for m in self.sizes_T
+            ]
+            phR = [
+                torch.zeros(B, m, device=dev).uniform_(-_math.pi, _math.pi) for m in self.sizes_R
+            ]
         else:
             phT = [torch.zeros(B, m, device=dev) for m in self.sizes_T]
             phR = [torch.zeros(B, m, device=dev) for m in self.sizes_R]

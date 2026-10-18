@@ -324,6 +324,7 @@ def _setup(cfg: DictConfig) -> dict:
         tx_steps_per_rx=int(cfg.training.get("tx_steps_per_rx", 1)),
         rx_steps_per_tx=int(cfg.training.get("rx_steps_per_tx", 1)),
         save_curve=bool(cfg.training.get("save_curve", False)),
+        phase_init=str(cfg.training.get("phase_init", "zeros")),
         F_T=F_T,
         F_R_H=F_R_H,
     )

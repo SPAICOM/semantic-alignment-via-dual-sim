@@ -104,6 +104,7 @@ class JointSIM(SIMRunner):
         lr_rx: float = 0.2,
         dataset: str = "cifar10",
         save_curve: bool = False,
+        phase_init: str = "zeros",
         **_,
     ) -> None:
         """Run one joint Dual-SIM experiment.
@@ -211,6 +212,8 @@ class JointSIM(SIMRunner):
         )
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+        model.init_phases(phase_init)
 
         curve_probe: list[float] = []
         curve_neural: list[float] = []

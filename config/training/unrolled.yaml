@@ -5,7 +5,7 @@ defaults:
 # Number of unrolled gradient layers (inference iterations)
 K: 30
 # If set, trains one model per K value sharing the same warm start. Overrides K.
-K_list: [1, 5, 10, 15] #, 30]
+K_list: [1, 5] #, 10, 15] #, 30]
 
 # Training type for the K_list loop.
 # independent: each K trains from scratch (default).
@@ -45,7 +45,7 @@ wandb_project: unrolled
 
 # Unrolled step-size init and momentum
 # Can be a scalar (same for all K) or a list matching K_list (one lr per K).
-lr_w: [1e-3, 5e-4, 5e-4, 3e-4]
+lr_w: [1e-3, 5e-4] #, 5e-4, 3e-4]
 #lr_w: 1e-3
 # lr_w override for progressive steps (K_idx > 0 when training_type=progressive).
 # null → use lr_w. Set to a list (same length as K_list) or a scalar to use lower
@@ -77,6 +77,9 @@ warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = dis
 baseline_iters: 1000       # alternating cycles for the classic-Adam baseline script (→ max_iters=2000 steps)
 n_baselines: null          # max number of test channels to process (null = all)
 warm_start_type: only_semantic # only_semantic | average | <int seed>
+
+# SIM phase initialization when no warm-start is provided: zero | uniform [-pi, pi]
+phi_init: zero
                           #   only_semantic → H = I (semantic alignment only, no channel)
                           #   average       → H_0 (rayleigh+h0_var) or H_los (rician)
                           #   <int>         → random channel drawn with that seed

@@ -13,3 +13,6 @@ clip_value: null
 # Block sizes per alternation cycle.
 k_T: 100   # consecutive TX-only (G_T) steps per cycle
 k_R: 100   # consecutive RX-only (G_R) steps per cycle
+
+# Initial phases: zeros (all logits 0, phases = pi) | uniform (phases i.i.d. U[0, 2pi), as in the paper)
+phase_init: zeros

@@ -21,6 +21,7 @@ from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader, TensorDataset
+from warm_start_cache import _ensure_ws_accuracy
 from warm_start_cache import _run_warm_start_cached as _ws_cached
 
 import wandb
@@ -52,7 +53,7 @@ from semantic_alignment.utils import pack_complex, standardize_channel
 
 torch.set_float32_matmul_precision("high")
 
-_RESULTS = Path("results")
+_RESULTS = Path("results")  # overridable via training.result_root
 
 
 def _setup(cfg: DictConfig) -> dict:
@@ -149,6 +150,7 @@ def _setup(cfg: DictConfig) -> dict:
 
 
 def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
+    results_root = Path(cfg.training.get("result_root", "results"))
     mode = cfg.sim.get("sim_type", "joint")
     tip = tipology_tag(mode)
     result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
@@ -189,7 +191,7 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
         f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}{hparam_tag}"
         f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
     )
-    return _RESULTS / result_subdir / fname
+    return results_root / result_subdir / fname
 
 
 def _steps_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
@@ -357,6 +359,29 @@ def main(cfg: DictConfig) -> None:
                 L=L,
                 M_int=M_int,
             )
+            _ensure_ws_accuracy(
+                sim,
+                ws_phT,
+                ws_phR,
+                A_target,
+                ctx,
+                n_R,
+                n_T,
+                h0v,
+                ch_type,
+                ws_type,
+                cfg.training.seed,
+                ws_t,
+                L,
+                M_int,
+                ctx["tx_enc"],
+                ctx["rx_enc"],
+                device,
+                n_total=cfg.channel_dm.get("n_total", 10000),
+                train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
+                val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
+                rice_factor_db=cfg.channel_dm.get("rice_factor_db", None),
+            )
 
         for coup in coupling_list:
             print(f"\n{'=' * 60}\n Joint coupling='{coup}'\n{'=' * 60}")
@@ -407,6 +432,7 @@ def main(cfg: DictConfig) -> None:
                     phases_T_init=ws_phT,
                     phases_R_init=ws_phR,
                     gradient_checkpointing=cfg.training.get("gradient_checkpointing", False),
+                    phi_init=cfg.training.get("phi_init", "zero"),
                     **conv_kwargs,
                 ).to(device)
 

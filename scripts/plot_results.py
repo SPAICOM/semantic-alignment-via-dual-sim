@@ -2313,12 +2313,23 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     Baseline parquets: results/unrolled/baseline/**/*.parquet
     """
     from matplotlib.lines import Line2D
+    from matplotlib.ticker import FuncFormatter
 
     unrolled_root = RESULTS / "unrolled"
     baseline_root = unrolled_root / "baseline"
 
-    unrolled_files = [f for f in unrolled_root.rglob("*.parquet") if "baseline" not in f.parts]
+    unrolled_files = [
+        f
+        for f in unrolled_root.rglob("*.parquet")
+        if "baseline" not in f.parts and "warmstart" not in f.parts
+    ]
     baseline_files = list(baseline_root.rglob("*.parquet")) if baseline_root.exists() else []
+
+    # warm-start init accuracy (written by _ensure_ws_accuracy in unrolled.py)
+    _ws_acc_path = unrolled_root / "joint" / "warmstart" / "ws_accuracy.parquet"
+    df_ws_acc: pl.DataFrame | None = (
+        pl.read_parquet(_ws_acc_path) if _ws_acc_path.exists() else None
+    )
 
     if not unrolled_files and not baseline_files:
         print(f"No unrolled results found for {suffix}.")
@@ -2398,6 +2409,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         k_mins.append(int(df_b["K"].min()))
         k_maxs.append(int(df_b["K"].max()))
     x_min, x_max = min(k_mins), max(k_maxs)
+    # warm-start point sits half a log-step to the left of K_min
+    ws_x = x_min * 0.5
 
     # Columns = union of warm_start_types in unrolled OR baseline, restricted to _WS_ORDER
     _ws_present: set[str] = set()
@@ -2408,6 +2421,10 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     ws_vals = [w for w in _WS_ORDER if w in _ws_present]
     if not ws_vals:
         ws_vals = list(_WS_ORDER)
+
+    _has_ws_acc = df_ws_acc is not None and any(
+        ws in df_ws_acc["warm_start_type"].unique().to_list() for ws in ws_vals
+    )
 
     # h0_var values and visual encoding (None = full Rayleigh, sorted last)
     h0_src = df_u if df_u is not None else df_b
@@ -2422,7 +2439,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         1,
         n_cols,
         sharey=True,
-        sharex=True,
+        sharex=False,
         figsize=(7 * n_cols, 5),
         layout="constrained",
         squeeze=False,
@@ -2467,8 +2484,64 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                 ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="--", linewidth=1.5)
                 ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
+        # Warm-start init: marker + dotted line to K=x_min, same marker as h_var line
+        if _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list():
+            acc_col_name = "ws_acc_probe" if "ws_acc_probe" in df_ws_acc.columns else "ws_acc"
+            for h0v in h0_vals:
+                h0v_expr = pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
+                row = df_ws_acc.filter((pl.col("warm_start_type") == ws) & h0v_expr)
+                if row.is_empty():
+                    continue
+                ws_acc = float(row[acc_col_name].mean())
+                # dotted line to K=x_min
+                if df_u is not None:
+                    sub_k1 = df_u.filter(
+                        (pl.col("warm_start_type") == ws)
+                        & h0v_expr
+                        & (pl.col("K") == x_min)
+                        & pl.col("variant").str.contains("Unrolled")
+                    )
+                    if not sub_k1.is_empty():
+                        acc_k1 = float(sub_k1["acc"].mean())
+                        ax.plot(
+                            [ws_x, x_min],
+                            [ws_acc, acc_k1],
+                            color=color_map[h0v],
+                            linestyle=":",
+                            linewidth=1.5,
+                            zorder=4,
+                        )
+                ax.plot(
+                    [ws_x],
+                    [ws_acc],
+                    marker=marker_map[h0v],
+                    color=color_map[h0v],
+                    markersize=10,
+                    markeredgecolor="white",
+                    markeredgewidth=0.5,
+                    zorder=10,
+                    linestyle="none",
+                    clip_on=False,
+                )
+
         ax.set_xscale("log")
-        ax.set_xlim(x_min, x_max)
+        _ws_col = _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list()
+        _x_left = ws_x if _ws_col else x_min
+        ax.set_xlim(_x_left, x_max)
+        if _ws_col:
+            import numpy as _np
+            from matplotlib.ticker import FixedLocator, FuncFormatter
+
+            _log_ticks = [10**i for i in range(0, int(_np.ceil(_np.log10(x_max))) + 1)]
+            ax.xaxis.set_major_locator(FixedLocator([ws_x] + _log_ticks))
+
+            def _ws_fmt(x, pos, _xm=x_min):
+                if x < _xm:
+                    return "WS"
+                exp = int(round(_np.log10(x)))
+                return f"$10^{{{exp}}}$"
+
+            ax.xaxis.set_major_formatter(FuncFormatter(_ws_fmt))
         ax.set_xlabel("K (layers / iterations)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
@@ -2505,7 +2578,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             markersize=10,
             label="Full Rayleigh"
             if v is None
-            else ("Fixed $H_0$" if v == 0 else rf"$h_{{\mathrm{{var}}}}={v}$"),
+            else (r"Fixed $\mathbf{H}_0$" if v == 0 else rf"$h_{{\mathrm{{var}}}}={v}$"),
         )
         for v in h0_vals
     ]

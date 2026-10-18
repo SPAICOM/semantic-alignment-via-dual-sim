@@ -304,6 +304,25 @@ class DualSIMoptimizerTorch(nn.Module):
             ]
         )
 
+    def init_phases(self, mode: str = "zeros") -> None:
+        """Set the initial phases of all layers.
+
+        Parameters
+        ----------
+        mode : str
+            ``"zeros"``: logits at 0, i.e. all phases equal to π.
+            ``"uniform"``: phases drawn i.i.d. uniform in [0, 2π), i.e. logits
+            ``logit(u)`` with ``u ~ U(0, 1)`` (uses the global torch RNG).
+        """
+        if mode == "zeros":
+            return
+        if mode != "uniform":
+            raise ValueError(f"Unknown phase_init '{mode}' (expected 'zeros' or 'uniform').")
+        with torch.no_grad():
+            for p in list(self.xi_T) + list(self.xi_R):
+                u = torch.rand_like(p).clamp_(1e-6, 1 - 1e-6)
+                p.copy_(torch.log(u) - torch.log1p(-u))
+
     def _get_W_list(self, prefix: str, L: int) -> list[torch.Tensor]:
         """Retrieve L propagation matrices by name prefix.
 
