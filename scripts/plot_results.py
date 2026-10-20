@@ -2323,7 +2323,16 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         for f in unrolled_root.rglob("*.parquet")
         if "baseline" not in f.parts and "warmstart" not in f.parts
     ]
-    baseline_files = list(baseline_root.rglob("*.parquet")) if baseline_root.exists() else []
+    oracle_files = (
+        list((baseline_root / "oracle").rglob("*.parquet"))
+        if (baseline_root / "oracle").exists()
+        else []
+    )
+    h0t_files = (
+        list((baseline_root / "h0_transfer").rglob("*.parquet"))
+        if (baseline_root / "h0_transfer").exists()
+        else []
+    )
 
     # warm-start init accuracy (written by _ensure_ws_accuracy in unrolled.py)
     _ws_acc_path = unrolled_root / "joint" / "warmstart" / "ws_accuracy.parquet"
@@ -2331,7 +2340,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         pl.read_parquet(_ws_acc_path) if _ws_acc_path.exists() else None
     )
 
-    if not unrolled_files and not baseline_files:
+    if not unrolled_files and not oracle_files and not h0t_files:
         print(f"No unrolled results found for {suffix}.")
         return
 
@@ -2352,18 +2361,17 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             if df_u.is_empty():
                 df_u = None
 
-    # ── Baseline data — lazy scan + streaming aggregation ────────────────────
+    # ── Oracle baseline — lazy scan + streaming aggregation ──────────────────
     # Pre-aggregate to (K, warm_start_type) → mean/std/n/lo/hi so we never
     # materialise the full N_test × K_max exploded frame (can be millions of rows).
     df_b: pl.DataFrame | None = None
-    if baseline_files:
-        _sample = pl.read_parquet(baseline_files[0])
+    if oracle_files:
+        _sample = pl.read_parquet(oracle_files[0])
         if curve_col in _sample.columns:
             _curve_len = len(_sample[curve_col][0].to_list())
             _has_ws = "warm_start_type" in _sample.columns
             _has_ch = "channel_type" in _sample.columns
-            lf = pl.scan_parquet(baseline_files, hive_partitioning=False)
-            # backfill warm_start_type for old files that lack it
+            lf = pl.scan_parquet(oracle_files, hive_partitioning=False)
             lf = lf.with_columns(
                 pl.col("warm_start_type").fill_null("none")
                 if _has_ws
@@ -2376,7 +2384,6 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                 .explode(curve_col)
                 .with_row_index("_gi")
                 .with_columns(
-                    # K = local position within each file's curve (all files share _curve_len)
                     (pl.col("_gi") % _curve_len // 2 + 1).alias("K"),
                     pl.col(curve_col).cast(pl.Float64).alias("acc"),
                 )
@@ -2396,6 +2403,41 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             if df_b.is_empty():
                 df_b = None
 
+    # ── H_0-transfer baseline — one curve.parquet per (ws_type, h0_var) ──────
+    df_bt: pl.DataFrame | None = None
+    if h0t_files:
+        dfs_bt = []
+        for f in h0t_files:
+            df = pl.read_parquet(f)
+            if curve_col in df.columns:
+                # explode curve → (K, acc, acc_std, warm_start_type, h0_var)
+                curve = df[curve_col][0].to_list()
+                std_col = curve_col.replace("_curve", "_std_curve")
+                std_vals = (
+                    df[std_col][0].to_list()
+                    if std_col in df.columns
+                    else [float("nan")] * len(curve)
+                )
+                n_test = int(df["n_test"][0]) if "n_test" in df.columns else None
+                Ks = [i // 2 + 1 for i in range(len(curve))]
+                h0v_val = df["h0_var"][0]
+                rows = pl.DataFrame(
+                    {
+                        "K": Ks,
+                        "acc": [float(v) if v is not None else float("nan") for v in curve],
+                        "acc_std": [float(v) if v is not None else float("nan") for v in std_vals],
+                        "n_test": [float(n_test) if n_test is not None else float("nan")]
+                        * len(curve),
+                        "warm_start_type": [df["warm_start_type"][0]] * len(curve),
+                        "h0_var": pl.Series([h0v_val] * len(curve), dtype=pl.Float64),
+                    }
+                )
+                dfs_bt.append(rows)
+        if dfs_bt:
+            df_bt = pl.concat(dfs_bt).sort("K")
+            if df_bt.is_empty():
+                df_bt = None
+
     if df_u is None and df_b is None:
         print(f"No data to plot for {suffix}.")
         return
@@ -2408,9 +2450,12 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     if df_b is not None:
         k_mins.append(int(df_b["K"].min()))
         k_maxs.append(int(df_b["K"].max()))
+    if df_bt is not None:
+        k_mins.append(int(df_bt["K"].min()))
+        k_maxs.append(int(df_bt["K"].max()))
     x_min, x_max = min(k_mins), max(k_maxs)
-    # warm-start point sits half a log-step to the left of K_min
-    ws_x = x_min * 0.5
+    # warm-start point sits slightly left of K_min in linear scale
+    ws_x = -3
 
     # Columns = union of warm_start_types in unrolled OR baseline, restricted to _WS_ORDER
     _ws_present: set[str] = set()
@@ -2476,12 +2521,54 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         n_boot=200,
                     )
 
-        # Classic Adam: black, dashed, no marker — exact match on warm_start_type, no fallback
+        # H_0-transfer: same color+marker as unrolled, dashed linestyle, per h0_var
+        if df_bt is not None:
+            for h0v in h0_vals:
+                color = color_map[h0v]
+                mk = marker_map[h0v]
+                h0_expr = pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
+                sub_bt = df_bt.filter((pl.col("warm_start_type") == ws) & h0_expr)
+                if not sub_bt.is_empty():
+                    sub_bt_pd = sub_bt.to_pandas().dropna(subset=["acc"])
+                    import numpy as _np2
+
+                    _all_ks = sub_bt_pd["K"].to_numpy()
+                    _xmax_bt = int(_all_ks.max())
+                    _step_bt = max(1, _xmax_bt // 6)
+                    _lin_marks = set([1, _xmax_bt] + list(range(_step_bt, _xmax_bt + 1, _step_bt)))
+                    _mark_idx = [i for i, k in enumerate(_all_ks) if k in _lin_marks]
+                    ax.plot(
+                        sub_bt_pd["K"],
+                        sub_bt_pd["acc"],
+                        color=color,
+                        linestyle="--",
+                        linewidth=1.5,
+                        marker=mk,
+                        markersize=7,
+                        markevery=_mark_idx,
+                        zorder=3,
+                    )
+                    # ±SEM band if std is available
+                    if "acc_std" in sub_bt_pd.columns and "n_test" in sub_bt_pd.columns:
+                        _std = sub_bt_pd["acc_std"].to_numpy()
+                        _n = sub_bt_pd["n_test"].to_numpy()
+                        _sem = _std / _np2.sqrt(_np2.where(_n > 0, _n, _np2.nan))
+                        if not _np2.all(_np2.isnan(_sem)):
+                            ax.fill_between(
+                                sub_bt_pd["K"],
+                                sub_bt_pd["acc"] - _sem,
+                                sub_bt_pd["acc"] + _sem,
+                                color=color,
+                                alpha=0.15,
+                                zorder=2,
+                            )
+
+        # Classic Adam Oracle: black, dashdot, no marker
         if df_b is not None and ws in df_b["warm_start_type"].unique().to_list():
             sub_b = df_b.filter(pl.col("warm_start_type") == ws).sort("K")
             if not sub_b.is_empty():
                 agg_b = sub_b.to_pandas()
-                ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="--", linewidth=1.5)
+                ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="-.", linewidth=1.5)
                 ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
         # Warm-start init: marker + dotted line to K=x_min, same marker as h_var line
@@ -2524,24 +2611,21 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     clip_on=False,
                 )
 
-        ax.set_xscale("log")
         _ws_col = _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list()
-        _x_left = ws_x if _ws_col else x_min
-        ax.set_xlim(_x_left, x_max)
-        if _ws_col:
-            import numpy as _np
-            from matplotlib.ticker import FixedLocator, FuncFormatter
+        ax.set_xlim(ws_x if _ws_col else x_min, x_max)
+        from matplotlib.ticker import FixedLocator
 
-            _log_ticks = [10**i for i in range(0, int(_np.ceil(_np.log10(x_max))) + 1)]
-            ax.xaxis.set_major_locator(FixedLocator([ws_x] + _log_ticks))
+        _step = max(1, x_max // 6)
+        _base_ticks = sorted(set([x_min, x_max] + list(range(_step, x_max + 1, _step))))
+        _k_ticks = sorted(set([ws_x] + _base_ticks)) if _ws_col else _base_ticks
+        ax.xaxis.set_major_locator(FixedLocator(_k_ticks))
 
-            def _ws_fmt(x, pos, _xm=x_min):
-                if x < _xm:
-                    return "WS"
-                exp = int(round(_np.log10(x)))
-                return f"$10^{{{exp}}}$"
+        def _ws_fmt(x, pos, _wx=ws_x, _wc=_ws_col):
+            if _wc and x == _wx:
+                return "WS"
+            return str(int(x))
 
-            ax.xaxis.set_major_formatter(FuncFormatter(_ws_fmt))
+        ax.xaxis.set_major_formatter(FuncFormatter(_ws_fmt))
         ax.set_xlabel("K (layers / iterations)")
         if col_idx == 0:
             ax.set_ylabel("Accuracy")
@@ -2555,14 +2639,15 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
 
     ls_handles = [
         Line2D([0], [0], color="gray", ls="-", lw=2, label="Deep Unrolling"),
-        Line2D([0], [0], color="black", ls="--", lw=1.5, label="Classic Adam"),
+        Line2D([0], [0], color="black", ls="-.", lw=1.5, label="Classic Adam Oracle"),
+        Line2D([0], [0], color="gray", ls="--", lw=1.5, label=r"Classic Adam on $\mathbf{H}_0$"),
     ]
     fig.legend(
         ls_handles,
         [h.get_label() for h in ls_handles],
-        ncol=2,
-        loc="upper center",
-        bbox_to_anchor=(_cx_l, 1.15),
+        ncol=3,
+        loc="upper left",
+        bbox_to_anchor=(_pos_l.x0 / 2, 1.15),
         frameon=True,
         framealpha=1,
     )

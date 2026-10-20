@@ -25,3 +25,5 @@ hydra:
   sweeper:
     params:
       warmstart: none,only_semantic,average
+      training.full_oracle: false,true
+      channel_dm.h0_var: null,1,0.1,0
