@@ -1,5 +1,15 @@
-# REPO TITLE
+<div align="center">
 
+# Over-the-Air Semantic Alignment based on Dual Stacked Intelligent Metasurfaces
+
+[Mario Edoardo Pandolfo](https://scholar.google.com/citations?user=wAeScL8AAAAJ)<sup>1</sup>,
+[Kyriakos Stylianopoulos](https://scholar.google.com/citations?user=42KAgRMAAAAJ)<sup>2</sup>,
+[George C. Alexandropoulos](https://scholar.google.com/citations?user=3Ltyd9sAAAAJ)<sup>2</sup>,
+[Paolo Di Lorenzo](https://scholar.google.com/citations?&user=VZYvspQAAAAJ)<sup>1</sup>
+
+<sup>1</sup>Sapienza University of Rome Â· <sup>2</sup> National and Kapodistrian University of Athens
+
+</div>
 
 <h5 align="center">
     
@@ -46,15 +56,8 @@ After the command completes, the development environment will be ready to use. ð
 
 If you find this code useful for your research, please consider citing the following paper:
 
+```bibtex
 ```
-```
-
-## Authors
-
-- [Mario Edoardo Pandolfo](https://scholar.google.com/citations?user=wAeScL8AAAAJ)
-- [Kyriakos Stylianopoulos](https://scholar.google.com/citations?user=42KAgRMAAAAJ)
-- [George C. Alexandropoulos](https://scholar.google.com/citations?user=3Ltyd9sAAAAJ)
-- [Paolo Di Lorenzo](https://scholar.google.com/citations?&user=VZYvspQAAAAJ)
 
 ## Used Technologies
 
