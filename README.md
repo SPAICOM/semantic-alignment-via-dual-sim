@@ -23,8 +23,9 @@
 
 ---
 
-> [!TIP]
-> 
+> [!NOTE]
+> **Abstract**
+>
 
 ## Dependencies
 
