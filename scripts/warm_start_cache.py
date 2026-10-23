@@ -13,7 +13,11 @@ import math
 from pathlib import Path
 
 import torch
+import torch.nn as nn
+from tqdm import tqdm
 
+from semantic_alignment.sim._cascade import build_cascade_RX, build_cascade_TX
+from semantic_alignment.sim.core import _compute_beta
 from semantic_alignment.sim.original.joint import JointSIM
 from semantic_alignment.utils import channel as _channel_fn
 
@@ -33,15 +37,14 @@ def _run_warm_start(
     lr_rx: float,
     seed: int,
     device: torch.device,
-) -> tuple[list, list]:
-    """Run ws_t alternating-Adam steps; return (ws_phT, ws_phR). Resets sim phases after."""
-    with torch.no_grad():
-        for p in sim.xi_T:
-            p.zero_()
-        for p in sim.xi_R:
-            p.zero_()
+) -> tuple[list, list, dict]:
+    """Run ws_t alternating-Adam steps; return (ws_phT, ws_phR, opt_state).
+
+    opt_state = {"T": opt_T.state_dict(), "R": opt_R.state_dict()} — saved so that
+    callers can warm-restart Adam instead of cold-starting it.
+    """
     if ws_t == 0:
-        return [], []
+        return [], [], {}
     match ws_type:
         case "only_semantic":
             H_ws = torch.eye(n_R, n_T, dtype=torch.complex64, device=device)
@@ -54,15 +57,64 @@ def _run_warm_start(
         case _:
             gen = torch.Generator().manual_seed(int(ws_type))
             H_ws = _channel_fn(n_R, n_T, channel_type=ch_type, generator=gen).to(device)
-    sim.optimize_alternating(A_target, H_ws, max_iters=ws_t, lr_tx=lr_tx, lr_rx=lr_rx)
-    ws_phT = [p.data.clone() for p in sim.xi_T]
-    ws_phR = [p.data.clone() for p in sim.xi_R]
+
+    W_T = [getattr(sim, f"W_T_{i}") for i in range(sim.L_T)]
+    W_R = [getattr(sim, f"W_R_{i}") for i in range(sim.L_R)]
+    sizes_T = [p.shape[0] for p in sim.xi_T]
+    sizes_R = [p.shape[0] for p in sim.xi_R]
+
+    phases_T = [nn.Parameter(torch.zeros(s, device=device)) for s in sizes_T]
+    phases_R = [nn.Parameter(torch.zeros(s, device=device)) for s in sizes_R]
+    opt_T = torch.optim.Adam(phases_T, lr=lr_tx)
+    opt_R = torch.optim.Adam(phases_R, lr=lr_rx)
+
+    def _fwd():
+        G_T = build_cascade_TX(W_T, [p.unsqueeze(0) for p in phases_T]).squeeze(0)
+        G_R = build_cascade_RX(W_R, [p.unsqueeze(0) for p in phases_R]).squeeze(0)
+        return G_R @ H_ws @ G_T
+
+    # Mirror the default k_T=100, k_R=100 and best_tracking=True used by sim.optimize_alternating
+    _k_T, _k_R = 100, 100
+    best_loss = float("inf")
+    best_T = [p.data.clone() for p in phases_T]
+    best_R = [p.data.clone() for p in phases_R]
+    for _ in tqdm(range(ws_t), desc=f"warm-start ({ws_type})", leave=False):
+        for _ in range(_k_T):
+            with torch.no_grad():
+                beta_k = _compute_beta(_fwd(), A_target)
+            opt_T.zero_grad()
+            Z = _fwd()
+            loss = torch.norm(beta_k * Z - A_target, p="fro") ** 2 / (Z.shape[0] * Z.shape[1])
+            loss.backward()
+            opt_T.step()
+
+        loss_val = float("inf")
+        for _ in range(_k_R):
+            with torch.no_grad():
+                beta_k = _compute_beta(_fwd(), A_target)
+            opt_R.zero_grad()
+            Z = _fwd()
+            loss = torch.norm(beta_k * Z - A_target, p="fro") ** 2 / (Z.shape[0] * Z.shape[1])
+            loss.backward()
+            opt_R.step()
+            loss_val = loss.item()
+
+        if loss_val < best_loss:
+            best_loss = loss_val
+            best_T = [p.data.clone() for p in phases_T]
+            best_R = [p.data.clone() for p in phases_R]
+
+    ws_phT = best_T
+    ws_phR = best_R
+    opt_state = {"T": opt_T.state_dict(), "R": opt_R.state_dict()}
+
+    # Keep sim phases in sync (used by _ensure_ws_accuracy)
     with torch.no_grad():
-        for p in sim.xi_T:
-            p.zero_()
-        for p in sim.xi_R:
-            p.zero_()
-    return ws_phT, ws_phR
+        for p, ph in zip(sim.xi_T, ws_phT):
+            p.data.copy_(ph)
+        for p, ph in zip(sim.xi_R, ws_phR):
+            p.data.copy_(ph)
+    return ws_phT, ws_phR, opt_state
 
 
 def _ws_cache_path(
@@ -237,21 +289,38 @@ def _run_warm_start_cached(
     rx_enc: str,
     L: int,
     M_int: int,
-) -> tuple[list, list]:
-    """Like _run_warm_start but loads from / saves to disk cache."""
+) -> tuple[list, list, dict]:
+    """Like _run_warm_start but loads from / saves to disk cache.
+
+    Returns (ws_phT, ws_phR, opt_state) where opt_state = {"T": ..., "R": ...}.
+    Old caches without optimizer state are invalidated and recomputed.
+    """
     if ws_t == 0:
-        return [], []
+        return [], [], {}
     cache = _ws_cache_path(ws_type, L, M_int, tx_enc, rx_enc, ws_t, seed, h0v, ch_type)
     if cache.exists():
         ckpt = torch.load(cache, map_location=device, weights_only=True)
-        ws_phT = [t.to(device) for t in ckpt["ws_phT"]]
-        ws_phR = [t.to(device) for t in ckpt["ws_phR"]]
-        print(f" Warm-start loaded from cache: {cache.name}")
-        return ws_phT, ws_phR
-    ws_phT, ws_phR = _run_warm_start(
+        if "ws_opt_T" in ckpt:
+            ws_phT = [t.to(device) for t in ckpt["ws_phT"]]
+            ws_phR = [t.to(device) for t in ckpt["ws_phR"]]
+            opt_state = {"T": ckpt["ws_opt_T"], "R": ckpt["ws_opt_R"]}
+            print(f" Warm-start loaded from cache: {cache.name}")
+            return ws_phT, ws_phR, opt_state
+        else:
+            print(f" Cache missing optimizer state — recomputing: {cache.name}")
+            cache.unlink()
+    ws_phT, ws_phR, opt_state = _run_warm_start(
         sim, A_target, n_R, n_T, ws_t, ws_type, h0v, ch_type, lr_tx, lr_rx, seed, device
     )
     cache.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"ws_phT": [t.cpu() for t in ws_phT], "ws_phR": [t.cpu() for t in ws_phR]}, cache)
+    torch.save(
+        {
+            "ws_phT": [t.cpu() for t in ws_phT],
+            "ws_phR": [t.cpu() for t in ws_phR],
+            "ws_opt_T": opt_state["T"],
+            "ws_opt_R": opt_state["R"],
+        },
+        cache,
+    )
     print(f" Warm-start cached → {cache.name}")
-    return ws_phT, ws_phR
+    return ws_phT, ws_phR, opt_state

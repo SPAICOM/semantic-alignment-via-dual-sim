@@ -2284,7 +2284,7 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 _WS_LABELS = {
-    "none": "No Warmstart",
+    "none": "No Warm Start",
     "only_semantic": "Semantic Only",
     "average": "Average",
 }
@@ -2323,15 +2323,21 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         for f in unrolled_root.rglob("*.parquet")
         if "baseline" not in f.parts and "warmstart" not in f.parts
     ]
-    oracle_files = (
-        list((baseline_root / "oracle").rglob("*.parquet"))
-        if (baseline_root / "oracle").exists()
-        else []
-    )
-    h0t_files = (
-        list((baseline_root / "h0_transfer").rglob("*.parquet"))
-        if (baseline_root / "h0_transfer").exists()
-        else []
+    # For each ws_type: prefer _wa/ variant over cold if available.
+    # Only show ws types in _WS_SHOW.
+    _WS_SHOW = {"none", "only_semantic"}
+
+    def _pick_files(cold_root, wa_root, ws_types):
+        files = []
+        for ws in ws_types:
+            src = wa_root / ws if (wa_root / ws).exists() else cold_root / ws
+            if src.exists():
+                files += list(src.rglob("*.parquet"))
+        return files
+
+    oracle_files = _pick_files(baseline_root / "oracle", baseline_root / "oracle_wa", _WS_SHOW)
+    h0t_files = _pick_files(
+        baseline_root / "h0_transfer", baseline_root / "h0_transfer_wa", _WS_SHOW
     )
 
     # warm-start init accuracy (written by _ensure_ws_accuracy in unrolled.py)
@@ -2457,15 +2463,15 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     # warm-start point sits slightly left of K_min in linear scale
     ws_x = -3
 
-    # Columns = union of warm_start_types in unrolled OR baseline, restricted to _WS_ORDER
+    # Columns = warm_start_types present in data, restricted to _WS_SHOW
     _ws_present: set[str] = set()
     if df_u is not None:
         _ws_present |= set(df_u["warm_start_type"].unique().to_list())
     if df_b is not None:
         _ws_present |= set(df_b["warm_start_type"].unique().to_list())
-    ws_vals = [w for w in _WS_ORDER if w in _ws_present]
+    ws_vals = [w for w in _WS_ORDER if w in _ws_present and w in _WS_SHOW]
     if not ws_vals:
-        ws_vals = list(_WS_ORDER)
+        ws_vals = [w for w in _WS_ORDER if w in _WS_SHOW]
 
     _has_ws_acc = df_ws_acc is not None and any(
         ws in df_ws_acc["warm_start_type"].unique().to_list() for ws in ws_vals
@@ -2521,7 +2527,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         n_boot=200,
                     )
 
-        # H_0-transfer: same color+marker as unrolled, dashed linestyle, per h0_var
+        # H_0-transfer baseline (source already selected per ws_type at load time)
+        _SHOW_KS = {1, 5, 10, 15, 30}
         if df_bt is not None:
             for h0v in h0_vals:
                 color = color_map[h0v]
@@ -2529,14 +2536,18 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                 h0_expr = pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
                 sub_bt = df_bt.filter((pl.col("warm_start_type") == ws) & h0_expr)
                 if not sub_bt.is_empty():
-                    sub_bt_pd = sub_bt.to_pandas().dropna(subset=["acc"])
                     import numpy as _np2
 
-                    _all_ks = sub_bt_pd["K"].to_numpy()
-                    _xmax_bt = int(_all_ks.max())
-                    _step_bt = max(1, _xmax_bt // 6)
-                    _lin_marks = set([1, _xmax_bt] + list(range(_step_bt, _xmax_bt + 1, _step_bt)))
-                    _mark_idx = [i for i, k in enumerate(_all_ks) if k in _lin_marks]
+                    sub_bt_pd = (
+                        sub_bt.to_pandas()
+                        .dropna(subset=["acc"])
+                        .pipe(lambda d: d[d["K"].isin(_SHOW_KS)])
+                        .drop_duplicates("K", keep="last")
+                        .sort_values("K")
+                        .reset_index(drop=True)
+                    )
+                    if sub_bt_pd.empty:
+                        continue
                     ax.plot(
                         sub_bt_pd["K"],
                         sub_bt_pd["acc"],
@@ -2544,8 +2555,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         linestyle="--",
                         linewidth=1.5,
                         marker=mk,
-                        markersize=7,
-                        markevery=_mark_idx,
+                        markersize=10,
                         zorder=3,
                     )
                     # ±SEM band if std is available
@@ -2567,7 +2577,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         if df_b is not None and ws in df_b["warm_start_type"].unique().to_list():
             sub_b = df_b.filter(pl.col("warm_start_type") == ws).sort("K")
             if not sub_b.is_empty():
-                agg_b = sub_b.to_pandas()
+                agg_b = sub_b.filter(pl.col("K").is_in(list(_SHOW_KS))).sort("K").to_pandas()
                 ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="-.", linewidth=1.5)
                 ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
@@ -2580,7 +2590,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                 if row.is_empty():
                     continue
                 ws_acc = float(row[acc_col_name].mean())
-                # dotted line to K=x_min
+                # dotted line to K=x_min (unrolled)
                 if df_u is not None:
                     sub_k1 = df_u.filter(
                         (pl.col("warm_start_type") == ws)
@@ -2645,7 +2655,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     fig.legend(
         ls_handles,
         [h.get_label() for h in ls_handles],
-        ncol=3,
+        ncol=len(ls_handles),
         loc="upper left",
         bbox_to_anchor=(_pos_l.x0 / 2, 1.15),
         frameon=True,

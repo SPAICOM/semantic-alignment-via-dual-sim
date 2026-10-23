@@ -341,7 +341,7 @@ def main(cfg: DictConfig) -> None:
         ws_phT: list | None = None
         ws_phR: list | None = None
         if ws_t > 0:
-            ws_phT, ws_phR = _ws_cached(
+            ws_phT, ws_phR, *_ = _ws_cached(
                 sim,
                 A_target,
                 n_R,

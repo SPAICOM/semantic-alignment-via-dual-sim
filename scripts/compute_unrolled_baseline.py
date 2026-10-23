@@ -42,7 +42,7 @@ from semantic_alignment.sim._cascade import build_cascade_RX, build_cascade_TX
 from semantic_alignment.sim.core import _compute_beta
 from semantic_alignment.sim.original._utils import ch_dims
 from semantic_alignment.sim.original.joint import JointSIM
-from semantic_alignment.sim.unrolled.runner import _eval_accuracies, _make_eval_fn
+from semantic_alignment.sim.unrolled.runner import _eval_accuracies
 from semantic_alignment.utils import standardize_channel
 from unrolled import _setup
 
@@ -134,7 +134,7 @@ def main(cfg: DictConfig) -> None:
 
     # ── Warm-start phases (cached) ────────────────────────────────────────────
     if ws_type != "none" and ws_t > 0:
-        ws_phT, ws_phR = _run_warm_start_cached(
+        ws_phT, ws_phR, ws_opt_state = _run_warm_start_cached(
             sim,
             A_target,
             n_R,
@@ -153,7 +153,7 @@ def main(cfg: DictConfig) -> None:
             M_int=M_int,
         )
     else:
-        ws_phT, ws_phR = [], []
+        ws_phT, ws_phR, ws_opt_state = [], [], {}
         ws_type = "none"
 
     full_oracle = cfg.training.get("full_oracle", True)
@@ -164,7 +164,16 @@ def main(cfg: DictConfig) -> None:
         return
 
     tag = _config_tag(cfg, ch_dim, K_max)
-    baseline_type = "oracle" if full_oracle else "h0_transfer"
+    warm_adam = cfg.training.get("warm_adam_baseline", False)
+    if warm_adam and not ws_opt_state:
+        print(
+            f" warm_adam_baseline=true but no optimizer state for ws_type={ws_type!r} — skipping (identical to cold-restart run)."
+        )
+        return
+    if full_oracle:
+        baseline_type = "oracle_wa" if warm_adam else "oracle"
+    else:
+        baseline_type = "h0_transfer_wa" if warm_adam else "h0_transfer"
     out_dir = _BASELINE_ROOT / baseline_type / ws_type / tag
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -196,40 +205,78 @@ def main(cfg: DictConfig) -> None:
 
     if full_oracle:
         # ── Oracle: Adam on each test channel individually ────────────────────
+        W_T_o = [getattr(sim, f"W_T_{i}") for i in range(sim.L_T)]
+        W_R_o = [getattr(sim, f"W_R_{i}") for i in range(sim.L_R)]
+        sizes_T_o = [p.shape[0] for p in sim.xi_T]
+        sizes_R_o = [p.shape[0] for p in sim.xi_R]
+
         n_done = sum(1 for i in range(N_test) if (out_dir / f"{i:04d}.parquet").exists())
-        for i, H_raw in enumerate(tqdm(test_channels, desc="oracle", initial=n_done, total=N_test)):
+        for i, H_raw in enumerate(
+            tqdm(test_channels, desc=baseline_type, initial=n_done, total=N_test)
+        ):
             out = out_dir / f"{i:04d}.parquet"
             if out.exists():
                 continue
 
             H = standardize_channel(H_raw.to(device), channel_type=ch_type)
 
-            with torch.no_grad():
-                for j, p in enumerate(sim.xi_T):
-                    p.data.copy_(ws_phT[j]) if ws_phT else p.zero_()
-                for j, p in enumerate(sim.xi_R):
-                    p.data.copy_(ws_phR[j]) if ws_phR else p.zero_()
+            phases_T_o = [
+                nn.Parameter(ws_phT[j].clone())
+                if ws_phT
+                else nn.Parameter(torch.zeros(s, device=device))
+                for j, s in enumerate(sizes_T_o)
+            ]
+            phases_R_o = [
+                nn.Parameter(ws_phR[j].clone())
+                if ws_phR
+                else nn.Parameter(torch.zeros(s, device=device))
+                for j, s in enumerate(sizes_R_o)
+            ]
+            opt_T_o = torch.optim.Adam(phases_T_o, lr=lr_tx)
+            opt_R_o = torch.optim.Adam(phases_R_o, lr=lr_rx)
+            if warm_adam and ws_opt_state:
+                opt_T_o.load_state_dict(ws_opt_state["T"])
+                opt_R_o.load_state_dict(ws_opt_state["R"])
+
+            def _fwd_o(_pT=phases_T_o, _pR=phases_R_o, _H=H):
+                G_T = build_cascade_TX(W_T_o, [p.unsqueeze(0) for p in _pT]).squeeze(0)
+                G_R = build_cascade_RX(W_R_o, [p.unsqueeze(0) for p in _pR]).squeeze(0)
+                return G_R @ _H @ G_T
 
             store: dict[str, list] = {"probe": [], "neural": []}
-            sim.optimize_alternating(
-                A_target,
-                H,
-                max_iters=K_max * 2,
-                k_T=1,
-                k_R=1,
-                lr_tx=lr_tx,
-                lr_rx=lr_rx,
-                eval_fn=_make_eval_fn(
-                    ctx["Z_test"],
-                    ctx["labels"],
-                    ctx["clf"],
-                    ctx["clf_neural"],
-                    ctx["L_out"],
-                    ctx["mu_out"],
-                    device,
-                    store,
-                ),
-            )
+            for _ in range(K_max * 2):
+                with torch.no_grad():
+                    beta_k = _compute_beta(_fwd_o(), A_target)
+                opt_T_o.zero_grad()
+                Z = _fwd_o()
+                loss = torch.norm(beta_k * Z - A_target, p="fro") ** 2 / (Z.shape[0] * Z.shape[1])
+                loss.backward()
+                opt_T_o.step()
+
+                with torch.no_grad():
+                    beta_k = _compute_beta(_fwd_o(), A_target)
+                opt_R_o.zero_grad()
+                Z = _fwd_o()
+                loss = torch.norm(beta_k * Z - A_target, p="fro") ** 2 / (Z.shape[0] * Z.shape[1])
+                loss.backward()
+                opt_R_o.step()
+
+                with torch.no_grad():
+                    Z_eff = _fwd_o()
+                    beta_e = _compute_beta(Z_eff, A_target)
+                    pa, na = _eval_accuracies(
+                        Z_eff,
+                        beta_e,
+                        ctx["Z_test"],
+                        ctx["labels"],
+                        ctx["clf"],
+                        ctx["clf_neural"],
+                        ctx["L_out"],
+                        ctx["mu_out"],
+                        device,
+                    )
+                store["probe"].append(pa)
+                store["neural"].append(na)
 
             pl.DataFrame(
                 [
@@ -290,6 +337,10 @@ def main(cfg: DictConfig) -> None:
 
         opt_T = torch.optim.Adam(phases_T, lr=lr_tx)
         opt_R = torch.optim.Adam(phases_R, lr=lr_rx)
+        warm_adam = cfg.training.get("warm_adam_baseline", False)
+        if warm_adam and ws_opt_state:
+            opt_T.load_state_dict(ws_opt_state["T"])
+            opt_R.load_state_dict(ws_opt_state["R"])
 
         # Pre-standardize and stack test channels for batched eval
         test_channels_dev = [

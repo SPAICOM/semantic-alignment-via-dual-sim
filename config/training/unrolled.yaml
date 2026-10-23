@@ -78,6 +78,7 @@ baseline_iters: 30         # alternating cycles for the classic-Adam baseline sc
 full_oracle: true          # true: Adam on each test channel (oracle); false: Adam on H_0, eval on h_var test set
 n_baselines: null          # max number of test channels to process (null = all)
 warm_start_type: only_semantic # only_semantic | average | <int seed>
+warm_adam_baseline: false      # true: restore Adam m/v state from warm-start cache (warm restart)
 
 # SIM phase initialization when no warm-start is provided: zero | uniform [-pi, pi]
 phi_init: zero
