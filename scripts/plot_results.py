@@ -2284,8 +2284,8 @@ def arch_comparison_asym_vs_sym_channel_dim() -> None:
 
 
 _WS_LABELS = {
-    "none": "No Warm Start",
-    "only_semantic": "Semantic Only",
+    "none": "No Warm-Start",
+    "only_semantic": "With Warm-Start",
     "average": "Average",
 }
 _WS_ORDER = ["none", "only_semantic", "average"]
@@ -2390,7 +2390,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                 .explode(curve_col)
                 .with_row_index("_gi")
                 .with_columns(
-                    (pl.col("_gi") % _curve_len // 2 + 1).alias("K"),
+                    (pl.col("_gi") % _curve_len + 1).alias("K"),
                     pl.col(curve_col).cast(pl.Float64).alias("acc"),
                 )
                 .group_by(["K", "warm_start_type"])
@@ -2425,7 +2425,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     else [float("nan")] * len(curve)
                 )
                 n_test = int(df["n_test"][0]) if "n_test" in df.columns else None
-                Ks = [i // 2 + 1 for i in range(len(curve))]
+                Ks = [i + 1 for i in range(len(curve))]
                 h0v_val = df["h0_var"][0]
                 rows = pl.DataFrame(
                     {
@@ -2491,10 +2491,10 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         n_cols,
         sharey=True,
         sharex=False,
-        figsize=(7 * n_cols, 5),
-        layout="constrained",
+        figsize=(10 * n_cols, 6.5),
         squeeze=False,
     )
+    fig.subplots_adjust(top=0.82, bottom=0.22, left=0.06, right=0.98, wspace=0.06)
 
     for col_idx, ws in enumerate(ws_vals):
         ax = axes[0][col_idx]
@@ -2522,7 +2522,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         linestyle="-",
                         linewidth=2,
                         marker=mk,
-                        markersize=10,
+                        markersize=12,
                         errorbar=("ci", 95),
                         n_boot=200,
                     )
@@ -2558,7 +2558,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         markersize=10,
                         zorder=3,
                     )
-                    # ±SEM band if std is available
+                    # 95% CI band (1.96 * SEM) if std is available
                     if "acc_std" in sub_bt_pd.columns and "n_test" in sub_bt_pd.columns:
                         _std = sub_bt_pd["acc_std"].to_numpy()
                         _n = sub_bt_pd["n_test"].to_numpy()
@@ -2566,8 +2566,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                         if not _np2.all(_np2.isnan(_sem)):
                             ax.fill_between(
                                 sub_bt_pd["K"],
-                                sub_bt_pd["acc"] - _sem,
-                                sub_bt_pd["acc"] + _sem,
+                                sub_bt_pd["acc"] - 1.96 * _sem,
+                                sub_bt_pd["acc"] + 1.96 * _sem,
                                 color=color,
                                 alpha=0.15,
                                 zorder=2,
@@ -2657,7 +2657,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         [h.get_label() for h in ls_handles],
         ncol=len(ls_handles),
         loc="upper left",
-        bbox_to_anchor=(_pos_l.x0 / 2, 1.15),
+        bbox_to_anchor=(_pos_l.x0 / 2, 1),
         frameon=True,
         framealpha=1,
     )
@@ -2682,7 +2682,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         [h.get_label() for h in h0v_handles],
         ncol=len(h0v_handles),
         loc="upper center",
-        bbox_to_anchor=(_cx_r, 1.15),
+        bbox_to_anchor=(_cx_r, 1),
         frameon=True,
         framealpha=1,
         columnspacing=0.8,

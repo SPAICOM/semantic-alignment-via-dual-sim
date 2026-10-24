@@ -13,7 +13,7 @@ K_list: [1, 5, 10, 15, 30]
 #              A .steps.pt file is saved alongside each parquet for resume support.
 training_type: progressive
 # Gradient checkpointing: recompute activations during backward to save GPU memory.
-gradient_checkpointing: false
+gradient_checkpointing: true
 
 # Learning rate for the classic-comparison Adam loop
 lr: 0.1
@@ -74,7 +74,7 @@ innovation_mode: autograd
 
 # Classic warm-start: run t Adam steps (lr_tx/lr_rx) before the unrolled loop (0 = disabled)
 warm_start_t: 150          # warm-start cycles before the unrolled loop (0 = disabled, uses lr_tx/lr_rx)
-baseline_iters: 30         # alternating cycles for the classic-Adam baseline script (→ max_iters=60 steps)
+baseline_iters: 30         # alternating cycles (1 TX + 1 RX Adam step each) for the classic baselines
 full_oracle: true          # true: Adam on each test channel (oracle); false: Adam on H_0, eval on h_var test set
 n_baselines: null          # max number of test channels to process (null = all)
 warm_start_type: only_semantic # only_semantic | average | <int seed>

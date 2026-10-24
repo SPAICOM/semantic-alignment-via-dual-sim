@@ -26,4 +26,5 @@ hydra:
     params:
       warmstart: none,only_semantic
       training.full_oracle: false,true
-      channel_dm.h0_var: null,1,0.1,0
+      training.warm_adam_baseline: false,true
+      channel_dm.h0_var: 0,0.1,1,null

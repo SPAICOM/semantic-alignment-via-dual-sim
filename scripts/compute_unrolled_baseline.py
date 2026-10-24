@@ -244,7 +244,7 @@ def main(cfg: DictConfig) -> None:
                 return G_R @ _H @ G_T
 
             store: dict[str, list] = {"probe": [], "neural": []}
-            for _ in range(K_max * 2):
+            for _ in range(K_max):
                 with torch.no_grad():
                     beta_k = _compute_beta(_fwd_o(), A_target)
                 opt_T_o.zero_grad()
@@ -356,8 +356,8 @@ def main(cfg: DictConfig) -> None:
         store: dict[str, list] = {"probe": [], "probe_std": [], "neural": [], "neural_std": []}
 
         print(f" Optimizing on H_0, evaluating on {N_test} test channels...")
-        # Run K_max*2 alternating cycles (1 TX step + 1 RX step each), same as oracle
-        for _ in tqdm(range(K_max * 2), desc="h0_transfer", leave=False):
+        # Run K_max alternating cycles (1 TX step + 1 RX step each), same as oracle
+        for _ in tqdm(range(K_max), desc="h0_transfer", leave=False):
             # TX step
             with torch.no_grad():
                 beta_k = _compute_beta(_fwd(), A_target)
