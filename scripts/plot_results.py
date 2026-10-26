@@ -2448,17 +2448,15 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         print(f"No data to plot for {suffix}.")
         return
 
-    # x-axis range from actual data
+    _SHOW_KS = {1, 5, 10, 15, 30}
+
+    # x-axis range from actually displayed K values
     k_mins, k_maxs = [], []
     if df_u is not None:
         k_mins.append(int(df_u["K"].min()))
         k_maxs.append(int(df_u["K"].max()))
-    if df_b is not None:
-        k_mins.append(int(df_b["K"].min()))
-        k_maxs.append(int(df_b["K"].max()))
-    if df_bt is not None:
-        k_mins.append(int(df_bt["K"].min()))
-        k_maxs.append(int(df_bt["K"].max()))
+    k_mins.append(min(_SHOW_KS))
+    k_maxs.append(max(_SHOW_KS))
     x_min, x_max = min(k_mins), max(k_maxs)
     # warm-start point sits slightly left of K_min in linear scale
     ws_x = -3
@@ -2512,6 +2510,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     & h0_expr
                     & pl.col("variant").str.contains("Unrolled")
                 ).to_pandas()
+                if ws == "only_semantic":
+                    sub = sub[sub["K"].isin({1, 5, 10, 15, 30})]
                 if not sub.empty:
                     sns.lineplot(
                         data=sub,
@@ -2528,7 +2528,6 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     )
 
         # H_0-transfer baseline (source already selected per ws_type at load time)
-        _SHOW_KS = {1, 5, 10, 15, 30}
         if df_bt is not None:
             for h0v in h0_vals:
                 color = color_map[h0v]
