@@ -10,7 +10,7 @@ Follows the plotting conventions of the semantic-alignment-via-sim reference rep
 
 Usage
 -----
-    just plot
+    just plot-cls
     uv run python scripts/plot_results_classification.py
 """
 

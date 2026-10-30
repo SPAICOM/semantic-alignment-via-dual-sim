@@ -371,6 +371,21 @@ rec-mono-grid *ARGS:
 rec-disjoint-sym-grid *ARGS:
     uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_grid {{ARGS}}
 
+# Final reconstruction runs: Mono TX (constructive), Disjoint sym (constructive) and Joint
+# Dual-SIM on MNIST, Fashion-MNIST and CIFAR-10 (Linear + PPFE each), M=64x64, L=50, cosine
+# lr schedule. lr from the grid searches: 0.1 (Mono, Disjoint sym), 0.03 (Joint).
+# Results: results/reconstruction/{mono_final,disjoint_sym_final,joint_final}/ (+ .pt links).
+# Finished runs are skipped, so re-running only fills in what is missing.
+rec-final *ARGS:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    common="training.scheduler=cosine sim.L=50 sim.M_int=64"
+    for ds in mnist fashion_mnist cifar10; do
+        just rec-mono-c datasets/reconstruction=$ds training.lr=0.1 $common sim.name=mono_final sim.result_subdir=mono_final {{ARGS}}
+        just rec-disjoint-sym-c datasets/reconstruction=$ds alignment.lr_tx=0.1 alignment.lr_rx=0.1 $common sim.name=disjoint_sym_final sim.result_subdir=disjoint_sym_final {{ARGS}}
+        just rec-joint datasets/reconstruction=$ds alignment.lr_tx=0.03 alignment.lr_rx=0.03 $common sim.name=joint_final sim.result_subdir=joint_final {{ARGS}}
+    done
+
 # Aggregate: reconstruction layers sweep across all methods
 rec-all-layers: rec-joint-layers rec-mono-layers rec-mono-layers-c rec-mono-rx-layers-c \
                 rec-disjoint-sym-layers rec-disjoint-sym-layers-c
@@ -483,7 +498,12 @@ cls-joint-lr-search *ARGS: train-clf
 
 # ── Analysis ──────────────────────────────────────────────────────────────────
 
-# Generate publication-ready result plots
-plot:
+# Classification: publication-ready result plots
+plot-cls:
     uv run python scripts/plot_results_classification.py
+
+# Reconstruction figure: decoded test images per architecture/strategy (MNIST, Fashion-MNIST, CIFAR-10).
+# Depends on rec-final, whose saved links (.pt) it decodes; finished runs are skipped.
+plot-rec: rec-final
+    uv run python scripts/plot_results_reconstruction.py
 
