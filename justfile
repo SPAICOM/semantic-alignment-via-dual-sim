@@ -311,10 +311,6 @@ extract-latents *ARGS:
 align-ae *ARGS:
     uv run python scripts/align_reconstruction.py datasets/reconstruction={{dataset}} {{ARGS}}
 
-# Fast no-channel sweep of alignment hyperparameters (lmb, n_clusters, n_proto, pilots)
-sweep-align *ARGS:
-    uv run python scripts/sweep_alignment.py datasets/reconstruction={{dataset}} {{ARGS}}
-
 # Single reconstruction run (no multirun; joint Dual-SIM + PPFE by default)
 rec *ARGS:
     uv run python scripts/reconstruction.py datasets/reconstruction={{dataset}} {{ARGS}}

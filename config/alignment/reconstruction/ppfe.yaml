@@ -1,7 +1,7 @@
 # @package _global_.alignment
 # Prototype-based Parseval Frame Equalization for image reconstruction.
-# Same fields as alignment/classification/ppfe.yaml. The fast no-channel sweep
-# (scripts/sweep_alignment.py) showed n_clusters=20 bottlenecks PPFE
+# Same fields as alignment/classification/ppfe.yaml. A no-channel alignment sweep
+# (MNIST, no SIM) showed n_clusters=20 bottlenecks PPFE
 # (14.16dB vs Linear's 17.49dB); 2000 closes most of the gap (17.11dB).
 # Full-CSI architectures (disjoint_sym, disjoint_4sim) ignore n_clusters and use
 # n_clusters == sim.channel_dim, as in classification.

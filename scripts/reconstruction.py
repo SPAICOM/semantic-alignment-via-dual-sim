@@ -108,8 +108,6 @@ def _out_path(cfg: DictConfig, A_shape: tuple[int, int], tags: tuple[str, str, s
     snr_raw = sim.get("snr", None)
     snr = None if str(snr_raw) == "null" else snr_raw
     result_subdir = sim.get("result_subdir", "")
-    lr_tx, lr_rx = _lrs(cfg)
-    lr_tag = f"_lrtx{lr_tx}_lrrx{lr_rx}" if "lr_search" in result_subdir else ""
     fname = make_fname(
         cfg.alignment.type,
         cfg.training.seed,
@@ -123,7 +121,6 @@ def _out_path(cfg: DictConfig, A_shape: tuple[int, int], tags: tuple[str, str, s
         sim.get("s_rx", None),
         _n_clusters(cfg),
         dataset=cfg.datasets.name,
-        extra_tag=lr_tag,
         channel_type=sim.get("channel_type", "rayleigh"),
         rice_factor_db=sim.get("rice_factor_db", None),
         cluster_on=cfg.alignment.get("cluster_on", "pilots"),
