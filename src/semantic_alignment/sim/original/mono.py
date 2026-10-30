@@ -1,23 +1,25 @@
-"""Mono-SIM (TX-only) runner — covers layers and SNR sweeps in one function."""
+"""Mono-SIM runner (TX or RX side) — covers layers and SNR sweeps for any downstream task."""
 
 import gc
-import random
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 
-from semantic_alignment.evaluation.inference import run_evaluation_cascade, run_evaluation_mono
-from semantic_alignment.utils import cn_matrix
+from semantic_alignment.sim.link import Transmit, cascade_transmit, equalized_transmit
+from semantic_alignment.utils import channel, cn_matrix, standardize_channel
 
 from ._base import SIMRunner
-from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, tipology_tag
+from ._utils import ch_dims, make_fname, phase_state, tipology_tag
 from .optimizers.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
+
+if TYPE_CHECKING:
+    from semantic_alignment.evaluation.tasks import Task
 
 
 class MonoSIM(SIMRunner):
-    """Class-based entry point for the Mono-SIM (TX-only) experiment."""
+    """Class-based entry point for the Mono-SIM (TX- or RX-side) experiment."""
 
     @classmethod
     def build_model(
@@ -50,29 +52,118 @@ class MonoSIM(SIMRunner):
         )
         return MonoSIMoptimizerTorch(cpu).to(device)
 
-    def run(
-        self,
+    @staticmethod
+    def draw_channel(
+        A_target: torch.Tensor | np.ndarray,
+        alignment_side: str,
+        device: torch.device,
+        channel_type: str = "rayleigh",
+        rice_factor_db: float | None = None,
+    ) -> torch.Tensor:
+        """Draw the square channel the Mono-SIM sees (Rayleigh unless ``channel_type="rician"``).
+
+        TX side: ``H ∈ C^{Rdimc×Rdimc}``; RX side: ``H ∈ C^{Tdimc×Tdimc}``.
+        """
+        h_dim = int(A_target.shape[1]) if alignment_side == "rx" else int(A_target.shape[0])
+        if channel_type == "rician":
+            H = channel(h_dim, h_dim, channel_type=channel_type, rice_factor_db=rice_factor_db)
+            return standardize_channel(H, channel_type=channel_type).to(device)
+        H_mimo = cn_matrix(0, 1, size=(h_dim, h_dim)).to(device)
+        return torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+    @classmethod
+    def solve(
+        cls,
         L: int,
         M_int: int,
-        no_mismatch_probe: float,
-        original_probe: float,
         A_target: torch.Tensor | np.ndarray,
-        test_loader: DataLoader,
-        clf: torch.Tensor | nn.Module,
-        L_in: torch.Tensor,
-        mu_in: torch.Tensor,
-        L_out: torch.Tensor,
-        mu_out: torch.Tensor,
+        H_torch: torch.Tensor,
+        device: torch.device,
+        slayer: float = 0.025,
+        wavelength: float = 0.005,
+        dx: float = 0.0025,
+        max_iters: int = 3000,
+        lr: float = 0.1,
+        optimizer: str = "adam",
+        scheduler: str = "none",
+        warmup_frac: float = 0.05,
+        constructive: bool = False,
+        alignment_side: str = "tx",
+        eval_fn: Callable | None = None,
+    ) -> tuple[MonoSIMoptimizerTorch, torch.Tensor, torch.Tensor, torch.Tensor, list[float]]:
+        """Build and train a Mono-SIM against ``A_target``.
+
+        The physical-layer step of :meth:`run`, also usable on its own. The
+        caller is responsible for seeding and for drawing ``H_torch``
+        (see :meth:`draw_channel`).
+
+        Returns
+        -------
+        sim_model : MonoSIMoptimizerTorch
+            Trained Mono-SIM.
+        G_f : torch.Tensor
+            Trained SIM cascade (``G_T`` or ``G_R``).
+        Z_eff : torch.Tensor
+            Effective cascade β is fitted to: ``H G_T`` (tx) / ``G_R H`` (rx)
+            when ``constructive``, else ``G_f``.
+        beta : torch.Tensor
+            MMSE scalar aligning ``Z_eff`` to ``A_target``.
+        loss_history : list[float]
+        """
+        tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
+        rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
+
+        sim_model = cls.build_model(
+            L,
+            M_int,
+            tx_in_x,
+            tx_in_y,
+            rx_out_x,
+            rx_out_y,
+            alignment_side,
+            slayer,
+            wavelength,
+            dx,
+            device,
+        )
+        A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+
+        loss_history, _ = sim_model.optimize_sim(
+            target_matrix=A_torch,
+            max_iters=max_iters,
+            lr=lr,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            warmup_frac=warmup_frac,
+            left_matrix=H_torch if (constructive and alignment_side == "tx") else None,
+            right_matrix=H_torch if (constructive and alignment_side == "rx") else None,
+            eval_fn=eval_fn,
+        )
+
+        with torch.no_grad():
+            G_f = sim_model.get_cascade()
+            if constructive:
+                # TX: H·G_T;  RX: G_R·H
+                Z_eff = H_torch @ G_f if alignment_side == "tx" else G_f @ H_torch
+            else:
+                Z_eff = G_f
+            beta = torch.sum(torch.conj(Z_eff) * A_torch) / (
+                torch.sum(torch.conj(Z_eff) * Z_eff) + 1e-12
+            )
+        return sim_model, G_f, Z_eff, beta, loss_history
+
+    def run(
+        self,
+        task: "Task",
+        L: int,
+        M_int: int,
+        A_target: torch.Tensor | np.ndarray,
         device: torch.device,
         strategy_name: str = "Linear",
         seed: int = 42,
         max_iters: int = 3000,
         lr: float = 0.1,
-        H_mimo: torch.Tensor | np.ndarray | None = None,
         snr: float | None = None,
-        clf_neural: torch.Tensor | nn.Module | None = None,
-        no_mismatch_neural: float | None = None,
-        original_neural: float | None = None,
         tx_enc: str = "",
         rx_enc: str = "",
         optimizer: str = "adam",
@@ -89,6 +180,9 @@ class MonoSIM(SIMRunner):
         dataset: str = "cifar10",
         result_subdir: str = "",
         save_curve: bool = False,
+        channel_type: str = "rayleigh",
+        rice_factor_db: float | None = None,
+        cluster_on: str = "pilots",
         **_,
     ) -> None:
         """Run one Mono-SIM job (TX or RX side).
@@ -97,6 +191,9 @@ class MonoSIM(SIMRunner):
         when constructive else NMSE(G_T, A).
         ``alignment_side='rx'``: SIM on the receiver, loss = NMSE(G_R·H, A)
         (only constructive=True is supported for the RX side).
+
+        The channel is drawn here (:meth:`draw_channel`), after seeding; the
+        trained link is scored by ``task``.
         """
         if alignment_side == "rx" and not constructive:
             raise NotImplementedError("Mono RX equalized is not implemented.")
@@ -104,8 +201,6 @@ class MonoSIM(SIMRunner):
             result_subdir if result_subdir else ("mono_snr" if snr is not None else "mono_layers")
         )
         ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
-        tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
-        rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
         fname = make_fname(
             strategy_name,
@@ -118,172 +213,64 @@ class MonoSIM(SIMRunner):
             rx_enc,
             n_clusters=n_clusters,
             dataset=dataset,
+            channel_type=channel_type,
+            rice_factor_db=rice_factor_db,
+            cluster_on=cluster_on,
         )
         tipo = tipology_tag("mono", constructive, alignment_side=alignment_side)
-        out_path = RESULTS_DIR / subdir / tipo / fname if tipo else RESULTS_DIR / subdir / fname
+        out_path = self.out_path(task, subdir, tipo, fname)
 
         if out_path.exists():
             print(f"Skipping {out_path.name}.")
             return
 
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
+        self.seed_everything(seed)
 
-        # TX side: H ∈ C^{Rdimc×Rdimc};  RX side: H ∈ C^{Tdimc×Tdimc}
-        h_dim = int(A_target.shape[1]) if alignment_side == "rx" else int(A_target.shape[0])
-        H_mimo = cn_matrix(0, 1, size=(h_dim, h_dim)).to(device)
-        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+        H_torch = self.draw_channel(A_target, alignment_side, device, channel_type, rice_factor_db)
 
-        sim_model = self.build_model(
-            L,
-            M_int,
-            tx_in_x,
-            tx_in_y,
-            rx_out_x,
-            rx_out_y,
-            alignment_side,
-            slayer,
-            wavelength,
-            dx,
-            device,
-        )
-        A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+        def _link(G: torch.Tensor, Z_eff: torch.Tensor, beta: torch.Tensor) -> Transmit:
+            # Constructive: Z_eff = H·G_T (tx) or G_R·H (rx) already includes the channel.
+            if constructive:
+                return cascade_transmit(Z_eff, beta, snr)
+            return equalized_transmit(G, H_torch, beta, snr, mmse=use_mmse)
 
-        curve_probe: list[float] = []
-        curve_neural: list[float] = []
+        curve: list[dict] = []
 
         def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
-            if constructive:
-                # Z_eff = H·G_T (tx) or G_R·H (rx) — cascade already applied by core
-                acc = run_evaluation_cascade(
-                    Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
-                )
-            else:
-                acc = run_evaluation_mono(
-                    G_T=Z_eff,
-                    dataloader=test_loader,
-                    H_mimo=H_torch,
-                    snr_db=snr,
-                    beta_opt=beta,
-                    L_in=L_in,
-                    mu_in=mu_in,
-                    L_out=L_out,
-                    mu_out=mu_out,
-                    clf=clf,
-                    device=device,
-                    use_equalizer=True,
-                    mmse=use_mmse,
-                )
-            curve_probe.append(acc)
-            if clf_neural is not None:
-                if constructive:
-                    acc_n = run_evaluation_cascade(
-                        Z_eff,
-                        test_loader,
-                        snr,
-                        beta,
-                        L_in,
-                        mu_in,
-                        L_out,
-                        mu_out,
-                        clf_neural,
-                        device,
-                    )
-                else:
-                    acc_n = run_evaluation_mono(
-                        G_T=Z_eff,
-                        dataloader=test_loader,
-                        H_mimo=H_torch,
-                        snr_db=snr,
-                        beta_opt=beta,
-                        L_in=L_in,
-                        mu_in=mu_in,
-                        L_out=L_out,
-                        mu_out=mu_out,
-                        clf=clf_neural,
-                        device=device,
-                        use_equalizer=True,
-                        mmse=use_mmse,
-                    )
-                curve_neural.append(acc_n)
+            curve.append(task.evaluate_step(_link(Z_eff, Z_eff, beta)))
 
-        loss_history, _ = sim_model.optimize_sim(
-            target_matrix=A_torch,
+        sim_model, G_f, Z_eff, beta, loss_history = self.solve(
+            L,
+            M_int,
+            A_target,
+            H_torch,
+            device,
+            slayer=slayer,
+            wavelength=wavelength,
+            dx=dx,
             max_iters=max_iters,
             lr=lr,
             optimizer=optimizer,
             scheduler=scheduler,
             warmup_frac=warmup_frac,
-            left_matrix=H_torch if (constructive and alignment_side == "tx") else None,
-            right_matrix=H_torch if (constructive and alignment_side == "rx") else None,
+            constructive=constructive,
+            alignment_side=alignment_side,
             eval_fn=_eval_fn if save_curve else None,
         )
 
         with torch.no_grad():
-            G_f = sim_model.get_cascade()
-            if constructive:
-                # TX: H·G_T;  RX: G_R·H
-                Z_eff = H_torch @ G_f if alignment_side == "tx" else G_f @ H_torch
-            else:
-                Z_eff = G_f
-            beta = torch.sum(torch.conj(Z_eff) * A_torch) / (
-                torch.sum(torch.conj(Z_eff) * Z_eff) + 1e-12
-            )
-
-            if constructive:
-                mono_probe = run_evaluation_cascade(
-                    Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
-                )
-                mono_neural = (
-                    run_evaluation_cascade(
-                        Z_eff,
-                        test_loader,
-                        snr,
-                        beta,
-                        L_in,
-                        mu_in,
-                        L_out,
-                        mu_out,
-                        clf_neural,
-                        device,
-                    )
-                    if clf_neural is not None
-                    else None
-                )
-            else:
-                eval_kw = dict(
-                    G_T=G_f,
-                    dataloader=test_loader,
-                    H_mimo=H_torch,
-                    snr_db=snr,
-                    beta_opt=beta,
-                    L_in=L_in,
-                    mu_in=mu_in,
-                    L_out=L_out,
-                    mu_out=mu_out,
-                    device=device,
-                    use_equalizer=True,
-                    mmse=use_mmse,
-                )
-                mono_probe = run_evaluation_mono(clf=clf, **eval_kw)
-                mono_neural = (
-                    run_evaluation_mono(clf=clf_neural, **eval_kw)
-                    if clf_neural is not None
-                    else None
-                )
+            sim = task.evaluate(_link(G_f, Z_eff, beta))
 
         print(
             f" Mono-{alignment_side.upper()}{'(snr=' + str(snr) + ')' if snr is not None else ''}"
             f" L={L} M={M_int} seed={seed} constructive={constructive}"
-            f" | nm_linear={no_mismatch_probe * 100:.2f}%{neural_str('nm_neural', no_mismatch_neural)}"
-            f" | orig_linear={original_probe * 100:.2f}%{neural_str('orig_neural', original_neural)}"
-            f" | sim_linear={mono_probe * 100:.2f}%{neural_str('sim_neural', pct(mono_neural))}"
+            f" | {task.summary(sim)}"
         )
 
-        save_result(
+        self.save(
+            task,
             out_path,
-            {
+            head={
                 "result_subdir": subdir,
                 "seed": seed,
                 "strategy": strategy_name,
@@ -294,12 +281,9 @@ class MonoSIM(SIMRunner):
                 "s_rx": None,
                 "tx_enc": tx_enc,
                 "rx_enc": rx_enc,
-                "no_mismatch_probe": no_mismatch_probe,
-                "no_mismatch_neural": no_mismatch_neural,
-                "original_probe": original_probe,
-                "original_neural": original_neural,
-                "sim_accuracy_probe": mono_probe,
-                "sim_accuracy_neural": pct(mono_neural),
+            },
+            sim=sim,
+            tail={
                 "lr": lr,
                 "beta_T": None,
                 "beta_R": None,
@@ -313,8 +297,15 @@ class MonoSIM(SIMRunner):
                 "constructive": constructive,
                 "alignment_side": alignment_side,
                 "dataset": dataset,
-                "sim_accuracy_probe_curve": curve_probe if save_curve else None,
-                "sim_accuracy_neural_curve": curve_neural if save_curve else None,
+                **task.curve_columns(curve if save_curve else None),
+            },
+            params={
+                "phases": {"sim": phase_state(sim_model)},
+                "G": G_f,
+                "Z_eff": Z_eff,
+                "H": H_torch,
+                "beta": beta,
+                "A_target": torch.as_tensor(A_target),
             },
         )
         del sim_model

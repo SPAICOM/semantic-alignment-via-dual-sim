@@ -1,0 +1,17 @@
+# @package _global_.datasets
+# MNIST — raw images for image-reconstruction alignment.
+# Unlike config/datasets/classification/mnist.yaml (Semasia embedding collection, classification),
+# this points at the original HF dataset so ground-truth pixels are available
+# for decoding / reconstruction-quality metrics (MSE, PSNR, SSIM).
+# Parquet shards live at hf://datasets/{hf_repo}/{hf_config}/{split}-*.parquet
+
+name: mnist  # keys models/autoencoders/{name}/ and result filenames
+hf_repo: ylecun/mnist
+hf_config: mnist
+image_col: image
+label_col: label
+train_split: train
+test_split: test
+image_size: [28, 28]
+channels: 1
+num_classes: 10

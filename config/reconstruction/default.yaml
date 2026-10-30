@@ -1,0 +1,20 @@
+# Shared reconstruction-alignment settings — the reconstruction analogue of
+# data/default.yaml. Read by every reconstruction script.
+
+# TX/RX autoencoder pair (checkpoints under models/autoencoders/{dataset}/{variant}/seed{seed}.pt,
+# see: just train-ae). Any trained variant directory works, e.g. base_mmd1 / small_mmd1.
+tx_variant: base
+tx_seed: 42
+rx_variant: small
+rx_seed: 42
+
+# Pilot selection (same recipe as classification)
+train_label_size: 5000  # pilots per class used to estimate the alignment matrix A (capped at the class size)
+method: centroid        # centroid | random
+grouping: label         # label | proto
+
+# Alignment (Linear / PPFE) is the alignment/reconstruction config group.
+
+batch_size: 512         # embedding / decode mini-batch
+num_preview: 5          # test samples saved in the comparison PNG grid
+save_to_disk: true      # cache raw images under data/images/

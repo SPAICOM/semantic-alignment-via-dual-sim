@@ -1,29 +1,26 @@
 """Disjoint 4-SIM runner (full CSI, 2 TX + 2 RX) — covers layers and SNR sweeps."""
 
 import gc
-import random
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 
-from semantic_alignment.evaluation.inference import run_evaluation_disjoint_fixed
+from semantic_alignment.sim.link import dual_transmit
 
 from ._base import SIMRunner
 from ._utils import (
-    RESULTS_DIR,
-    _FixedCascade,
     ch_dims,
     inter_sim_propagation,
     make_fname,
-    neural_str,
-    pct,
-    save_result,
+    phase_state,
     snr_tag,
     tipology_tag,
 )
 from .optimizers.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
+
+if TYPE_CHECKING:
+    from semantic_alignment.evaluation.tasks import Task
 
 
 class Disjoint4SIM(SIMRunner):
@@ -31,26 +28,16 @@ class Disjoint4SIM(SIMRunner):
 
     def run(
         self,
+        task: "Task",
         L: int,
         M_int: int,
-        no_mismatch_probe: float,
-        original_probe: float,
         A_target: torch.Tensor | np.ndarray,
         H_mimo: torch.Tensor | np.ndarray,
-        test_loader: DataLoader,
-        clf: torch.Tensor | nn.Module,
-        L_in: torch.Tensor,
-        mu_in: torch.Tensor,
-        L_out: torch.Tensor,
-        mu_out: torch.Tensor,
         device: torch.device,
         result_subdir: str,
         strategy_name: str = "PPFE",
         seed: int = 42,
         max_iters: int = 3000,
-        clf_neural: torch.Tensor | nn.Module | None = None,
-        no_mismatch_neural: float | None = None,
-        original_neural: float | None = None,
         tx_enc: str = "",
         rx_enc: str = "",
         optimizer: str = "adam",
@@ -68,39 +55,35 @@ class Disjoint4SIM(SIMRunner):
         epsilon: float = 0.0,
         constructive: bool = False,
         dataset: str = "cifar10",
+        n_clusters: int | None = None,
+        channel_type: str = "rayleigh",
+        rice_factor_db: float | None = None,
+        cluster_on: str = "pilots",
         **_,
     ) -> None:
         """Run one 4-SIM disjoint experiment (2 TX + 2 RX).
 
         Builds four independent mono-SIM models (t1, t2, r2, r1), optimizes each
         with separate training objectives derived from SVD decomposition of H,
-        then composes the effective cascades via inter-SIM propagation and evaluates
-        combined accuracy.
+        then composes the effective cascades via inter-SIM propagation and lets
+        ``task`` score the combined link.
 
         Parameters
         ----------
+        task : Task
+            Downstream task scoring the trained link.
         L : int
             Number of SIM layers per mono-SIM.
         M_int : int
             Intermediate dimension.
-        no_mismatch_probe : float
-            Baseline accuracy without mismatch.
-        original_probe : float
-            Baseline accuracy with original SIM.
         A_target : Tensor
             Target alignment matrix.
         H_mimo : Tensor
             MIMO channel matrix.
-        test_loader : DataLoader
-            Test dataset loader.
-        clf : classifier
-            Probe classifier.
-        L_in, mu_in, L_out, mu_out : float
-            RX-side equalizer parameters.
         device : torch.device
             Computation device.
         result_subdir : str
-            Subdirectory under ``results/``.
+            Subdirectory under ``task.results_dir``.
         strategy_name : str
             ``"PPFE"`` or ``"Linear"``.
         seed : int
@@ -127,22 +110,28 @@ class Disjoint4SIM(SIMRunner):
         rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
         fname = make_fname(
-            strategy_name, seed, L, M_int, ch_dim, snr, tx_enc, rx_enc, dataset=dataset
+            strategy_name,
+            seed,
+            L,
+            M_int,
+            ch_dim,
+            snr,
+            tx_enc,
+            rx_enc,
+            n_clusters=n_clusters,
+            dataset=dataset,
+            channel_type=channel_type,
+            rice_factor_db=rice_factor_db,
+            cluster_on=cluster_on,
         )
         log_prefix = f"Disjoint4SIM L={L} M={M_int} snr={snr_tag(snr)} seed={seed}"
         tipo = tipology_tag("disjoint_4sim", constructive)
-        out_path = (
-            RESULTS_DIR / result_subdir / tipo / fname
-            if tipo
-            else RESULTS_DIR / result_subdir / fname
-        )
+        out_path = self.out_path(task, result_subdir, tipo, fname)
         if out_path.exists():
             print(f"Skipping {out_path.name}.")
             return
 
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
+        self.seed_everything(seed)
 
         def _make_sim(in_x: int, in_y: int, out_x: int, out_y: int, side: str):
             """Factory closure: build a NumPy MonoSIMoptimizer for one of the 4 SIMs."""
@@ -225,54 +214,19 @@ class Disjoint4SIM(SIMRunner):
             G_T_eff = t2_model.get_cascade() @ W_inter @ t1_model.get_cascade()
             G_R_eff = r1_model.get_cascade() @ W_inter @ r2_model.get_cascade()
 
-        tx_wrap = _FixedCascade(G_T_eff)
-        rx_wrap = _FixedCascade(G_R_eff)
-
-        sim_probe = run_evaluation_disjoint_fixed(
-            tx_wrap,
-            rx_wrap,
-            test_loader,
-            H_mimo,
-            snr,
-            beta_g,
-            L_in,
-            mu_in,
-            L_out,
-            mu_out,
-            clf,
-            device,
-        )
-        sim_neural = (
-            run_evaluation_disjoint_fixed(
-                tx_wrap,
-                rx_wrap,
-                test_loader,
-                H_mimo,
-                snr,
-                beta_g,
-                L_in,
-                mu_in,
-                L_out,
-                mu_out,
-                clf_neural,
-                device,
-            )
-            if clf_neural is not None
-            else None
-        )
+        sim = task.evaluate(dual_transmit(G_T_eff, H_mimo, G_R_eff, beta_g, snr))
 
         print(
             f" {log_prefix}"
-            f" | nm_linear={no_mismatch_probe * 100:.2f}%{neural_str('nm_neural', no_mismatch_neural)}"
-            f" | orig_linear={original_probe * 100:.2f}%{neural_str('orig_neural', original_neural)}"
-            f" | sim_linear={sim_probe * 100:.2f}%{neural_str('sim_neural', pct(sim_neural))}"
+            f" | {task.summary(sim)}"
             f" | β_T1={abs(beta_T1):.2e} β_T2={abs(beta_T2):.2e}"
             f" β_R2={abs(beta_R2):.2e} β_R1={abs(beta_R1):.2e}"
         )
 
-        save_result(
+        self.save(
+            task,
             out_path,
-            {
+            head={
                 "result_subdir": result_subdir,
                 "seed": seed,
                 "strategy": strategy_name,
@@ -283,12 +237,9 @@ class Disjoint4SIM(SIMRunner):
                 "s_rx": None,
                 "tx_enc": tx_enc,
                 "rx_enc": rx_enc,
-                "no_mismatch_probe": no_mismatch_probe,
-                "no_mismatch_neural": no_mismatch_neural,
-                "original_probe": original_probe,
-                "original_neural": original_neural,
-                "sim_accuracy_probe": sim_probe,
-                "sim_accuracy_neural": pct(sim_neural),
+            },
+            sim=sim,
+            tail={
                 "lr_tx": lr_tx,
                 "lr_rx": lr_rx,
                 "beta_T": abs(beta_T1) * abs(beta_T2),
@@ -309,6 +260,22 @@ class Disjoint4SIM(SIMRunner):
                 "tipology": tipo,
                 "constructive": constructive,
                 "dataset": dataset,
+            },
+            params={
+                "phases": {
+                    name: phase_state(m)
+                    for name, m in (
+                        ("t1", t1_model),
+                        ("t2", t2_model),
+                        ("r2", r2_model),
+                        ("r1", r1_model),
+                    )
+                },
+                "G_T": G_T_eff,
+                "G_R": G_R_eff,
+                "H": H_torch,
+                "beta": beta_g,
+                "A_target": A_torch,
             },
         )
         del t1_model, t2_model, r2_model, r1_model

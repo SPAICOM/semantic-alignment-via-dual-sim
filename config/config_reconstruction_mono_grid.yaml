@@ -1,0 +1,22 @@
+# Grid search for Mono-SIM TX (constructive) reconstruction: Adam lr × LR scheduler × L,
+# on top of config_reconstruction_mono_constructive (MNIST, base_mmd1 → small_mmd1, 64x64,
+# noiseless, 3000 steps). Linear alignment only: the SIM fit is what is being tuned.
+# Each (lr, scheduler) point gets its own subdir (the filename already carries L, M):
+# results/reconstruction/mono_grid/lr{lr}_{scheduler}/constructive/tx/
+defaults:
+  - config_reconstruction_mono_constructive
+  - override alignment/reconstruction: linear
+  - _self_
+
+sim:
+  name: mono_grid
+  result_subdir: mono_grid/lr${training.lr}_${training.scheduler}
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment/reconstruction: linear
+      training.lr: 0.01,0.03,0.1,0.3,1.0
+      training.scheduler: null,cosine
+      sim.L: 25,50

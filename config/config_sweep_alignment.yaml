@@ -1,0 +1,16 @@
+# Fast alignment-hyperparameter sweep against the no-SIM/no-channel baseline
+# (scripts/sweep_alignment.py) — embeds once, then evaluates every combination.
+defaults:
+  - datasets/reconstruction: cifar10
+  - reconstruction: default
+  - _self_
+
+seed: 42
+lmb_values: [0.0, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]
+n_clusters_values: [10, 20, 32, 64, 128, 256, 500, 1000, 2000, 4000, 8000, 16000, 32000]
+n_proto_values: [500]                  # max samples per prototype (null = the whole cluster)
+cluster_on_values: [pilots]           # pilots | train_tx; first entry is also used for the preview grid
+ppfe_seeds: [42, 27, 100]              # KMeans / prototype-subsampling seeds
+preview_clusters: [20, 128, 500, 2000, 8000]    # PPFE n_clusters rendered in the preview grid
+preview_n_proto: 500
+preview_pilots: [500, 1000, 2000, 5000]        # Linear pilots-per-class rendered in the preview grid

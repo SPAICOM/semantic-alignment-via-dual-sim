@@ -1,6 +1,6 @@
 defaults:
   - sim: disjoint_sym
-  - alignment: ppfe
+  - alignment/classification: ppfe
   - datasets/classification: cifar10
   - data: default
   - training: disjoint
@@ -22,5 +22,5 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      alignment: linear,ppfe
+      alignment/classification: linear,ppfe
       training.seed: 27,42,100,123,144,200

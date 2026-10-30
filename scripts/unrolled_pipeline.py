@@ -1,34 +1,33 @@
-"""Deep-unrolling comparison entry point — Lightning version.
+"""Task-agnostic deep-unrolling pipeline shared by the ``unrolled_*.py`` entry points.
 
-Builds SIM(s) and unrolled model(s), trains the unrolled step sizes on
-batches of random MIMO channels via ``UnrolledLightning``, and evaluates
-probe/neural accuracy on test channels.  Classic Adam baselines are run
-separately via ``just curve`` (classification.py with save_curve=true).
+:func:`run_unrolled` builds the SIM(s) and unrolled model(s), trains the
+unrolled step sizes on batches of random MIMO channels via
+``UnrolledLightning``, and evaluates every unrolled step on the test channels.
+The downstream metrics come from a
+:class:`~semantic_alignment.evaluation.tasks.Task`:
+
+- ``unrolled_classification.py``  — :class:`ClassificationTask` (probe/neural accuracy)
+- ``unrolled_reconstruction.py``  — :class:`ReconstructionTask` (RX-decoder PSNR/MSE)
+
+Each entry point only builds its task and the setup context, then calls
+:func:`run_unrolled`.
 """
 
 import math
-import os
-
-os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 from pathlib import Path
 
-import hydra
-import lightning as lg
 import polars as pl
 import torch
+import wandb
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
 from omegaconf import DictConfig
-from torch.utils.data import DataLoader, TensorDataset
 from warm_start_cache import _ensure_ws_accuracy
 from warm_start_cache import _run_warm_start_cached as _ws_cached
 
-import wandb
 from semantic_alignment.data import HChannelDataModule
-from semantic_alignment.data.prepare import prepare_semasia
-from semantic_alignment.evaluation.linear_probe import train_linear_probe
-from semantic_alignment.evaluation.neural_classifier import load_neural_clf
+from semantic_alignment.evaluation.tasks import Task
 from semantic_alignment.sim.original._utils import ch_dims, tipology_tag
 from semantic_alignment.sim.original.disjoint_sym import DisjointSymSIM
 from semantic_alignment.sim.original.joint import JointSIM
@@ -46,111 +45,61 @@ from semantic_alignment.sim.unrolled.runner import (
     CompareUnrolledCallback,
     UnrolledLightning,
     _build_mono_sims,
-    _precompute_test_data,
 )
 from semantic_alignment.utils import channel as _channel_fn
-from semantic_alignment.utils import pack_complex, standardize_channel
+from semantic_alignment.utils import standardize_channel
 
 torch.set_float32_matmul_precision("high")
 
-_RESULTS = Path("results")  # overridable via training.result_root
 
-
-def _setup(cfg: DictConfig) -> dict:
-    """Load data, set seed/device, return shared context."""
-    seed = cfg.training.seed
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    lg.seed_everything(seed, workers=True)
-
-    is_csi = cfg.sim.get("sim_type", "") in ("disjoint_sym", "disjoint_4sim")
-    if cfg.alignment.type == "PPFE":
-        ch_dim_cfg = cfg.sim.get("channel_dim", None)
-        n_k = int(ch_dim_cfg) if ch_dim_cfg is not None and is_csi else cfg.alignment.n_clusters
-    else:
-        n_k = None
-
-    prep = prepare_semasia(
-        hf_name=cfg.datasets.hf_name,
-        tx_enc=cfg.data.tx_enc,
-        rx_enc=cfg.data.rx_enc,
-        train_label_size=cfg.data.train_label_size,
-        alignment_type=cfg.alignment.type,
-        lmb=cfg.alignment.get("lmb", 1e-3),
-        n_clusters=n_k,
-        n_proto=cfg.alignment.get("n_proto", None),
-        keep_csi_frames=is_csi,
-        method=cfg.data.method,
-        grouping=cfg.data.grouping,
-        label_col=cfg.datasets.label_col,
-        train_split=cfg.datasets.train_split,
-        test_split=cfg.datasets.test_split,
-        save_to_disk=cfg.data.save_to_disk,
-        seed=seed,
-        device=device,
-    )
-    data = prep.data
-    L_in, mu_in, L_out, mu_out = prep.L_in, prep.mu_in, prep.L_out, prep.mu_out
-    A_target, F_T, F_R_H = prep.A_target, prep.F_T, prep.F_R_H
-
-    clf_probe = train_linear_probe(
-        data.train.z_rx.to(device),
-        data.train.labels.to(device),
-        num_classes=cfg.datasets.num_classes,
-    )
-
-    try:
-        clf_neural = load_neural_clf(cfg.datasets.hf_name, cfg.data.rx_enc, seed, device)
-        print(" Neural classifier loaded.")
-    except FileNotFoundError:
-        clf_neural = None
-        print(" Neural classifier not found — run 'just train-clf' to enable neural accuracy.")
-
-    test_loader = DataLoader(
-        TensorDataset(data.test.z_tx, data.test.labels),
-        batch_size=cfg.data.batch_size,
-        shuffle=False,
-    )
-
-    Z_test, labels = _precompute_test_data(test_loader, A_target, device)
-    Z_test = pack_complex(Z_test, device=device)
-    Z_test = torch.linalg.solve_triangular(L_in, Z_test - mu_in, upper=False)
-
+def _draw_channel(cfg: DictConfig, A_target: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """Seed channel ``H_classic`` (``channel_dm`` model), used by the per-epoch eval."""
     ch_dim_cfg = cfg.sim.get("channel_dim", None)
     h_dim = ch_dim_cfg if ch_dim_cfg is not None else int(max(A_target.shape))
-    H_mimo = _channel_fn(
+    return _channel_fn(
         h_dim,
         h_dim,
         channel_type=cfg.channel_dm.get("channel_type", "rayleigh"),
         rice_factor_db=cfg.channel_dm.get("rice_factor_db", None),
     ).to(device)
 
-    return dict(
-        seed=seed,
-        device=device,
-        A_target=A_target,
-        H_mimo=H_mimo,
-        test_loader=test_loader,
-        Z_test=Z_test,
-        labels=labels,
-        clf=clf_probe,
-        L_in=L_in,
-        mu_in=mu_in,
-        L_out=L_out,
-        mu_out=mu_out,
-        clf_neural=clf_neural,
-        strategy_name=cfg.alignment.type,
-        lr=cfg.training.get("lr", 0.1),
-        lr_tx=cfg.alignment.get("lr_tx", cfg.training.get("lr_tx", 0.1)),
-        lr_rx=cfg.alignment.get("lr_rx", cfg.training.get("lr_rx", 0.2)),
-        tx_enc=cfg.data.tx_enc,
-        rx_enc=cfg.data.rx_enc,
-        F_T=F_T,
-        F_R_H=F_R_H,
-    )
+
+def _channel_tag(cfg: DictConfig) -> str:
+    """Filename tag of the training-channel distribution (``channel_dm``)."""
+    ch_type = cfg.channel_dm.get("channel_type", "rayleigh")
+    kdb = cfg.channel_dm.get("rice_factor_db", None)
+    h0v = cfg.channel_dm.get("h0_var", None)
+    match (ch_type, h0v):
+        case ("rician", _):
+            return f"_rician{kdb}dB"
+        case (_, 0):
+            return "_det"
+        case (_, h) if h is not None and not math.isinf(h):
+            return f"_rayleigh_h0var{h}"
+        case _:
+            return "_rayleigh"
 
 
-def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
-    results_root = Path(cfg.training.get("result_root", "results"))
+def _strategy_tag(cfg: DictConfig) -> str:
+    """Strategy name for filenames and the warm-start cache key.
+
+    PPFE clustered on the TX training set (``alignment.cluster_on=train_tx``)
+    gets its own tag, so it never reuses results or warm starts computed with
+    the pilot clustering; every other case keeps the plain strategy name.
+    """
+    strategy = cfg.alignment.type
+    cluster_on = cfg.alignment.get("cluster_on", "pilots")
+    return f"{strategy}-{cluster_on}" if strategy == "PPFE" and cluster_on != "pilots" else strategy
+
+
+def _out_path(
+    cfg: DictConfig, ctx: dict, task: Task, coup: str, K: int, lr_w: float | None = None
+) -> Path:
+    """``{result_root}/unrolled/{mode}[/{tipology}]/{task prefix}{dataset}_unrolled_….parquet``.
+
+    ``result_root`` defaults to ``task.results_dir`` (overridable via ``training.result_root``).
+    """
+    results_root = Path(cfg.training.get("result_root", None) or task.results_dir)
     mode = cfg.sim.get("sim_type", "joint")
     tip = tipology_tag(mode)
     result_subdir = f"unrolled/{mode}/{tip}" if tip else f"unrolled/{mode}"
@@ -160,18 +109,7 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     ws_type = str(cfg.training.get("warm_start_type", "identity"))
     ws_init_tag = "none" if ws_t == 0 else ws_type
     lr_w_tag = f"_lrw{lr_w}" if lr_w is not None else ""
-    ch_type = cfg.channel_dm.get("channel_type", "rayleigh")
-    kdb = cfg.channel_dm.get("rice_factor_db", None)
-    h0v = cfg.channel_dm.get("h0_var", None)
-    match (ch_type, h0v):
-        case ("rician", _):
-            ch_tag = f"_rician{kdb}dB"
-        case (_, 0):
-            ch_tag = "_det"
-        case (_, h) if h is not None and not math.isinf(h):
-            ch_tag = f"_rayleigh_h0var{h}"
-        case _:
-            ch_tag = "_rayleigh"
+    ch_tag = _channel_tag(cfg)
     tt = cfg.training.get("training_type", "independent")
     wr = cfg.training.get("weight_ratio", 1.0)
     wn = cfg.training.get("warmup_new_layers", 0)
@@ -186,17 +124,32 @@ def _out_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> 
     if li != 1.0:
         hparam_tag += f"_li{li}"
     fname = (
-        f"{cfg.datasets.hf_name}_unrolled_{cfg.alignment.type}"
+        f"{task.fname_prefix}{ctx['dataset']}_unrolled_{_strategy_tag(cfg)}"
         f"_seed{cfg.training.seed}_L{L}_M{M_int}x{M_int}_K{K}"
         f"_ws{ws_t}_wsh{ws_init_tag}{lr_w_tag}{ch_tag}{hparam_tag}"
-        f"_{coup}_{cfg.data.tx_enc}_{cfg.data.rx_enc}.parquet"
+        f"_{coup}_{ctx['tx_enc']}_{ctx['rx_enc']}.parquet"
     )
     return results_root / result_subdir / fname
 
 
-def _steps_path(cfg: DictConfig, coup: str, K: int, lr_w: float | None = None) -> Path:
+def _steps_path(
+    cfg: DictConfig, ctx: dict, task: Task, coup: str, K: int, lr_w: float | None = None
+) -> Path:
     """Companion .steps.pt file for progressive training (step state dict)."""
-    return _out_path(cfg, coup, K, lr_w).with_suffix(".steps.pt")
+    return _out_path(cfg, ctx, task, coup, K, lr_w).with_suffix(".steps.pt")
+
+
+def _final_metrics(task: Task, curves: dict, i: int) -> dict:
+    """Final-step value of every task metric on test channel ``i`` (``None`` if unavailable)."""
+    return {
+        col: float(curves[key][i][-1]) if curves[key] else None
+        for key, col in task.cascade_columns.items()
+    }
+
+
+def _metric_curves(task: Task, curves: dict) -> dict:
+    """Per-channel, per-step curve of every task metric (``None`` if unavailable)."""
+    return {col: curves[key] for key, col in task.cascade_columns.items()}
 
 
 def _copy_progressive_init(
@@ -233,21 +186,30 @@ def _copy_progressive_init(
                     )
 
 
-@hydra.main(version_base=None, config_path="../config", config_name="config_unrolled_joint")
-def main(cfg: DictConfig) -> None:
-    gpu = cfg.training.get("gpu", None)
-    if gpu is not None:
-        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
+def run_unrolled(cfg: DictConfig, ctx: dict, task: Task) -> None:
+    """Train and evaluate the unrolled SCA models for every coupling × K — any task.
 
-    lg.seed_everything(cfg.training.seed, workers=True)
-
+    Parameters
+    ----------
+    cfg : DictConfig
+        Composed config (``sim``, ``alignment``, ``training``, ``channel_dm``).
+    ctx : dict
+        Setup context: ``device``, ``A_target``, ``H_mimo`` (seed channel),
+        ``strategy_name``, ``lr_tx``/``lr_rx``, ``tx_enc``/``rx_enc``,
+        ``dataset``, ``F_T``/``F_R_H``; optionally ``ws_extra_key`` (extra
+        warm-start metric-cache key columns). The warm-start caches are keyed on
+        dataset + strategy and prefixed with ``task.fname_prefix``.
+    task : Task
+        Scores the per-step cascades (``evaluate_cascades``) and names the
+        metric columns, results root and filename prefix.
+    """
     mode = cfg.sim.get("sim_type", "joint")
     K_default = int(cfg.training.get("K", 30))
     K_list_cfg = list(cfg.training.get("K_list", []))
     _k_display = K_list_cfg if K_list_cfg else [K_default]
     print(
         f" seed={cfg.training.seed} | mode={mode} | "
-        f"dataset={cfg.datasets.hf_name} | align={cfg.alignment.type}"
+        f"dataset={ctx['dataset']} | align={cfg.alignment.type}"
         f" | K={_k_display}"
     )
 
@@ -255,7 +217,6 @@ def main(cfg: DictConfig) -> None:
     kdb = cfg.channel_dm.get("rice_factor_db", None)
     h0v = cfg.channel_dm.get("h0_var", None)
 
-    ctx = _setup(cfg)
     device = ctx["device"]
     A_target = ctx["A_target"]
     H_mimo = ctx["H_mimo"]
@@ -288,15 +249,7 @@ def main(cfg: DictConfig) -> None:
         except TypeError:
             lr_w_progressive_list = [float(lr_w_prog_cfg)] * len(K_list)
     constructive = cfg.sim.get("constructive", False)
-    match (ch_type, h0v):
-        case ("rician", _):
-            ch_tag = f"_rician{kdb}dB"
-        case (_, 0):
-            ch_tag = "_det"
-        case (_, h) if h is not None and not math.isinf(h):
-            ch_tag = f"_rayleigh_h0var{h}"
-        case _:
-            ch_tag = "_rayleigh"
+    ch_tag = _channel_tag(cfg)
 
     print(f" K_list={K_list}, lr_w_list={lr_w_list}, lr_w_progressive_list={lr_w_progressive_list}")
     slayer = cfg.sim.wavelength * cfg.sim.slayer_multiplier
@@ -340,6 +293,7 @@ def main(cfg: DictConfig) -> None:
         ws_init_tag = "none" if ws_t == 0 else ws_type
         ws_phT: list | None = None
         ws_phR: list | None = None
+        ws_root = task.results_dir / "unrolled" / "joint" / "warmstart"
         if ws_t > 0:
             ws_phT, ws_phR, *_ = _ws_cached(
                 sim,
@@ -358,13 +312,17 @@ def main(cfg: DictConfig) -> None:
                 rx_enc=ctx["rx_enc"],
                 L=L,
                 M_int=M_int,
+                dataset=ctx["dataset"],
+                strategy=_strategy_tag(cfg),
+                cache_root=ws_root,
+                cache_prefix=task.fname_prefix,
             )
             _ensure_ws_accuracy(
                 sim,
                 ws_phT,
                 ws_phR,
                 A_target,
-                ctx,
+                task,
                 n_R,
                 n_T,
                 h0v,
@@ -381,6 +339,10 @@ def main(cfg: DictConfig) -> None:
                 train_ratio=cfg.channel_dm.get("train_ratio", 0.7),
                 val_ratio=cfg.channel_dm.get("val_ratio", 0.15),
                 rice_factor_db=cfg.channel_dm.get("rice_factor_db", None),
+                dataset=ctx["dataset"],
+                strategy=_strategy_tag(cfg),
+                cache_root=ws_root,
+                extra_key=ctx.get("ws_extra_key", None),
             )
 
         for coup in coupling_list:
@@ -408,11 +370,11 @@ def main(cfg: DictConfig) -> None:
                 # Progressive steps (k_idx > 0) use lr_w_progressive_list if set.
                 is_progressive_k = training_type == "progressive" and k_idx > 0
                 lr_w = lr_w_progressive_list[k_idx] if is_progressive_k else lr_w_list[k_idx]
-                out = _out_path(cfg, coup, K, lr_w)
+                out = _out_path(cfg, ctx, task, coup, K, lr_w)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
                     if training_type == "progressive":
-                        sp = _steps_path(cfg, coup, K, lr_w)
+                        sp = _steps_path(cfg, ctx, task, coup, K, lr_w)
                         if sp.exists():
                             ckpt = torch.load(sp, map_location=device, weights_only=True)
                             prev_step_state = {"step_T": ckpt["step_T"], "step_R": ckpt["step_R"]}
@@ -480,23 +442,10 @@ def main(cfg: DictConfig) -> None:
                     K_prev=prev_K if (training_type == "progressive" and prev_K is not None) else 0,
                     lr_inherited_ratio=cfg.training.get("lr_inherited_ratio", 1.0),
                     warmup_new_layers=cfg.training.get("warmup_new_layers", 0),
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
+                    task=task,
                 )
 
-                eval_callback = CompareUnrolledCallback(
-                    H_classic=H_mimo,
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
-                )
+                eval_callback = CompareUnrolledCallback(H_classic=H_mimo, task=task)
 
                 logger = WandbLogger(
                     project=cfg.training.get("wandb_project", "unrolled"),
@@ -521,13 +470,12 @@ def main(cfg: DictConfig) -> None:
                 trainer.test(lightning, dm, ckpt_path="best")
                 wandb.finish()
 
-                test_probe = lightning._test_probe_curves
-                test_neural = lightning._test_neural_curves
+                curves = lightning._test_curves
 
                 init_tag = f"warmstart_{ws_t}_{ws_init_tag}" if ws_t > 0 else "none"
                 meta = {
                     "seed": cfg.training.seed,
-                    "dataset": cfg.datasets.hf_name,
+                    "dataset": ctx["dataset"],
                     "strategy": strategy_name,
                     "M_int": f"{M_int}x{M_int}",
                     "L": L,
@@ -542,16 +490,17 @@ def main(cfg: DictConfig) -> None:
                     "channel_type": ch_type,
                     "rice_factor_db": kdb,
                     "h0_var": h0v,
+                    **task.cascade_meta(),
                 }
+                n_channels = len(next(c for c in curves.values() if c))
                 rows = [
                     {
                         **meta,
                         "variant": f"Unrolled ({coup})",
                         "sample_id": i,
-                        "probe_acc": float(test_probe[i][-1]),
-                        "neural_acc": float(test_neural[i][-1]) if test_neural else None,
+                        **_final_metrics(task, curves, i),
                     }
-                    for i in range(len(test_probe))
+                    for i in range(n_channels)
                 ]
 
                 out.parent.mkdir(parents=True, exist_ok=True)
@@ -559,7 +508,7 @@ def main(cfg: DictConfig) -> None:
                 print(f"Parquet saved → {out}")
 
                 if training_type == "progressive":
-                    sp = _steps_path(cfg, coup, K, lr_w)
+                    sp = _steps_path(cfg, ctx, task, coup, K, lr_w)
                     torch.save(
                         {
                             "step_T": {k: v.cpu() for k, v in model.step_T.state_dict().items()},
@@ -598,7 +547,7 @@ def main(cfg: DictConfig) -> None:
             print(f"\n{'=' * 60}\n Mono coupling='{coup}'\n{'=' * 60}")
 
             for K in K_list:
-                out = _out_path(cfg, coup, K)
+                out = _out_path(cfg, ctx, task, coup, K)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
                     continue
@@ -643,23 +592,10 @@ def main(cfg: DictConfig) -> None:
                     weight_ratio=cfg.training.get("weight_ratio", 1.0),
                     learn_S=cfg.training.get("learn_S", False),
                     reg_S=cfg.training.get("reg_S", 0.01),
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
+                    task=task,
                 )
 
-                eval_callback = CompareUnrolledCallback(
-                    H_classic=H_mimo,
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
-                )
+                eval_callback = CompareUnrolledCallback(H_classic=H_mimo, task=task)
 
                 logger = WandbLogger(
                     project=cfg.training.get("wandb_project", "unrolled"),
@@ -684,15 +620,14 @@ def main(cfg: DictConfig) -> None:
                 trainer.test(lightning, dm, ckpt_path="best")
                 wandb.finish()
 
-                test_probe = lightning._test_probe_curves
-                test_neural = lightning._test_neural_curves
+                curves = lightning._test_curves
 
                 out.parent.mkdir(parents=True, exist_ok=True)
                 pl.DataFrame(
                     [
                         {
                             "seed": cfg.training.seed,
-                            "dataset": cfg.datasets.hf_name,
+                            "dataset": ctx["dataset"],
                             "strategy": strategy_name,
                             "M_int": f"{M_int}x{M_int}",
                             "L": L,
@@ -702,11 +637,11 @@ def main(cfg: DictConfig) -> None:
                             "constructive": constructive,
                             "variant": f"Unrolled ({coup})",
                             "K": K,
-                            "probe_acc": test_probe,
-                            "neural_acc": test_neural,
+                            **_metric_curves(task, curves),
                             "channel_type": ch_type,
                             "rice_factor_db": kdb,
                             "h0_var": h0v,
+                            **task.cascade_meta(),
                         }
                     ]
                 ).write_parquet(out)
@@ -745,7 +680,7 @@ def main(cfg: DictConfig) -> None:
             print(f"\n{'=' * 60}\n DisjointSym coupling='{coup}'\n{'=' * 60}")
 
             for K in K_list:
-                out = _out_path(cfg, coup, K)
+                out = _out_path(cfg, ctx, task, coup, K)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
                     continue
@@ -793,23 +728,10 @@ def main(cfg: DictConfig) -> None:
                     weight_ratio=cfg.training.get("weight_ratio", 1.0),
                     learn_S=cfg.training.get("learn_S", False),
                     reg_S=cfg.training.get("reg_S", 0.01),
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
+                    task=task,
                 )
 
-                eval_callback = CompareUnrolledCallback(
-                    H_classic=H_mimo,
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
-                )
+                eval_callback = CompareUnrolledCallback(H_classic=H_mimo, task=task)
 
                 logger = WandbLogger(
                     project=cfg.training.get("wandb_project", "unrolled"),
@@ -834,15 +756,14 @@ def main(cfg: DictConfig) -> None:
                 trainer.test(lightning, dm, ckpt_path="best")
                 wandb.finish()
 
-                test_probe = lightning._test_probe_curves
-                test_neural = lightning._test_neural_curves
+                curves = lightning._test_curves
 
                 out.parent.mkdir(parents=True, exist_ok=True)
                 pl.DataFrame(
                     [
                         {
                             "seed": cfg.training.seed,
-                            "dataset": cfg.datasets.hf_name,
+                            "dataset": ctx["dataset"],
                             "strategy": strategy_name,
                             "M_int": f"{M_int}x{M_int}",
                             "L": L,
@@ -852,11 +773,11 @@ def main(cfg: DictConfig) -> None:
                             "constructive": constructive,
                             "variant": f"Unrolled ({coup})",
                             "K": K,
-                            "probe_acc": test_probe,
-                            "neural_acc": test_neural,
+                            **_metric_curves(task, curves),
                             "channel_type": ch_type,
                             "rice_factor_db": kdb,
                             "h0_var": h0v,
+                            **task.cascade_meta(),
                         }
                     ]
                 ).write_parquet(out)
@@ -886,7 +807,7 @@ def main(cfg: DictConfig) -> None:
             print(f"\n{'=' * 60}\n DisjointAsym coupling='{coup}'\n{'=' * 60}")
 
             for K in K_list:
-                out = _out_path(cfg, coup, K)
+                out = _out_path(cfg, ctx, task, coup, K)
                 if out.exists():
                     print(f" Already done: {out.name} — skipping.")
                     continue
@@ -933,23 +854,10 @@ def main(cfg: DictConfig) -> None:
                     weight_ratio=cfg.training.get("weight_ratio", 1.0),
                     learn_S=cfg.training.get("learn_S", False),
                     reg_S=cfg.training.get("reg_S", 0.01),
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
+                    task=task,
                 )
 
-                eval_callback = CompareUnrolledCallback(
-                    H_classic=H_mimo,
-                    Z_test=ctx["Z_test"],
-                    labels=ctx["labels"],
-                    W_probe=ctx["clf"],
-                    clf_neural=ctx["clf_neural"],
-                    L_out=ctx["L_out"],
-                    mu_out=ctx["mu_out"],
-                )
+                eval_callback = CompareUnrolledCallback(H_classic=H_mimo, task=task)
 
                 logger = WandbLogger(
                     project=cfg.training.get("wandb_project", "unrolled"),
@@ -974,15 +882,14 @@ def main(cfg: DictConfig) -> None:
                 trainer.test(lightning, dm, ckpt_path="best")
                 wandb.finish()
 
-                test_probe = lightning._test_probe_curves
-                test_neural = lightning._test_neural_curves
+                curves = lightning._test_curves
 
                 out.parent.mkdir(parents=True, exist_ok=True)
                 pl.DataFrame(
                     [
                         {
                             "seed": cfg.training.seed,
-                            "dataset": cfg.datasets.hf_name,
+                            "dataset": ctx["dataset"],
                             "strategy": strategy_name,
                             "M_int": f"{M_int}x{M_int}",
                             "L": L,
@@ -992,11 +899,11 @@ def main(cfg: DictConfig) -> None:
                             "constructive": constructive,
                             "variant": f"Unrolled ({coup})",
                             "K": K,
-                            "probe_acc": test_probe,
-                            "neural_acc": test_neural,
+                            **_metric_curves(task, curves),
                             "channel_type": ch_type,
                             "rice_factor_db": kdb,
                             "h0_var": h0v,
+                            **task.cascade_meta(),
                         }
                     ]
                 ).write_parquet(out)
@@ -1009,7 +916,3 @@ def main(cfg: DictConfig) -> None:
 
     torch.cuda.empty_cache()
     print(" Done.")
-
-
-if __name__ == "__main__":
-    main()

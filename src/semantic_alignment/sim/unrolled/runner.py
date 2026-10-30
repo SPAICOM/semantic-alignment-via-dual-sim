@@ -1,12 +1,18 @@
 """Comparison experiment — classic vs unrolled SCA, LightningModule version.
 
 Provides ``UnrolledLightning`` that trains an unrolled SCA model on
-batches of random MIMO channel matrices and compares its per-layer accuracy
-against a static classic (Adam-on-phases) baseline computed on a single
-seed-generated channel matrix.
+batches of random MIMO channel matrices and compares its per-layer task
+metrics against a static classic (Adam-on-phases) baseline computed on a
+single seed-generated channel matrix.
+
+Training only sees the alignment NMSE; the downstream metrics (accuracy for
+classification, PSNR for reconstruction, …) come from a
+:class:`~semantic_alignment.evaluation.tasks.Task`, which scores whole batches
+of cascades through ``evaluate_cascades`` — so this module is task-agnostic.
 """
 
 from collections.abc import Callable, Iterable
+from typing import TYPE_CHECKING
 
 import lightning as lg
 import matplotlib
@@ -14,12 +20,12 @@ import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
 
-from semantic_alignment.evaluation.linear_probe import clf_accuracy, linear_probe_accuracy
-from semantic_alignment.utils import unpack_complex
-
 from .._cascade import build_cascade_RX as _build_cascade_RX
 from .._cascade import build_cascade_TX as _build_cascade_TX
 from ..original.optimizers.monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
+
+if TYPE_CHECKING:
+    from semantic_alignment.evaluation.tasks import Task
 
 matplotlib.use("Agg")
 
@@ -67,84 +73,21 @@ def _compute_beta(Z: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
     return ip / (torch.sum(torch.conj(Z) * Z).real + 1e-12)
 
 
-def _eval_accuracies(
-    Z_eff: torch.Tensor,
-    beta: torch.Tensor,
-    Z_test: torch.Tensor,
-    labels: torch.Tensor,
-    W_probe: torch.Tensor,
-    clf_neural: nn.Module | None,
-    L_out: torch.Tensor,
-    mu_out: torch.Tensor,
-    device: torch.device,
-) -> tuple[float, float | None]:
-    """Evaluate probe and neural classifier accuracies through the optimized cascade.
-
-    Parameters
-    ----------
-    Z_eff : Tensor
-        End-to-end cascade matrix.
-    beta : Tensor
-        MMSE scaling factor.
-    Z_test : Tensor
-        Test input matrix, shape (n_dim, N).
-    labels : Tensor
-        Test labels, shape (N,).
-    W_probe : Tensor
-        Linear probe weight matrix.
-    clf_neural : nn.Module or None
-        Neural classifier (optional).
-    L_out : Tensor
-        Output whitening lower-triangular factor.
-    mu_out : Tensor
-        Output whitening mean.
-    device : torch.device
-        Target device.
-
-    Returns
-    -------
-    tuple[float, float or None]
-        ``(probe_acc, neural_acc)`` — accuracies in [0, 1].
-    """
-    dev = Z_eff.device
-    cdtype = Z_eff.dtype
-    Z_test = Z_test.to(device=dev, dtype=cdtype)
-    labels = labels.to(dev)
-    W_probe = W_probe.to(device=dev, dtype=torch.float32)
-    L_out = L_out.to(device=dev, dtype=cdtype)
-    mu_out = mu_out.to(device=dev, dtype=cdtype)
-    if clf_neural is not None:
-        clf_neural = clf_neural.to(dev)
-    z_aligned = beta * (Z_eff @ Z_test)
-    z_aligned = (L_out @ z_aligned) + mu_out
-    z_aligned = unpack_complex(z_aligned, device).T
-    probe_acc = linear_probe_accuracy(W_probe, z_aligned.float(), labels)
-    neural_acc = None
-    if clf_neural is not None:
-        neural_acc = clf_accuracy(clf_neural, z_aligned.float(), labels)
-    return probe_acc, neural_acc
-
-
-def _make_eval_fn(
-    Z_test: torch.Tensor,
-    labels: torch.Tensor,
-    W_probe: torch.Tensor,
-    clf_neural: nn.Module | None,
-    L_out: torch.Tensor,
-    mu_out: torch.Tensor,
-    device: torch.device,
-    store: dict[str, list],
-) -> Callable:
-    """Return a callable ``fn(Z_eff, beta)`` that appends accuracies to *store*."""
+def _make_eval_fn(task: "Task", store: dict[str, list]) -> Callable:
+    """Return a callable ``fn(Z_eff, beta)`` that appends ``task``'s metrics to *store*."""
 
     def fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
-        pa, na = _eval_accuracies(
-            Z_eff, beta, Z_test, labels, W_probe, clf_neural, L_out, mu_out, device
-        )
-        store["probe"].append(pa)
-        store["neural"].append(na)
+        for key, val in task.evaluate_cascade(Z_eff, beta).items():
+            store.setdefault(key, []).append(val)
 
     return fn
+
+
+def _batch_beta(Z_eff: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+    """Per-cascade MMSE scalar ``β_b = ⟨Z_b, A⟩ / ‖Z_b‖²`` for a batch ``(B, m, n)``."""
+    ip = (Z_eff.conj() * A).sum((-2, -1))
+    s = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
+    return ip / (s + 1e-12)
 
 
 def _build_mono_sims(
@@ -713,8 +656,8 @@ class UnrolledLightning(lg.LightningModule):
         Whether to learn S values (TX/RX).
     reg_S : float
         Regularisation coefficient for S values.
-    Z_test, labels, W_probe, clf_neural, L_out, mu_out : eval artifacts
-        Passed to enable batched accuracy computation in test_step.
+    task : Task
+        Downstream task scoring the per-step cascades in ``test_step``.
     """
 
     def __init__(
@@ -737,12 +680,7 @@ class UnrolledLightning(lg.LightningModule):
         warmup_new_layers: int = 0,
         tx_target: torch.Tensor | None = None,
         rx_target: torch.Tensor | None = None,
-        Z_test: torch.Tensor | None = None,
-        labels: torch.Tensor | None = None,
-        W_probe: torch.Tensor | None = None,
-        clf_neural: nn.Module | None = None,
-        L_out: torch.Tensor | None = None,
-        mu_out: torch.Tensor | None = None,
+        task: "Task | None" = None,
     ):
         """Initialize the Lightning training module.
 
@@ -776,12 +714,8 @@ class UnrolledLightning(lg.LightningModule):
             Regularization coefficient for S.
         tx_target, rx_target : Tensor or None
             Alignment targets for disjoint modes.
-        Z_test, labels, W_probe : Tensor or None
-            Test data for evaluation callbacks.
-        clf_neural : nn.Module or None
-            Neural classifier for evaluation.
-        L_out, mu_out : Tensor or None
-            Output whitening parameters.
+        task : Task or None
+            Downstream task scoring the per-step cascades at test time.
         """
         super().__init__()
         self.save_hyperparameters(
@@ -790,12 +724,7 @@ class UnrolledLightning(lg.LightningModule):
                 "A_target",
                 "tx_target",
                 "rx_target",
-                "Z_test",
-                "labels",
-                "W_probe",
-                "clf_neural",
-                "L_out",
-                "mu_out",
+                "task",
             ]
         )
 
@@ -820,12 +749,7 @@ class UnrolledLightning(lg.LightningModule):
         self.tx_target = tx_target
         self.rx_target = rx_target
 
-        self.Z_test = Z_test
-        self.labels = labels
-        self.W_probe = W_probe
-        self.clf_neural = clf_neural
-        self.L_out = L_out
-        self.mu_out = mu_out
+        self.task = task
 
     # ---- optimiser ----
 
@@ -999,12 +923,18 @@ class UnrolledLightning(lg.LightningModule):
     # ---- test ----
 
     def on_test_start(self) -> None:
-        """Initialize per-step accuracy accumulators for test evaluation."""
-        self._test_probe_curve = [[] for _ in range(self.K)]
-        self._test_neural_curve = [[] for _ in range(self.K)]
+        """Initialize per-step metric accumulators for test evaluation."""
+        self._test_curve = {key: [[] for _ in range(self.K)] for key in self.task.cascade_columns}
+
+    def _record_step(self, k: int, Z_eff: torch.Tensor) -> None:
+        """Score the batch of step-``k`` cascades and append to the test accumulators."""
+        beta = _batch_beta(Z_eff, self.A_target)
+        for key, vals in self.task.evaluate_cascades(Z_eff, beta).items():
+            if vals is not None:
+                self._test_curve[key][k].extend(vals)
 
     def test_step(self, batch: tuple, batch_idx: int) -> None:
-        """Run one test step with per-step accuracy recording.
+        """Run one test step, recording the task metrics after every unrolled step.
 
         Uses ``torch.inference_mode(False)`` to allow autograd tracking
         for the step callback. Dispatches to mode-specific helpers for
@@ -1020,30 +950,7 @@ class UnrolledLightning(lg.LightningModule):
             else:
                 left_mat = H_batch if self.constructive else None
                 Z_eff = self.unrolled_model._cascade(phases, left_mat)
-
-            ip = (Z_eff.conj() * self.A_target).sum((-2, -1))
-            s = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
-            beta = ip / (s + 1e-12)
-
-            z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
-            z_a = self.L_out @ z_aw + self.mu_out
-            z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
-
-            W = self.W_probe.to(z_real.device)
-            labels = self.labels.to(z_real.device)
-            preds = (z_real @ W).argmax(dim=-1)
-            self._test_probe_curve[k].extend(
-                (preds == labels[None, :]).float().mean(dim=-1).tolist()
-            )
-
-            if self.clf_neural is not None:
-                dev = next(self.clf_neural.parameters()).device
-                N_test = z_real.shape[1]
-                z_flat = z_real.reshape(B * N_test, -1).to(dev)
-                preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
-                self._test_neural_curve[k].extend(
-                    (preds_n == labels[None, :].to(dev)).float().mean(dim=-1).tolist()
-                )
+            self._record_step(k, Z_eff)
 
         if self.mode == "joint":
             self.unrolled_model.forward(
@@ -1068,7 +975,7 @@ class UnrolledLightning(lg.LightningModule):
             self._test_step_disjoint_asym(batch)
 
     def _test_step_disjoint_sym(self, batch: tuple) -> None:
-        """Test step for symmetric disjoint mode — evaluates per-step accuracy via SVD components.
+        """Test step for symmetric disjoint mode — per-step metrics via SVD components.
 
         Parameters
         ----------
@@ -1076,7 +983,6 @@ class UnrolledLightning(lg.LightningModule):
             ``(H_batch, U_batch, s_batch, Vh_batch)`` — batched SVD of H.
         """
         H_batch, U_batch, s_batch, Vh_batch = [b.clone() for b in batch]
-        B = H_batch.shape[0]
         sim_tx = self.unrolled_model.sim_tx
         sim_rx = self.unrolled_model.sim_rx
 
@@ -1084,27 +990,7 @@ class UnrolledLightning(lg.LightningModule):
             with torch.no_grad():
                 G_T = sim_tx._cascade(tx_phases)
                 G_R = sim_rx._cascade(rx_phases)
-                Z_eff = G_R @ H_batch @ G_T
-                ip = (Z_eff.conj() * self.A_target).sum((-2, -1))
-                s_z = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
-                beta = ip / (s_z + 1e-12)
-                z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
-                z_a = self.L_out @ z_aw + self.mu_out
-                z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
-                W = self.W_probe.to(z_real.device)
-                labels = self.labels.to(z_real.device)
-                preds = (z_real @ W).argmax(dim=-1)
-                self._test_probe_curve[k].extend(
-                    (preds == labels[None, :]).float().mean(dim=-1).tolist()
-                )
-                if self.clf_neural is not None:
-                    dev = next(self.clf_neural.parameters()).device
-                    N_test = z_real.shape[1]
-                    z_flat = z_real.reshape(B * N_test, -1).to(dev)
-                    preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
-                    self._test_neural_curve[k].extend(
-                        (preds_n == labels[None, :].to(dev)).float().mean(dim=-1).tolist()
-                    )
+                self._record_step(k, G_R @ H_batch @ G_T)
 
         self.unrolled_model.forward(
             U_batch,
@@ -1118,7 +1004,7 @@ class UnrolledLightning(lg.LightningModule):
         )
 
     def _test_step_disjoint_asym(self, batch: tuple) -> None:
-        """Test step for asymmetric disjoint mode — evaluates per-step accuracy via raw H.
+        """Test step for asymmetric disjoint mode — per-step metrics via raw H.
 
         Parameters
         ----------
@@ -1126,7 +1012,6 @@ class UnrolledLightning(lg.LightningModule):
             ``(H_batch,)`` — batch of channel matrices.
         """
         H_batch = batch[0].clone()
-        B = H_batch.shape[0]
         sim_tx = self.unrolled_model.sim_tx
         sim_rx = self.unrolled_model.sim_rx
 
@@ -1134,27 +1019,7 @@ class UnrolledLightning(lg.LightningModule):
             with torch.no_grad():
                 G_T = sim_tx._cascade(tx_phases)
                 G_R = sim_rx._cascade(rx_phases)
-                Z_eff = G_R @ H_batch @ G_T
-                ip = (Z_eff.conj() * self.A_target).sum((-2, -1))
-                s_z = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
-                beta = ip / (s_z + 1e-12)
-                z_aw = beta[:, None, None] * (Z_eff @ self.Z_test)
-                z_a = self.L_out @ z_aw + self.mu_out
-                z_real = unpack_complex(z_a, self.device).transpose(-1, -2).float()
-                W = self.W_probe.to(z_real.device)
-                labels = self.labels.to(z_real.device)
-                preds = (z_real @ W).argmax(dim=-1)
-                self._test_probe_curve[k].extend(
-                    (preds == labels[None, :]).float().mean(dim=-1).tolist()
-                )
-                if self.clf_neural is not None:
-                    dev = next(self.clf_neural.parameters()).device
-                    N_test = z_real.shape[1]
-                    z_flat = z_real.reshape(B * N_test, -1).to(dev)
-                    preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
-                    self._test_neural_curve[k].extend(
-                        (preds_n == labels[None, :].to(dev)).float().mean(dim=-1).tolist()
-                    )
+                self._record_step(k, G_R @ H_batch @ G_T)
 
         self.unrolled_model.forward(
             H_batch,
@@ -1171,81 +1036,38 @@ class UnrolledLightning(lg.LightningModule):
 
 
 class CompareUnrolledCallback(lg.Callback):
-    """Per-epoch evaluation on a fixed H and logging to wandb.
+    """Per-epoch evaluation of the task metrics and logging to wandb.
 
     Parameters
     ----------
     H_classic : Tensor
-        Single seed channel matrix used for the classic baseline and per-epoch eval.
-    Z_test : Tensor
-        Precomputed test input matrix.
-    labels : Tensor
-        Test labels.
-    W_probe : Tensor or None
-        Linear probe weight matrix.
-    clf_neural : nn.Module or None
-        Neural classifier (optional).
-    L_out : Tensor or None
-        Output whitening lower-triangular factor.
-    mu_out : Tensor or None
-        Output whitening mean.
-    classic_probe_curve : list or Tensor or None
-        Pre-computed classic baseline probe accuracy (len K+1).
-    classic_neural_curve : list or Tensor or None
-        Pre-computed classic baseline neural accuracy (len K+1 or None).
+        Single seed channel matrix used for the per-epoch eval of non-joint modes.
+    task : Task
+        Downstream task scoring the cascades; metric ``key`` is logged as
+        ``val/unrolled_final_{key}`` and ``test/unrolled_final_{key}``.
     """
 
-    def __init__(
-        self,
-        H_classic: torch.Tensor,
-        Z_test: torch.Tensor,
-        labels: torch.Tensor,
-        W_probe: torch.Tensor | None = None,
-        clf_neural: nn.Module | None = None,
-        L_out: torch.Tensor | None = None,
-        mu_out: torch.Tensor | None = None,
-        classic_probe_curve: list | None = None,
-        classic_neural_curve: list | None = None,
-    ):
+    def __init__(self, H_classic: torch.Tensor, task: "Task"):
         """Initialize the comparison callback.
 
         Parameters
         ----------
         H_classic : Tensor
-            Single seed channel matrix for classic baseline and per-epoch eval.
-        Z_test : Tensor
-            Precomputed test input matrix.
-        labels : Tensor
-            Test labels.
-        W_probe : Tensor or None
-            Linear probe weight matrix.
-        clf_neural : nn.Module or None
-            Neural classifier (optional).
-        L_out, mu_out : Tensor or None
-            Output whitening parameters.
-        classic_probe_curve : list or Tensor or None
-            Pre-computed classic baseline probe accuracy (len K+1).
-        classic_neural_curve : list or Tensor or None
-            Pre-computed classic baseline neural accuracy (len K+1 or None).
+            Single seed channel matrix for the per-epoch eval of non-joint modes.
+        task : Task
+            Downstream task scoring the cascades.
         """
         super().__init__()
         self.H_classic = H_classic
-        self.Z_test = Z_test
-        self.labels = labels
-        self.W_probe = W_probe
-        self.clf_neural = clf_neural
-        self.L_out = L_out
-        self.mu_out = mu_out
-        self.classic_probe_curve = classic_probe_curve
-        self.classic_neural_curve = classic_neural_curve
+        self.task = task
 
     # ---- eval curve ----
 
     def on_validation_epoch_end(self, trainer: lg.Trainer, pl_module: lg.LightningModule) -> None:
-        """Evaluate final-step accuracy and log to wandb.
+        """Evaluate the final-step task metrics and log to wandb.
 
-        Joint mode: iterates over the val dataloader and averages per-channel
-        accuracy at step K (same logic as test_step).
+        Joint mode: iterates over the val dataloader and averages the per-channel
+        metrics at step K (same logic as test_step).
         Other modes: evaluates on H_classic as a single-channel proxy.
         """
         if trainer.sanity_checking:
@@ -1260,41 +1082,22 @@ class CompareUnrolledCallback(lg.Callback):
             if val_dl is None:
                 return
 
-            probe_finals: list[float] = []
-            neural_finals: list[float] = []
+            finals: dict[str, list[float]] = {key: [] for key in self.task.cascade_columns}
             n_T = len(pl_module.unrolled_model.sizes_T)
             K_last = pl_module.K - 1
 
             for batch in val_dl:
                 H_batch = batch[0].to(device)
                 B = H_batch.shape[0]
-                _probe_buf: list[float] = []
-                _neural_buf: list[float] = []
 
-                def _step_cb(
-                    k: int, phases: list[torch.Tensor], _buf_p=_probe_buf, _buf_n=_neural_buf
-                ) -> None:
+                def _step_cb(k: int, phases: list[torch.Tensor], _H=H_batch) -> None:
                     if k != K_last:
                         return
-                    Z_eff = pl_module.unrolled_model._cascade(H_batch, phases[:n_T], phases[n_T:])
-                    ip = (Z_eff.conj() * pl_module.A_target).sum((-2, -1))
-                    s = (Z_eff.conj() * Z_eff).sum((-2, -1)).real
-                    beta = ip / (s + 1e-12)
-                    z_aw = beta[:, None, None] * (Z_eff @ self.Z_test.to(device))
-                    z_a = self.L_out.to(device) @ z_aw + self.mu_out.to(device)
-                    z_real = unpack_complex(z_a, device).transpose(-1, -2).float()
-                    W = self.W_probe.to(device)
-                    lbls = self.labels.to(device)
-                    preds = (z_real @ W).argmax(dim=-1)
-                    _buf_p.extend((preds == lbls[None, :]).float().mean(dim=-1).tolist())
-                    if self.clf_neural is not None:
-                        dev = next(self.clf_neural.parameters()).device
-                        N_test = z_real.shape[1]
-                        z_flat = z_real.reshape(B * N_test, -1).to(dev)
-                        preds_n = self.clf_neural(z_flat).argmax(dim=-1).reshape(B, N_test)
-                        _buf_n.extend(
-                            (preds_n == lbls[None, :].to(dev)).float().mean(dim=-1).tolist()
-                        )
+                    Z_eff = pl_module.unrolled_model._cascade(_H, phases[:n_T], phases[n_T:])
+                    beta = _batch_beta(Z_eff, pl_module.A_target)
+                    for key, vals in self.task.evaluate_cascades(Z_eff, beta).items():
+                        if vals is not None:
+                            finals[key].extend(vals)
 
                 with torch.no_grad():
                     pl_module.unrolled_model.forward(
@@ -1304,29 +1107,17 @@ class CompareUnrolledCallback(lg.Callback):
                         step_callback=_step_cb,
                         k_max=pl_module.K,
                     )
-                probe_finals.extend(_probe_buf)
-                neural_finals.extend(_neural_buf)
 
-            if probe_finals:
-                pl_module.log(
-                    "val/unrolled_final_probe", sum(probe_finals) / len(probe_finals), prog_bar=True
-                )
-            if neural_finals:
-                pl_module.log("val/unrolled_final_neural", sum(neural_finals) / len(neural_finals))
+            for i, (key, vals) in enumerate(finals.items()):
+                if vals:
+                    pl_module.log(
+                        f"val/unrolled_final_{key}", sum(vals) / len(vals), prog_bar=i == 0
+                    )
 
         else:
             # Non-joint modes: single H_classic proxy (fast, avoids iterating the full val set)
-            store: dict[str, list] = {"probe": [], "neural": []}
-            eval_fn = _make_eval_fn(
-                self.Z_test,
-                self.labels,
-                self.W_probe,
-                self.clf_neural,
-                self.L_out,
-                self.mu_out,
-                device,
-                store,
-            )
+            store: dict[str, list] = {}
+            eval_fn = _make_eval_fn(self.task, store)
             if pl_module.mode == "mono":
                 _unrolled_eval_curve_mono(
                     pl_module.unrolled_model,
@@ -1357,15 +1148,9 @@ class CompareUnrolledCallback(lg.Callback):
                     device,
                     k_max=pl_module.K,
                 )
-            probe_arr = torch.tensor(store["probe"], dtype=torch.float32, device=device)
-            neural_arr = (
-                torch.tensor(store["neural"], dtype=torch.float32, device=device)
-                if store["neural"][0] is not None
-                else None
-            )
-            pl_module.log("val/unrolled_final_probe", probe_arr[-1].item(), prog_bar=True)
-            if neural_arr is not None:
-                pl_module.log("val/unrolled_final_neural", neural_arr[-1].item())
+            for i, (key, vals) in enumerate(store.items()):
+                if vals and vals[-1] is not None:
+                    pl_module.log(f"val/unrolled_final_{key}", float(vals[-1]), prog_bar=i == 0)
 
         # Log learnable S values
         unrolled = pl_module.unrolled_model
@@ -1377,27 +1162,24 @@ class CompareUnrolledCallback(lg.Callback):
                 pl_module.log("val/s_mean", unrolled.s.mean().item())
 
     def on_test_epoch_end(self, trainer: lg.Trainer, pl_module: lg.LightningModule) -> None:
-        """Aggregate per-channel test curves and log final metrics.
+        """Aggregate per-channel test curves and log the mean final metrics.
 
-        Transposes the per-step accuracy accumulators from (K, n_channels)
-        to (n_channels, K) and logs mean final probe and neural accuracies.
+        Transposes each per-step accumulator from (K, n_channels) to
+        (n_channels, K) into ``pl_module._test_curves[key]`` (``None`` for a
+        metric the task could not compute, e.g. no neural classifier).
         """
-        # transpose (K, n_channels) → (n_channels, K)
-        probe_curves = list(map(list, zip(*pl_module._test_probe_curve)))
-        pl_module._test_probe_curves = probe_curves
-
-        mean_probe = sum(c[-1] for c in probe_curves) / len(probe_curves)
-        pl_module.log("test/unrolled_final_probe", mean_probe)
-        logs = {"test/unrolled_final_probe": mean_probe}
-
-        if pl_module._test_neural_curve and pl_module._test_neural_curve[0]:
-            neural_curves = list(map(list, zip(*pl_module._test_neural_curve)))
-            pl_module._test_neural_curves = neural_curves
-            mean_neural = sum(c[-1] for c in neural_curves) / len(neural_curves)
-            pl_module.log("test/unrolled_final_neural", mean_neural)
-            logs["test/unrolled_final_neural"] = mean_neural
-        else:
-            pl_module._test_neural_curves = None
+        curves: dict[str, list | None] = {}
+        logs = {}
+        for key, per_step in pl_module._test_curve.items():
+            if not per_step or not per_step[0]:
+                curves[key] = None
+                continue
+            # transpose (K, n_channels) → (n_channels, K)
+            curves[key] = list(map(list, zip(*per_step)))
+            mean = sum(c[-1] for c in curves[key]) / len(curves[key])
+            pl_module.log(f"test/unrolled_final_{key}", mean)
+            logs[f"test/unrolled_final_{key}"] = mean
+        pl_module._test_curves = curves
 
         if trainer.logger is not None:
             trainer.logger.experiment.log(logs)

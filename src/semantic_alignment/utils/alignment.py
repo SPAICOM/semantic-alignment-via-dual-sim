@@ -13,7 +13,7 @@ def ppfe(
     Y: torch.Tensor,
     output_real: torch.Tensor,
     n_clusters: int,
-    n_proto: int,
+    n_proto: int | None,
     seed: int | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Prototype-based Parseval Frame Equalization (zero-shot alignment).
@@ -32,12 +32,14 @@ def ppfe(
     Y : torch.Tensor
         Whitened RX embedding matrix, shape ``(D_rx, N)``, complex64.
     output_real : torch.Tensor
-        Real-valued RX embeddings used for KMeans clustering,
-        shape ``(N, D_rx)``, float32.
+        Real-valued embeddings used for KMeans clustering, shape ``(N, D)``,
+        float32, rows aligned with the columns of ``X``/``Y`` — the RX pilots,
+        or the TX training embeddings for TX-side clustering.
     n_clusters : int
         Number of prototypes / cluster centres.
-    n_proto : int
-        Number of samples per cluster used to compute each prototype mean.
+    n_proto : int or None
+        Maximum number of samples per cluster averaged into each prototype
+        (``None``: the whole cluster).
     seed : int or None, optional
         Random seed for KMeans and prototype subsampling.
 

@@ -1,0 +1,4 @@
+defaults:
+  - datasets/reconstruction: cifar10
+  - reconstruction: default
+  - _self_

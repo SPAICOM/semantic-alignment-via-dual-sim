@@ -228,11 +228,12 @@ data/*
 results/**/*.parquet
 results/**/*.csv
 results/**/*.json
-results/plots/
+results/**/plots/
+results/**/*.png
 !results/.gitkeep
 
-# Model checkpoints
-models/
+# Model checkpoints (root only — src/semantic_alignment/models/ is source code)
+/models/
 
 # Others
 img/

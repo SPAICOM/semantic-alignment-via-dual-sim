@@ -67,7 +67,7 @@ joint: cls-joint-layers cls-joint-snr
 
 # ── Disjoint asym ─────────────────────────────────────────────────────────────
 # Tipology: alignment_side ∈ {tx, rx} × constructive ∈ {false, true}
-# Results go to results/disjoint_asym_*/equalized|constructive/tx|rx/
+# Results go to results/classification/disjoint_asym_*/equalized|constructive/tx|rx/
 
 # Disjoint asym (tx, equalized): sweep over SIM layers
 cls-disjoint-asym-layers *ARGS: train-clf
@@ -108,7 +108,7 @@ disjoint-asym-all: disjoint-asym disjoint-asym-c disjoint-asym-rx-c
 
 # ── Disjoint sym ──────────────────────────────────────────────────────────────
 # Tipology: constructive ∈ {false, true}
-# Results go to results/disjoint_sym_*/equalized|constructive/
+# Results go to results/classification/disjoint_sym_*/equalized|constructive/
 
 # Disjoint sym (equalized): sweep over SIM layers
 cls-disjoint-sym-layers *ARGS: train-clf
@@ -147,7 +147,7 @@ disjoint-sym-all: disjoint-sym disjoint-sym-c
 
 # ── Disjoint 4-SIM ────────────────────────────────────────────────────────────
 # Tipology: constructive ∈ {false, true}
-# Results go to results/disjoint_4sim_*/equalized|constructive/
+# Results go to results/classification/disjoint_4sim_*/equalized|constructive/
 
 # Disjoint 4-SIM (equalized): sweep over SIM layers
 cls-disjoint-4sim-layers *ARGS: train-clf
@@ -201,7 +201,7 @@ cls-all-snr: cls-joint-snr \
 # ── Mono-SIM ─────────────────────────────────────────────────────────────────
 # TX side: equalized (G_T≈A + ZF/MMSE at RX) and constructive (H·G_T≈A, no G_eq)
 # RX side: constructive only (G_R·H≈A, no equalized variant)
-# Results go to results/mono/{equalized|constructive}/{tx|rx}/
+# Results go to results/classification/mono/{equalized|constructive}/{tx|rx}/
 
 # Mono-SIM TX (equalized): sweep over SIM layers
 cls-mono-layers *ARGS: train-clf
@@ -285,6 +285,96 @@ n-proto-all: n-proto n-proto-c
 train-clf *ARGS:
     uv run python scripts/train_classifier.py datasets/classification={{dataset}} {{ARGS}}
 
+# ── Image reconstruction (rec-) ───────────────────────────────────────────────
+# Same SIM runners, sim/ and training/ configs and sweep structure as cls-; only
+# the downstream task differs: the RX decodes the aligned embedding with a
+# locally trained ConvVAE and is scored by PSNR. One job per strategy
+# (alignment/reconstruction=linear|ppfe, both swept by the -layers recipes).
+# Dataset resolves to config/datasets/reconstruction/<name>.yaml
+#   (cifar10, cifar100, mnist, fashion_mnist):
+#   just dataset=mnist rec-joint-layers
+# Autoencoder pair (any trained variant under models/autoencoders/<dataset>/):
+#   just rec-joint-layers reconstruction.tx_variant=base_mmd1 reconstruction.rx_variant=small_mmd1
+# rec- recipes do NOT depend on train-ae: training is long (up to 200 epochs)
+# and the pair is selectable — run `just train-ae` explicitly first.
+# Results go to results/reconstruction/<subdir>/<tipology>/ (Parquet + PNG grid).
+
+# Train ConvVAE autoencoders (base + small variants) for reconstruction alignment
+train-ae *ARGS:
+    uv run python scripts/train_autoencoder.py datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Extract paired TX/RX latents from two trained autoencoders → data/latents_reconstruction/
+extract-latents *ARGS:
+    uv run python scripts/extract_latents.py datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Linear alignment between two autoencoders, no SIM/channel (logged to W&B)
+align-ae *ARGS:
+    uv run python scripts/align_reconstruction.py datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Fast no-channel sweep of alignment hyperparameters (lmb, n_clusters, n_proto, pilots)
+sweep-align *ARGS:
+    uv run python scripts/sweep_alignment.py datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Single reconstruction run (no multirun; joint Dual-SIM + PPFE by default)
+rec *ARGS:
+    uv run python scripts/reconstruction.py datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Joint Dual-SIM reconstruction: sweep over SIM layers
+rec-joint-layers *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_joint_layers datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Mono-SIM TX (equalized) reconstruction: sweep over SIM layers
+rec-mono-layers *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Mono-SIM TX (constructive) reconstruction: sweep over SIM layers
+rec-mono-layers-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} sim.constructive=true {{ARGS}}
+
+# Mono-SIM RX (constructive) reconstruction: sweep over SIM layers
+rec-mono-rx-layers-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} sim.constructive=true sim.alignment_side=rx {{ARGS}}
+
+# Disjoint sym (equalized) reconstruction: sweep over SIM layers
+rec-disjoint-sym-layers *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_layers datasets/reconstruction={{dataset}} {{ARGS}}
+
+# Disjoint sym (constructive) reconstruction: sweep over SIM layers
+rec-disjoint-sym-layers-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_layers datasets/reconstruction={{dataset}} sim.constructive=true {{ARGS}}
+
+# Mono-SIM TX (constructive) reconstruction, legacy MNIST figure setup
+# (L=25, M=64x64, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+rec-mono-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_constructive {{ARGS}}
+
+# Joint Dual-SIM reconstruction, legacy MNIST figure setup
+# (L=25, M=64x64, ch=128, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+rec-joint *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_joint {{ARGS}}
+
+# Disjoint sym (constructive) reconstruction, legacy MNIST figure setup
+# (L=25, M=64x64, ch=128, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+rec-disjoint-sym-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_constructive {{ARGS}}
+
+# Disjoint sym (constructive) reconstruction: sweep over channel_dim (20, 32, 64, 128),
+# legacy MNIST figure setup otherwise. Dataset is fixed by the config.
+rec-disjoint-sym-channel-dim-c *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_channel_dim {{ARGS}}
+
+# Mono-SIM TX (constructive) reconstruction grid search: lr × scheduler × L (Linear only).
+rec-mono-grid *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_grid {{ARGS}}
+
+# Disjoint sym (constructive) reconstruction grid search: shared TX/RX lr × scheduler × L (Linear only).
+rec-disjoint-sym-grid *ARGS:
+    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_grid {{ARGS}}
+
+# Aggregate: reconstruction layers sweep across all methods
+rec-all-layers: rec-joint-layers rec-mono-layers rec-mono-layers-c rec-mono-rx-layers-c \
+                rec-disjoint-sym-layers rec-disjoint-sym-layers-c
+
 # ── Single run (no multirun, useful for quick tests) ─────────────────────────
 
 # Single run (no multirun, for quick tests)
@@ -298,28 +388,45 @@ cls *ARGS: train-clf
 
 # Unrolled GD: classic Adam baseline — sweeps over warm_start_type: none,only_semantic,average
 cls-unrolled-baseline *ARGS: train-clf
-    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} {{ARGS}}
+    uv run python scripts/compute_unrolled_baseline_classification.py --config-name config_unrolled_baseline datasets/classification={{dataset}} {{ARGS}}
 
 # Unrolled GD: classic Adam baseline — only_semantic warm-start
 cls-unrolled-baseline-ws-sem *ARGS: train-clf
-    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=only_semantic {{ARGS}}
+    uv run python scripts/compute_unrolled_baseline_classification.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=only_semantic {{ARGS}}
 
 # Unrolled GD: classic Adam baseline — average warm-start
 cls-unrolled-baseline-ws-avg *ARGS: train-clf
-    uv run python scripts/compute_unrolled_baseline.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=average {{ARGS}}
+    uv run python scripts/compute_unrolled_baseline_classification.py --config-name config_unrolled_baseline datasets/classification={{dataset}} warmstart=average {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — PPFE only
 cls-unrolled-ppfe *ARGS: train-clf
-    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment=ppfe {{ARGS}}
+    uv run python scripts/unrolled_classification.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment/classification=ppfe {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — Linear only
 cls-unrolled-linear *ARGS: train-clf
-    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment=linear {{ARGS}}
+    uv run python scripts/unrolled_classification.py --config-name config_unrolled_joint datasets/classification={{dataset}} alignment/classification=linear {{ARGS}}
 
 # Unrolled GD: joint Dual-SIM — sweep h0_var × warm_start_type (PPFE, 8 multirun jobs)
 cls-unrolled-joint *ARGS: train-clf
-    uv run python scripts/unrolled.py --config-name config_unrolled_joint datasets/classification={{dataset}} {{ARGS}}
+    uv run python scripts/unrolled_classification.py --config-name config_unrolled_joint datasets/classification={{dataset}} {{ARGS}}
 
+
+# ── Unrolled GD for reconstruction (same pipeline, ReconstructionTask) ────────
+# Config: config/config_unrolled_reconstruction.yaml — scores each unrolled step by the RX
+# decoder's PSNR/MSE on the first reconstruction.unrolled_eval_images test images.
+# Results: results/reconstruction/unrolled/
+
+# Unrolled GD reconstruction: joint Dual-SIM — PPFE only
+rec-unrolled-ppfe *ARGS:
+    uv run python scripts/unrolled_reconstruction.py --config-name config_unrolled_reconstruction datasets/reconstruction={{dataset}} alignment/reconstruction=ppfe {{ARGS}}
+
+# Unrolled GD reconstruction: joint Dual-SIM — Linear only
+rec-unrolled-linear *ARGS:
+    uv run python scripts/unrolled_reconstruction.py --config-name config_unrolled_reconstruction datasets/reconstruction={{dataset}} alignment/reconstruction=linear {{ARGS}}
+
+# Unrolled GD reconstruction: joint Dual-SIM — sweep h0_var × warm_start_type (PPFE)
+rec-unrolled-joint *ARGS:
+    uv run python scripts/unrolled_reconstruction.py --config-name config_unrolled_reconstruction datasets/reconstruction={{dataset}} {{ARGS}}
 
 # Aggregate: all unrolled GD experiments
 unrolled: cls-unrolled-joint
@@ -378,5 +485,5 @@ cls-joint-lr-search *ARGS: train-clf
 
 # Generate publication-ready result plots
 plot:
-    uv run python scripts/plot_results.py
+    uv run python scripts/plot_results_classification.py
 

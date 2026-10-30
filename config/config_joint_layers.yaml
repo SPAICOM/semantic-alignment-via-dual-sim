@@ -1,6 +1,6 @@
 defaults:
   - sim: joint
-  - alignment: ppfe
+  - alignment/classification: ppfe
   - datasets/classification: cifar10
   - data: default
   - training: joint
@@ -12,6 +12,6 @@ hydra:
   sweeper:
     params:
       sim.M_int: 32
-      alignment: linear,ppfe
+      alignment/classification: linear,ppfe
       sim.L: 1,2,3,4,5,6,7,8,9,10,15,20,25
       training.seed: 27,42,100,123,144,200

@@ -1,16 +1,20 @@
 """Warm-start phase computation and disk cache.
 
 Provides _run_warm_start (pure computation) and _run_warm_start_cached
-(same, but loads/saves results to results/unrolled/joint/warmstart/).
+(same, but loads/saves results to {task results}/unrolled/joint/warmstart/ —
+results/classification/... by default). _ensure_ws_accuracy caches the
+downstream-task metrics of the warm start, scored by a Task.
 
-Cache key logic:
-  only_semantic  → keyed on architecture + ws_t only (H=I, no seed/h0_var)
-  average        → keyed on seed, h0_var, ch_type
-  <int>          → keyed on the int seed and ch_type
+Cache key logic (always: dataset + alignment strategy + architecture + encoders + ws_t,
+since the warm start fits A_target):
+  only_semantic  → nothing else (H=I, no seed/h0_var)
+  average        → + seed, h0_var, ch_type
+  <int>          → + the int seed and ch_type
 """
 
 import math
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
@@ -18,10 +22,14 @@ from tqdm import tqdm
 
 from semantic_alignment.sim._cascade import build_cascade_RX, build_cascade_TX
 from semantic_alignment.sim.core import _compute_beta
+from semantic_alignment.sim.original._utils import RESULTS_DIR
 from semantic_alignment.sim.original.joint import JointSIM
 from semantic_alignment.utils import channel as _channel_fn
 
-_WS_CACHE_ROOT = Path("results") / "unrolled" / "joint" / "warmstart"
+if TYPE_CHECKING:
+    from semantic_alignment.evaluation.tasks import Task
+
+_WS_CACHE_ROOT = RESULTS_DIR / "unrolled" / "joint" / "warmstart"
 
 
 def _run_warm_start(
@@ -127,9 +135,13 @@ def _ws_cache_path(
     seed: int,
     h0v: float | None,
     ch_type: str,
+    dataset: str,
+    strategy: str,
+    root: Path = _WS_CACHE_ROOT,
+    prefix: str = "",
 ) -> Path:
     enc_tag = f"{tx_enc.replace('/', '-')}_{rx_enc.replace('/', '-')}"
-    arch = f"L{L}_M{M_int}_{enc_tag}_t{ws_t}"
+    arch = f"{dataset}_{strategy}_L{L}_M{M_int}_{enc_tag}_t{ws_t}"
     match ws_type:
         case "only_semantic":
             name = f"ws_only_semantic_{arch}.pt"
@@ -142,7 +154,7 @@ def _ws_cache_path(
             name = f"ws_average_{arch}_seed{seed}_{ch_type}_{h0_tag}.pt"
         case _:
             name = f"ws_seed{ws_type}_{arch}_{ch_type}.pt"
-    return _WS_CACHE_ROOT / name
+    return root / f"{prefix}{name}"
 
 
 def _ensure_ws_accuracy(
@@ -150,7 +162,7 @@ def _ensure_ws_accuracy(
     ws_phT: list,
     ws_phR: list,
     A_target: torch.Tensor,
-    ctx: dict,
+    task: "Task",
     n_R: int,
     n_T: int,
     h0v: float | None,
@@ -163,15 +175,21 @@ def _ensure_ws_accuracy(
     tx_enc: str,
     rx_enc: str,
     device: torch.device,
+    dataset: str,
+    strategy: str,
     n_total: int = 10000,
     train_ratio: float = 0.7,
     val_ratio: float = 0.15,
     rice_factor_db: float | None = None,
     n_eval: int = 500,
+    cache_root: Path = _WS_CACHE_ROOT,
+    extra_key: dict | None = None,
 ) -> None:
-    """Evaluate warm-start accuracy on the test set and cache to ws_accuracy.parquet.
+    """Evaluate the warm start's task metrics on test channels; cache to ws_accuracy.parquet.
 
-    Called once per (ws_type, h0v, arch) config; skips if already present.
+    ``task`` scores each test channel's cascade (``Task.evaluate_cascade``); the
+    means of its ``warm_start_columns`` are stored. Called once per
+    (ws_type, h0v, dataset, strategy, arch, *extra_key*) config; skips if already present.
     Resets sim phases to zero after evaluation.
     """
     import numpy as np
@@ -179,10 +197,10 @@ def _ensure_ws_accuracy(
 
     from semantic_alignment.data import HChannelDataModule
     from semantic_alignment.sim.core import _compute_beta
-    from semantic_alignment.sim.unrolled.runner import _eval_accuracies
     from semantic_alignment.utils import standardize_channel
 
-    acc_path = _WS_CACHE_ROOT / "ws_accuracy.parquet"
+    acc_path = cache_root / "ws_accuracy.parquet"
+    extra_key = extra_key or {}
 
     _key = dict(
         warm_start_type=ws_type,
@@ -194,6 +212,9 @@ def _ensure_ws_accuracy(
         rx_enc=rx_enc,
         seed=seed,
         ws_t=ws_t,
+        dataset=dataset,
+        strategy=strategy,
+        **extra_key,
     )
 
     existing: pl.DataFrame | None = None
@@ -202,7 +223,7 @@ def _ensure_ws_accuracy(
         required_cols = set(_key.keys())
         if required_cols.issubset(set(existing.columns)):
             h0_expr = pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
-            already = existing.filter(
+            cond = (
                 (pl.col("warm_start_type") == ws_type)
                 & h0_expr
                 & (pl.col("ch_type") == ch_type)
@@ -210,7 +231,12 @@ def _ensure_ws_accuracy(
                 & (pl.col("M_int") == M_int)
                 & (pl.col("seed") == seed)
                 & (pl.col("ws_t") == ws_t)
+                & (pl.col("dataset") == dataset)
+                & (pl.col("strategy") == strategy)
             )
+            for col, val in extra_key.items():
+                cond = cond & (pl.col(col) == val)
+            already = existing.filter(cond)
             if not already.is_empty():
                 return
 
@@ -236,24 +262,15 @@ def _ensure_ws_accuracy(
         for j, p in enumerate(sim.xi_R):
             p.data.copy_(ws_phR[j]) if ws_phR else p.zero_()
 
-    probe_accs = []
+    scores: dict[str, list] = {key: [] for key in task.warm_start_columns}
     with torch.no_grad():
         for i in range(N):
             H = standardize_channel(test_channels[i].to(device), channel_type=ch_type)
             Z_eff, _ = sim.get_effective_cascade(H)
             beta = _compute_beta(Z_eff, A_target)
-            pa, _ = _eval_accuracies(
-                Z_eff,
-                beta,
-                ctx["Z_test"],
-                ctx["labels"],
-                ctx["clf"],
-                ctx["clf_neural"],
-                ctx["L_out"],
-                ctx["mu_out"],
-                device,
-            )
-            probe_accs.append(pa)
+            metrics = task.evaluate_cascade(Z_eff, beta)
+            for key in scores:
+                scores[key].append(metrics[key])
 
     # Reset phases to zero so the caller's training loop starts clean
     with torch.no_grad():
@@ -262,14 +279,14 @@ def _ensure_ws_accuracy(
         for p in sim.xi_R:
             p.zero_()
 
-    ws_acc = float(np.mean(probe_accs))
-    new_row = pl.DataFrame([{**_key, "ws_acc_probe": ws_acc, "n_eval": N}])
+    ws_metrics = {col: float(np.mean(scores[key])) for key, col in task.warm_start_columns.items()}
+    new_row = pl.DataFrame([{**_key, **ws_metrics, "n_eval": N}])
     updated = (
         pl.concat([existing, new_row], how="diagonal_relaxed") if existing is not None else new_row
     )
     acc_path.parent.mkdir(parents=True, exist_ok=True)
     updated.write_parquet(acc_path)
-    print(f" WS accuracy cached: probe={ws_acc:.4f} (N={N})")
+    print(f" WS metrics cached: {', '.join(f'{k}={v:.4f}' for k, v in ws_metrics.items())} (N={N})")
 
 
 def _run_warm_start_cached(
@@ -289,15 +306,37 @@ def _run_warm_start_cached(
     rx_enc: str,
     L: int,
     M_int: int,
+    dataset: str,
+    strategy: str,
+    cache_root: Path = _WS_CACHE_ROOT,
+    cache_prefix: str = "",
 ) -> tuple[list, list, dict]:
     """Like _run_warm_start but loads from / saves to disk cache.
+
+    ``dataset`` / ``strategy`` are part of the cache key (the warm start fits
+    ``A_target``); ``cache_root`` / ``cache_prefix`` place and name the cache file
+    (defaults: the classification cache, no prefix).
 
     Returns (ws_phT, ws_phR, opt_state) where opt_state = {"T": ..., "R": ...}.
     Old caches without optimizer state are invalidated and recomputed.
     """
     if ws_t == 0:
         return [], [], {}
-    cache = _ws_cache_path(ws_type, L, M_int, tx_enc, rx_enc, ws_t, seed, h0v, ch_type)
+    cache = _ws_cache_path(
+        ws_type,
+        L,
+        M_int,
+        tx_enc,
+        rx_enc,
+        ws_t,
+        seed,
+        h0v,
+        ch_type,
+        dataset,
+        strategy,
+        cache_root,
+        cache_prefix,
+    )
     if cache.exists():
         ckpt = torch.load(cache, map_location=device, weights_only=True)
         if "ws_opt_T" in ckpt:

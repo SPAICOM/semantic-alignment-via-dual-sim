@@ -6,6 +6,7 @@ Provides:
 - :func:`inter_sim_propagation` — free-space propagation matrix between two
   co-located apertures (used by the 4-SIM runner).
 - :func:`save_result`  — write a single-row result to a Parquet file.
+- :func:`save_params` / :func:`load_params` — trained SIM state next to that Parquet.
 - :func:`make_fname`   — build a canonical, self-documenting filename.
 - :func:`ch_dims`      — factorize a channel dimension into ``(n_x, n_y)``.
 - :func:`snr_tag`, :func:`pct`, :func:`neural_str` — small formatting helpers.
@@ -18,7 +19,10 @@ import torch
 
 from .optimizers.monosim import MonoSIMoptimizer
 
-RESULTS_DIR = Path("results")
+# Results are split by downstream task: classification (accuracy) vs. reconstruction (PSNR).
+RESULTS_ROOT = Path("results")
+RESULTS_DIR = RESULTS_ROOT / "classification"
+RECONSTRUCTION_RESULTS_DIR = RESULTS_ROOT / "reconstruction"
 
 
 class _FixedCascade:
@@ -127,6 +131,45 @@ def save_result(path: Path, row: dict) -> None:
     pl.DataFrame([row]).write_parquet(path)
 
 
+def phase_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    """Trainable phases of a SIM module on CPU, keyed as in its ``state_dict``.
+
+    Restore with ``model.load_state_dict(state, strict=False)`` on a model built
+    with the same geometry (the propagation buffers are rebuilt, not stored).
+    """
+    return {k: v.detach().cpu() for k, v in model.named_parameters()}
+
+
+def params_path(path: Path) -> Path:
+    """The ``.pt`` file holding the trained state of the run whose result is ``path``."""
+    return path.with_suffix(".pt")
+
+
+def save_params(path: Path, params: dict) -> None:
+    """Save a run's trained state next to its result Parquet ``path``.
+
+    Tensors are moved to CPU; ``params`` typically holds ``phases`` (one
+    :func:`phase_state` per SIM), the final cascades, ``H`` and ``beta``, so the
+    link can be re-evaluated (other SNR, previews, ...) without retraining.
+    """
+
+    def _cpu(v):
+        if isinstance(v, torch.Tensor):
+            return v.detach().cpu()
+        if isinstance(v, dict):
+            return {k: _cpu(x) for k, x in v.items()}
+        return v
+
+    path = params_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(_cpu(params), path)
+
+
+def load_params(path: Path, map_location: str | torch.device = "cpu") -> dict:
+    """Load the trained state saved by :func:`save_params` (``path``: Parquet or ``.pt``)."""
+    return torch.load(params_path(Path(path)), map_location=map_location, weights_only=True)
+
+
 def snr_tag(snr: float | None) -> str:
     """Return ``'inf'`` for ``None`` SNR (noiseless), otherwise its string value."""
     return "inf" if snr is None else str(snr)
@@ -147,6 +190,9 @@ def make_fname(
     dataset: str = "cifar10",
     preconditioner: str = "none",
     extra_tag: str = "",
+    channel_type: str = "rayleigh",
+    rice_factor_db: float | None = None,
+    cluster_on: str = "pilots",
     **_,
 ) -> str:
     """Build a canonical Parquet filename from all experiment fields.
@@ -178,6 +224,11 @@ def make_fname(
         Dataset name (default ``"cifar10"``).
     preconditioner : str
         Preconditioner type (default ``"none"``).
+    channel_type, rice_factor_db
+        MIMO channel model; ``"rician"`` adds ``_rician{K}dB`` (Rayleigh adds nothing).
+    cluster_on : str
+        PPFE clustering (``alignment.cluster_on``); ``"train_tx"`` turns the
+        cluster tag into ``_k{n}tx`` (pilot clustering keeps ``_k{n}``).
 
     Returns
     -------
@@ -187,11 +238,14 @@ def make_fname(
     s_tx_tag = "none" if s_tx is None else str(s_tx)
     s_rx_tag = "none" if s_rx is None else str(s_rx)
     k_tag = f"_k{n_clusters}" if n_clusters is not None else ""
+    if k_tag and cluster_on == "train_tx":
+        k_tag += "tx"
     prec_tag = f"_prec{preconditioner}" if preconditioner != "none" else ""
+    ch_tag = f"_rician{rice_factor_db}dB" if channel_type == "rician" else ""
     return (
         f"{dataset}_{strategy}_seed{seed}_L{L}_M{M_int}x{M_int}_ch{ch_dim}"
         f"_snr{snr_tag(snr)}_stx{s_tx_tag}_srx{s_rx_tag}{k_tag}{prec_tag}"
-        f"{extra_tag}_{tx_enc}_{rx_enc}.parquet"
+        f"{extra_tag}{ch_tag}_{tx_enc}_{rx_enc}.parquet"
     )
 
 

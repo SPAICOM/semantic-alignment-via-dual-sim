@@ -1,0 +1,33 @@
+# Mono-SIM TX (constructive) reconstruction with the setup of the legacy
+# MMD-InfoVAE_mnist_Linear-PPFE_seed42_L25_M64x64_ch256_... figure:
+# MNIST, MMD-InfoVAE autoencoder pair (base_mmd1 → small_mmd1), L=25, 64x64
+# meta-atoms, noiseless (snr=null), seed 42 — one job per strategy (Linear, PPFE).
+# Results: results/reconstruction/mono/constructive/tx/ (Parquet + PNG grid per strategy).
+defaults:
+  - sim: mono
+  - alignment/reconstruction: ppfe
+  - datasets/reconstruction: mnist
+  - reconstruction: default
+  - training: mono
+  - _self_
+
+sim:
+  constructive: true
+  L: 25
+  M_int: 64
+  snr: null
+
+reconstruction:
+  tx_variant: base_mmd1
+  tx_seed: 42
+  rx_variant: small_mmd1
+  rx_seed: 42
+
+training:
+  seed: 42
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment/reconstruction: linear,ppfe

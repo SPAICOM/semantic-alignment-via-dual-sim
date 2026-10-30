@@ -1,0 +1,11 @@
+# MMD-InfoVAE variant of base.yaml — the base_mmd1 checkpoints used by the
+# MNIST / Fashion-MNIST / CIFAR-10 reconstruction runs (e.g. mono constructive,
+# L=25, M=64x64). Same architecture and schedule as base.yaml; the KL term and
+# sigma-VAE are switched off and the latent is regularised by MMD only.
+defaults:
+  - base
+
+variant: base_mmd1
+beta: 0.0
+sigma_vae: false
+mmd_weight: 1.0

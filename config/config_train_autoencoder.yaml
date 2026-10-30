@@ -1,0 +1,15 @@
+defaults:
+  - datasets/reconstruction: cifar10
+  - autoencoder: base
+  - training: base
+  - _self_
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      # Full seed sweep commented out for now — single-seed (42) diagnostic
+      # runs while tuning reconstruction quality. Restore once settled:
+      # training.seed: 27,42,100,123,144,200
+      training.seed: 42
+      autoencoder: base,small

@@ -1,0 +1,18 @@
+# @package _global_.alignment
+# Prototype-based Parseval Frame Equalization for image reconstruction.
+# Same fields as alignment/classification/ppfe.yaml. The fast no-channel sweep
+# (scripts/sweep_alignment.py) showed n_clusters=20 bottlenecks PPFE
+# (14.16dB vs Linear's 17.49dB); 2000 closes most of the gap (17.11dB).
+# Full-CSI architectures (disjoint_sym, disjoint_4sim) ignore n_clusters and use
+# n_clusters == sim.channel_dim, as in classification.
+
+type: PPFE
+n_clusters: 2000   # number of KMeans clusters
+n_proto: 500       # max samples averaged into each prototype (null = the whole cluster)
+# Where KMeans runs: train_tx = the TX clusters its whole training latent space and
+# shares the sample → cluster map, the RX builds its prototypes from its own
+# embeddings of the same samples; pilots = cluster the RX embeddings of the pilots (default, as classification).
+# The n_clusters figures above were measured with pilots.
+cluster_on: pilots
+lr_tx: 0.03        # optimal joint LR, same as classification (tuned via joint_lr_search)
+lr_rx: 0.07        # optimal joint LR, same as classification (tuned via joint_lr_search)

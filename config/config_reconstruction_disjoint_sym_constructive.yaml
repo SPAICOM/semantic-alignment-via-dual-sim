@@ -1,0 +1,37 @@
+# Disjoint symmetric (constructive) reconstruction with the setup of the legacy
+# MMD-InfoVAE_mnist_Linear-PPFE_seed42_L25_M64x64_... figure (with the channel widened to the max):
+# MNIST, MMD-InfoVAE autoencoder pair (base_mmd1 → small_mmd1), L=25, 64x64
+# meta-atoms, channel_dim=128 (the maximum), noiseless (snr=null), seed 42 — one job per strategy.
+# Results: results/reconstruction/disjoint_sym/constructive/ (Parquet + PNG grid per strategy).
+defaults:
+  - sim: disjoint_sym
+  - alignment/reconstruction: ppfe
+  - datasets/reconstruction: mnist
+  - reconstruction: default
+  - training: disjoint
+  - _self_
+
+sim:
+  constructive: true
+  L: 25
+  M_int: 64
+  channel_dim: 128   # largest possible: min(TX, RX) complex latent dims of the AE pair (128 for small_*)
+  snr: null
+  name: disjoint_sym
+  result_subdir: disjoint_sym
+
+reconstruction:
+  tx_variant: base_mmd1
+  tx_seed: 42
+  rx_variant: small_mmd1
+  rx_seed: 42
+
+training:
+  seed: 42
+  max_iters: 3000
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      alignment/reconstruction: linear,ppfe

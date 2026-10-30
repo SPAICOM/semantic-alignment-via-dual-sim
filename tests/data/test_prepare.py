@@ -5,8 +5,9 @@ import polars as pl
 import pytest
 import torch
 
-from semantic_alignment.data.prepare import PreparedData, prepare_semasia
+from semantic_alignment.data.prepare import PreparedData, ppfe_cluster_data, prepare_semasia
 from semantic_alignment.data.semasia import SemasiaData, SplitData
+from semantic_alignment.utils import ppfe
 
 # ---------------------------------------------------------------------------
 # Helpers — reuse the same synthetic parquet setup as test_semasia.py
@@ -198,6 +199,44 @@ def test_ppfe_a_target_equals_f_r_h_at_f_t(tmp_path):
         cache_dir=tmp_path,
     )
     assert torch.allclose(result.A_target, result.F_R_H @ result.F_T, atol=1e-5)
+
+
+def test_ppfe_cluster_on_train_tx(tmp_path):
+    """train_tx clusters the TX training set; the default (pilots) result is unchanged.
+
+    select_pilots shuffles with the global RNG, so each call is seeded as the scripts do.
+    """
+    _write_splits(tmp_path)
+    kw = dict(n_clusters=N_CLASSES, n_proto=None, keep_csi_frames=True, cache_dir=tmp_path)
+    torch.manual_seed(0)
+    pilots = prepare_semasia("ds", "tx", "rx", PILOTS_PER_CLASS, "PPFE", **kw)
+    torch.manual_seed(0)
+    default = prepare_semasia("ds", "tx", "rx", PILOTS_PER_CLASS, "PPFE", cluster_on="pilots", **kw)
+    torch.testing.assert_close(pilots.A_target, default.A_target)
+
+    torch.manual_seed(0)
+    train = prepare_semasia("ds", "tx", "rx", PILOTS_PER_CLASS, "PPFE", cluster_on="train_tx", **kw)
+    X, Y, feats = ppfe_cluster_data(
+        train.data.train, train.L_in, train.mu_in, train.L_out, train.mu_out, torch.device("cpu")
+    )
+    F_ref, G_ref = ppfe(X, Y, output_real=feats, n_clusters=N_CLASSES, n_proto=None, seed=42)
+    torch.testing.assert_close(train.F_T, F_ref)
+    torch.testing.assert_close(train.F_R_H, G_ref)
+
+
+def test_unknown_cluster_on_raises(tmp_path):
+    _write_splits(tmp_path)
+    with pytest.raises(ValueError, match="Unknown cluster_on"):
+        prepare_semasia(
+            "ds",
+            "tx",
+            "rx",
+            PILOTS_PER_CLASS,
+            "PPFE",
+            n_clusters=2,
+            cluster_on="nope",
+            cache_dir=tmp_path,
+        )
 
 
 # ---------------------------------------------------------------------------
