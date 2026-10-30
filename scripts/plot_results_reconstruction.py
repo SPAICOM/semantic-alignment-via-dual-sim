@@ -46,9 +46,9 @@ DATASETS = ["mnist", "fashion_mnist", "cifar10"]
 STRATEGIES = ["Linear", "PPFE"]
 # Architecture → result directory of its final run (M64, L50, cosine).
 ARCHS = {
-    "Mono": "mono_final/constructive/tx",
-    "Disjoint Sym": "disjoint_sym_final/constructive",
-    "Joint": "joint_final",
+    "Mono": "mono/constructive/tx",
+    "Disjoint Sym": "disjoint_sym/constructive",
+    "Joint": "joint",
 }
 RUN_TAG = "L50_M64x64"
 GRID_ROWS, GRID_COLS = 2, 5

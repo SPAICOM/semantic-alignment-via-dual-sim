@@ -1,8 +1,9 @@
-# Joint Dual-SIM reconstruction with the setup of the legacy
-# MMD-InfoVAE_mnist_Linear-PPFE_seed42_L25_M64x64_... figure (with the channel widened to the max):
-# MNIST, MMD-InfoVAE autoencoder pair (base_mmd1 → small_mmd1), L=25, 64x64
-# meta-atoms, channel_dim=128 (the maximum), noiseless (snr=null), seed 42 — one job per strategy.
-# Results: results/reconstruction/joint/ (Parquet + PNG grid per strategy).
+# Joint Dual-SIM reconstruction — final setup: MMD-InfoVAE autoencoder pair
+# (base_mmd1 → small_mmd1), L=50, 64x64 meta-atoms, channel_dim=128 (the maximum),
+# noiseless (snr=null), seed 42, cosine lr schedule, lr 0.03 on both TX and RX
+# (best of the joint cosine lr search: 0.01/0.03/0.05/0.1) — one job per strategy.
+# Dataset defaults to MNIST (rec-all runs MNIST, Fashion-MNIST and CIFAR-10).
+# Results: results/reconstruction/joint/ (Parquet + PNG grid + .pt link per strategy).
 defaults:
   - sim: joint
   - alignment/reconstruction: ppfe
@@ -12,12 +13,17 @@ defaults:
   - _self_
 
 sim:
-  L: 25
+  L: 50
   M_int: 64
   channel_dim: 128   # largest possible: min(TX, RX) complex latent dims of the AE pair (128 for small_*)
   snr: null
   name: joint
   result_subdir: joint
+
+# Overrides the per-strategy lr of alignment/reconstruction (tuned for L=25, constant lr).
+alignment:
+  lr_tx: 0.03
+  lr_rx: 0.03
 
 reconstruction:
   tx_variant: base_mmd1
@@ -27,6 +33,7 @@ reconstruction:
 
 training:
   seed: 42
+  scheduler: cosine
   # max_iters counts alternating cycles (k_T + k_R steps each): 150 × 200 =
   # 30000 Adam steps.
   max_iters: 150

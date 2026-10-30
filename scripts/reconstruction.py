@@ -9,16 +9,17 @@ task scores the RX decoder's reconstructions (MSE/PSNR) and writes a
 comparison PNG next to the Parquet row.
 
 Supported architectures: every ``sim`` config (joint, mono, mono_rx,
-disjoint_sym, disjoint_asym, disjoint_4sim). Ready-made sweeps:
-  - Joint Dual-SIM            config_reconstruction_joint_layers
-  - Mono-SIM (TX or RX side)  config_reconstruction_mono_layers
-  - Disjoint sym (full CSI)   config_reconstruction_disjoint_sym_layers
+disjoint_sym, disjoint_asym, disjoint_4sim). Ready-made configs (Linear + PPFE):
+  - Joint Dual-SIM               config_reconstruction_joint
+  - Mono-SIM TX (constructive)   config_reconstruction_mono_constructive
+  - Disjoint sym (constructive)  config_reconstruction_disjoint_sym_constructive
 
 Results go to ``results/reconstruction/{result_subdir}/{tipology}/``.
 
 Examples
 --------
-    just rec-joint-layers
+    just rec-all
+    just rec-joint datasets/reconstruction=fashion_mnist
     just rec sim.L=5 sim.snr=10 alignment/reconstruction=linear
     uv run python scripts/reconstruction.py sim=mono training=mono sim.constructive=true
 """

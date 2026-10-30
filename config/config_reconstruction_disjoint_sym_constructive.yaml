@@ -1,8 +1,9 @@
-# Disjoint symmetric (constructive) reconstruction with the setup of the legacy
-# MMD-InfoVAE_mnist_Linear-PPFE_seed42_L25_M64x64_... figure (with the channel widened to the max):
-# MNIST, MMD-InfoVAE autoencoder pair (base_mmd1 → small_mmd1), L=25, 64x64
-# meta-atoms, channel_dim=128 (the maximum), noiseless (snr=null), seed 42 — one job per strategy.
-# Results: results/reconstruction/disjoint_sym/constructive/ (Parquet + PNG grid per strategy).
+# Disjoint symmetric (constructive) reconstruction — final setup: MMD-InfoVAE autoencoder
+# pair (base_mmd1 → small_mmd1), L=50, 64x64 meta-atoms, channel_dim=128 (the maximum),
+# noiseless (snr=null), seed 42, 3000 steps per SIM, cosine lr schedule, lr 0.1 on both
+# TX and RX (best of the lr × scheduler × L grid search) — one job per strategy.
+# Dataset defaults to MNIST (rec-all runs MNIST, Fashion-MNIST and CIFAR-10).
+# Results: results/reconstruction/disjoint_sym/constructive/ (Parquet + PNG grid + .pt link).
 defaults:
   - sim: disjoint_sym
   - alignment/reconstruction: ppfe
@@ -13,12 +14,17 @@ defaults:
 
 sim:
   constructive: true
-  L: 25
+  L: 50
   M_int: 64
   channel_dim: 128   # largest possible: min(TX, RX) complex latent dims of the AE pair (128 for small_*)
   snr: null
   name: disjoint_sym
   result_subdir: disjoint_sym
+
+# Overrides the per-strategy (joint-tuned) lr of alignment/reconstruction.
+alignment:
+  lr_tx: 0.1
+  lr_rx: 0.1
 
 reconstruction:
   tx_variant: base_mmd1
@@ -29,6 +35,7 @@ reconstruction:
 training:
   seed: 42
   max_iters: 3000
+  scheduler: cosine
 
 hydra:
   mode: MULTIRUN

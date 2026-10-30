@@ -289,12 +289,12 @@ train-clf *ARGS:
 # Same SIM runners, sim/ and training/ configs and sweep structure as cls-; only
 # the downstream task differs: the RX decodes the aligned embedding with a
 # locally trained ConvVAE and is scored by PSNR. One job per strategy
-# (alignment/reconstruction=linear|ppfe, both swept by the -layers recipes).
+# (alignment/reconstruction=linear|ppfe, both swept by every rec- recipe).
 # Dataset resolves to config/datasets/reconstruction/<name>.yaml
 #   (cifar10, cifar100, mnist, fashion_mnist):
-#   just dataset=mnist rec-joint-layers
+#   just rec-joint datasets/reconstruction=fashion_mnist
 # Autoencoder pair (any trained variant under models/autoencoders/<dataset>/):
-#   just rec-joint-layers reconstruction.tx_variant=base_mmd1 reconstruction.rx_variant=small_mmd1
+#   just rec-joint reconstruction.tx_variant=base_mmd1 reconstruction.rx_variant=small_mmd1
 # rec- recipes do NOT depend on train-ae: training is long (up to 200 epochs)
 # and the pair is selectable — run `just train-ae` explicitly first.
 # Results go to results/reconstruction/<subdir>/<tipology>/ (Parquet + PNG grid).
@@ -319,76 +319,33 @@ sweep-align *ARGS:
 rec *ARGS:
     uv run python scripts/reconstruction.py datasets/reconstruction={{dataset}} {{ARGS}}
 
-# Joint Dual-SIM reconstruction: sweep over SIM layers
-rec-joint-layers *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_joint_layers datasets/reconstruction={{dataset}} {{ARGS}}
-
-# Mono-SIM TX (equalized) reconstruction: sweep over SIM layers
-rec-mono-layers *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} {{ARGS}}
-
-# Mono-SIM TX (constructive) reconstruction: sweep over SIM layers
-rec-mono-layers-c *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} sim.constructive=true {{ARGS}}
-
-# Mono-SIM RX (constructive) reconstruction: sweep over SIM layers
-rec-mono-rx-layers-c *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_layers datasets/reconstruction={{dataset}} sim.constructive=true sim.alignment_side=rx {{ARGS}}
-
-# Disjoint sym (equalized) reconstruction: sweep over SIM layers
-rec-disjoint-sym-layers *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_layers datasets/reconstruction={{dataset}} {{ARGS}}
-
-# Disjoint sym (constructive) reconstruction: sweep over SIM layers
-rec-disjoint-sym-layers-c *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_layers datasets/reconstruction={{dataset}} sim.constructive=true {{ARGS}}
-
-# Mono-SIM TX (constructive) reconstruction, legacy MNIST figure setup
-# (L=25, M=64x64, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+# Mono-SIM TX (constructive) reconstruction, final setup (Linear + PPFE): base_mmd1 → small_mmd1,
+# M=64x64, L=50, cosine lr schedule, lr 0.1. Dataset defaults to MNIST.
 rec-mono-c *ARGS:
     uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_constructive {{ARGS}}
 
-# Joint Dual-SIM reconstruction, legacy MNIST figure setup
-# (L=25, M=64x64, ch=128, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+# Joint Dual-SIM reconstruction, final setup (Linear + PPFE): base_mmd1 → small_mmd1,
+# M=64x64, L=50, ch=128, cosine lr schedule, lr 0.03. Dataset defaults to MNIST.
 rec-joint *ARGS:
     uv run python scripts/reconstruction.py --config-name config_reconstruction_joint {{ARGS}}
 
-# Disjoint sym (constructive) reconstruction, legacy MNIST figure setup
-# (L=25, M=64x64, ch=128, base_mmd1 → small_mmd1, seed 42; Linear + PPFE). Dataset is fixed by the config.
+# Disjoint sym (constructive) reconstruction, final setup (Linear + PPFE): base_mmd1 → small_mmd1,
+# M=64x64, L=50, ch=128, cosine lr schedule, lr 0.1. Dataset defaults to MNIST.
 rec-disjoint-sym-c *ARGS:
     uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_constructive {{ARGS}}
 
-# Disjoint sym (constructive) reconstruction: sweep over channel_dim (20, 32, 64, 128),
-# legacy MNIST figure setup otherwise. Dataset is fixed by the config.
-rec-disjoint-sym-channel-dim-c *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_channel_dim {{ARGS}}
-
-# Mono-SIM TX (constructive) reconstruction grid search: lr × scheduler × L (Linear only).
-rec-mono-grid *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_mono_grid {{ARGS}}
-
-# Disjoint sym (constructive) reconstruction grid search: shared TX/RX lr × scheduler × L (Linear only).
-rec-disjoint-sym-grid *ARGS:
-    uv run python scripts/reconstruction.py --config-name config_reconstruction_disjoint_sym_grid {{ARGS}}
-
-# Final reconstruction runs: Mono TX (constructive), Disjoint sym (constructive) and Joint
-# Dual-SIM on MNIST, Fashion-MNIST and CIFAR-10 (Linear + PPFE each), M=64x64, L=50, cosine
-# lr schedule. lr from the grid searches: 0.1 (Mono, Disjoint sym), 0.03 (Joint).
-# Results: results/reconstruction/{mono_final,disjoint_sym_final,joint_final}/ (+ .pt links).
+# All reconstruction runs: Mono TX (constructive), Disjoint sym (constructive) and Joint
+# Dual-SIM on MNIST, Fashion-MNIST and CIFAR-10 (Linear + PPFE each), final setups above.
+# Results: results/reconstruction/{mono,disjoint_sym,joint}/ (+ .pt links).
 # Finished runs are skipped, so re-running only fills in what is missing.
-rec-final *ARGS:
+rec-all *ARGS:
     #!/usr/bin/env bash
     set -euo pipefail
-    common="training.scheduler=cosine sim.L=50 sim.M_int=64"
     for ds in mnist fashion_mnist cifar10; do
-        just rec-mono-c datasets/reconstruction=$ds training.lr=0.1 $common sim.name=mono_final sim.result_subdir=mono_final {{ARGS}}
-        just rec-disjoint-sym-c datasets/reconstruction=$ds alignment.lr_tx=0.1 alignment.lr_rx=0.1 $common sim.name=disjoint_sym_final sim.result_subdir=disjoint_sym_final {{ARGS}}
-        just rec-joint datasets/reconstruction=$ds alignment.lr_tx=0.03 alignment.lr_rx=0.03 $common sim.name=joint_final sim.result_subdir=joint_final {{ARGS}}
+        just rec-mono-c datasets/reconstruction=$ds {{ARGS}}
+        just rec-disjoint-sym-c datasets/reconstruction=$ds {{ARGS}}
+        just rec-joint datasets/reconstruction=$ds {{ARGS}}
     done
-
-# Aggregate: reconstruction layers sweep across all methods
-rec-all-layers: rec-joint-layers rec-mono-layers rec-mono-layers-c rec-mono-rx-layers-c \
-                rec-disjoint-sym-layers rec-disjoint-sym-layers-c
 
 # ── Single run (no multirun, useful for quick tests) ─────────────────────────
 
@@ -503,7 +460,7 @@ plot-cls:
     uv run python scripts/plot_results_classification.py
 
 # Reconstruction figure: decoded test images per architecture/strategy (MNIST, Fashion-MNIST, CIFAR-10).
-# Depends on rec-final, whose saved links (.pt) it decodes; finished runs are skipped.
-plot-rec: rec-final
+# Depends on rec-all, whose saved links (.pt) it decodes; finished runs are skipped.
+plot-rec: rec-all
     uv run python scripts/plot_results_reconstruction.py
 
