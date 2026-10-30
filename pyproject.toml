@@ -17,6 +17,8 @@ dependencies = [
     "wandb>=0.25.0",
     "lightning>=2.0.0",
     "pyarrow>=24.0.0",
+    "torchmetrics>=1.0.0",
+    "torchvision>=0.15.0",
 ]
 
 [build-system]

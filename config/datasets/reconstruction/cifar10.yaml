@@ -1,0 +1,17 @@
+# @package _global_.datasets
+# CIFAR-10 — raw images for image-reconstruction alignment.
+# Unlike config/datasets/classification/cifar10.yaml (Semasia embedding collection, classification),
+# this points at the original HF dataset so ground-truth pixels are available
+# for decoding / reconstruction-quality metrics (MSE, PSNR, SSIM).
+# Parquet shards live at hf://datasets/{hf_repo}/{hf_config}/{split}-*.parquet
+
+name: cifar10  # keys models/autoencoders/{name}/ and result filenames
+hf_repo: uoft-cs/cifar10
+hf_config: plain_text
+image_col: img
+label_col: label
+train_split: train
+test_split: test
+image_size: [32, 32]
+channels: 3
+num_classes: 10

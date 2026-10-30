@@ -1,18 +1,20 @@
-"""Joint Dual-SIM runner — covers layers, SNR, and s-layer sweeps in one function."""
+"""Joint Dual-SIM runner — covers layers, SNR, and s-layer sweeps for any downstream task."""
 
 import gc
-import random
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
 
-from semantic_alignment.evaluation.inference import run_evaluation, run_evaluation_cascade
+from semantic_alignment.sim.link import cascade_transmit, dual_transmit
 
 from ._base import SIMRunner
-from ._utils import RESULTS_DIR, ch_dims, make_fname, neural_str, pct, save_result, snr_tag
+from ._utils import ch_dims, make_fname, phase_state, snr_tag
 from .optimizers.dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
+
+if TYPE_CHECKING:
+    from semantic_alignment.evaluation.tasks import Task
 
 
 class JointSIM(SIMRunner):
@@ -62,28 +64,102 @@ class JointSIM(SIMRunner):
         )
         return DualSIMoptimizerTorch(sim_cpu).to(device)
 
-    def run(
-        self,
+    @classmethod
+    def solve(
+        cls,
         L: int,
         M_int: int,
-        no_mismatch_probe: float,
-        original_probe: float,
         A_target: torch.Tensor | np.ndarray,
         H_mimo: torch.Tensor | np.ndarray,
-        test_loader: DataLoader,
-        clf: torch.Tensor | nn.Module,
-        L_in: torch.Tensor,
-        mu_in: torch.Tensor,
-        L_out: torch.Tensor,
-        mu_out: torch.Tensor,
+        device: torch.device,
+        ch_dim: int,
+        thickness_tx: float,
+        thickness_rx: float,
+        wavelength: float = 0.005,
+        dx: float = 0.0025,
+        max_iters: int = 3000,
+        lr_tx: float = 0.1,
+        lr_rx: float = 0.2,
+        optimizer: str = "adam",
+        scheduler: str = "none",
+        warmup_frac: float = 0.05,
+        clip_value: float | None = None,
+        k_T: int = 100,
+        k_R: int = 100,
+        phase_init: str = "zeros",
+        eval_fn: Callable | None = None,
+    ) -> tuple[DualSIMoptimizerTorch, torch.Tensor, torch.Tensor, list[float]]:
+        """Build and train a joint Dual-SIM against ``A_target``.
+
+        The physical-layer step of :meth:`run`, also usable on its own.
+        The caller is responsible for seeding.
+
+        Returns
+        -------
+        model : DualSIMoptimizerTorch
+            Trained joint Dual-SIM.
+        Z_eff : torch.Tensor
+            Effective cascade ``G_R H G_T``.
+        beta : torch.Tensor
+            MMSE scalar aligning ``Z_eff`` to ``A_target``.
+        loss_history : list[float]
+        """
+        ch_x, ch_y = ch_dims(ch_dim)
+        tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
+        rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
+
+        model = cls.build_model(
+            L,
+            M_int,
+            wavelength,
+            dx,
+            thickness_tx,
+            thickness_rx,
+            device,
+            tx_in_x,
+            tx_in_y,
+            ch_x,
+            ch_y,
+            rx_out_x,
+            rx_out_y,
+        )
+        A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
+        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
+
+        model.init_phases(phase_init)
+
+        loss_history = model.optimize_alternating(
+            A_target=A_target,
+            H_mimo=H_mimo,
+            max_iters=max_iters,
+            lr_tx=lr_tx,
+            lr_rx=lr_rx,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            warmup_frac=warmup_frac,
+            clip_value=clip_value,
+            k_T=k_T,
+            k_R=k_R,
+            eval_fn=eval_fn,
+        )
+
+        with torch.no_grad():
+            Z_f, _ = model.get_effective_cascade(H_torch)
+            beta = torch.sum(torch.conj(Z_f) * A_torch) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
+        return model, Z_f, beta, loss_history
+
+    def run(
+        self,
+        task: "Task",
+        L: int,
+        M_int: int,
+        A_target: torch.Tensor | np.ndarray,
+        H_mimo: torch.Tensor | np.ndarray,
         device: torch.device,
         result_subdir: str,
         strategy_name: str = "Linear",
         seed: int = 42,
         max_iters: int = 3000,
-        clf_neural: torch.Tensor | nn.Module | None = None,
-        no_mismatch_neural: float | None = None,
-        original_neural: float | None = None,
         tx_enc: str = "",
         rx_enc: str = "",
         optimizer: str = "adam",
@@ -105,40 +181,33 @@ class JointSIM(SIMRunner):
         dataset: str = "cifar10",
         save_curve: bool = False,
         phase_init: str = "zeros",
+        channel_type: str = "rayleigh",
+        rice_factor_db: float | None = None,
+        cluster_on: str = "pilots",
         **_,
     ) -> None:
         """Run one joint Dual-SIM experiment.
 
         Builds a dual-SIM model, optimizes TX+RX phases jointly via alternating
-        Adam, evaluates classification accuracy through the optimized cascade,
-        and saves results to a Parquet file.
+        Adam, lets ``task`` score the link ``β G_R H G_T x + v``, and saves the
+        result row under ``task.results_dir``.
 
         Parameters
         ----------
+        task : Task
+            Downstream task scoring the trained link.
         L : int
             Number of SIM layers (same for TX and RX).
         M_int : int
             Intermediate dimension (meta-atoms per side).
-        no_mismatch_probe : float
-            Baseline accuracy without mismatch (for comparison).
-        original_probe : float
-            Baseline accuracy with original (unoptimized) SIM.
         A_target : np.ndarray or Tensor
             Target alignment matrix.
         H_mimo : np.ndarray or Tensor
             MIMO channel matrix.
-        test_loader : DataLoader
-            Test dataset loader.
-        clf : classifier
-            Probe classifier for accuracy evaluation.
-        L_in, mu_in : float
-            RX-side equalizer parameters (input L matrix and mu).
-        L_out, mu_out : float
-            RX-side equalizer parameters (output L matrix and mu).
         device : torch.device
             Computation device.
         result_subdir : str
-            Subdirectory under ``results/`` for saving.
+            Subdirectory under ``task.results_dir`` for saving.
         strategy_name : str
             Alignment strategy name (for filename).
         seed : int
@@ -155,11 +224,10 @@ class JointSIM(SIMRunner):
             S-layer thicknesses (in wavelengths).
         lr_tx, lr_rx : float
             Learning rates for TX and RX.
+        save_curve : bool
+            If true, score the link after every alternating step.
         """
         ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
-        ch_x, ch_y = ch_dims(ch_dim)
-        tx_in_x, tx_in_y = ch_dims(int(A_target.shape[1]))
-        rx_out_x, rx_out_y = ch_dims(int(A_target.shape[0]))
 
         is_slayer = s_tx is not None and s_rx is not None
         lr_tag = f"_lrtx{lr_tx}_lrrx{lr_rx}" if "lr_search" in result_subdir else ""
@@ -177,61 +245,41 @@ class JointSIM(SIMRunner):
             n_clusters,
             dataset=dataset,
             extra_tag=lr_tag,
+            channel_type=channel_type,
+            rice_factor_db=rice_factor_db,
+            cluster_on=cluster_on,
         )
         log_prefix = (
             f"s_tx={s_tx}λ s_rx={s_rx}λ seed={seed}"
             if is_slayer
             else f"L={L} M={M_int} snr={snr_tag(snr)} seed={seed}"
         )
-        out_path = RESULTS_DIR / result_subdir / fname
+        out_path = self.out_path(task, result_subdir, "", fname)
         if out_path.exists():
             print(f"Skipping {out_path.name}.")
             return
 
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        random.seed(seed)
+        self.seed_everything(seed)
 
         thickness_tx = (s_tx * wavelength * L) if is_slayer else (slayer * L)
         thickness_rx = (s_rx * wavelength * L) if is_slayer else (slayer * L)
 
-        model = self.build_model(
-            L,
-            M_int,
-            wavelength,
-            dx,
-            thickness_tx,
-            thickness_rx,
-            device,
-            tx_in_x,
-            tx_in_y,
-            ch_x,
-            ch_y,
-            rx_out_x,
-            rx_out_y,
-        )
-        A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
-        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64).to(device)
-
-        model.init_phases(phase_init)
-
-        curve_probe: list[float] = []
-        curve_neural: list[float] = []
+        curve: list[dict] = []
 
         def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
-            acc = run_evaluation_cascade(
-                Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
-            )
-            curve_probe.append(acc)
-            if clf_neural is not None:
-                acc_n = run_evaluation_cascade(
-                    Z_eff, test_loader, snr, beta, L_in, mu_in, L_out, mu_out, clf_neural, device
-                )
-                curve_neural.append(acc_n)
+            curve.append(task.evaluate_step(cascade_transmit(Z_eff, beta, snr)))
 
-        loss_history = model.optimize_alternating(
-            A_target=A_target,
-            H_mimo=H_mimo,
+        model, _, beta, loss_history = self.solve(
+            L,
+            M_int,
+            A_target,
+            H_mimo,
+            device,
+            ch_dim,
+            thickness_tx,
+            thickness_rx,
+            wavelength=wavelength,
+            dx=dx,
             max_iters=max_iters,
             lr_tx=lr_tx,
             lr_rx=lr_rx,
@@ -241,44 +289,21 @@ class JointSIM(SIMRunner):
             clip_value=clip_value,
             k_T=k_T,
             k_R=k_R,
+            phase_init=phase_init,
             eval_fn=_eval_fn if save_curve else None,
         )
 
+        model.eval()
         with torch.no_grad():
-            Z_f, _ = model.get_effective_cascade(H_torch)
-            beta = torch.sum(torch.conj(Z_f) * A_torch) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
+            G_T, G_R = model.get_TX_cascade(), model.get_RX_cascade()
+        sim = task.evaluate(dual_transmit(G_T, H_mimo, G_R, beta, snr))
 
-        sim_probe = run_evaluation(
-            model, test_loader, H_mimo, snr, beta, L_in, mu_in, L_out, mu_out, clf, device
-        )
-        sim_neural = (
-            run_evaluation(
-                model,
-                test_loader,
-                H_mimo,
-                snr,
-                beta,
-                L_in,
-                mu_in,
-                L_out,
-                mu_out,
-                clf_neural,
-                device,
-            )
-            if clf_neural is not None
-            else None
-        )
+        print(f" {log_prefix} | {task.summary(sim)}")
 
-        print(
-            f" {log_prefix}"
-            f" | nm_linear={no_mismatch_probe * 100:.2f}%{neural_str('nm_neural', no_mismatch_neural)}"
-            f" | orig_linear={original_probe * 100:.2f}%{neural_str('orig_neural', original_neural)}"
-            f" | sim_linear={sim_probe * 100:.2f}%{neural_str('sim_neural', pct(sim_neural))}"
-        )
-
-        save_result(
+        self.save(
+            task,
             out_path,
-            {
+            head={
                 "result_subdir": result_subdir,
                 "seed": seed,
                 "strategy": strategy_name,
@@ -289,12 +314,9 @@ class JointSIM(SIMRunner):
                 "s_rx": s_rx,
                 "tx_enc": tx_enc,
                 "rx_enc": rx_enc,
-                "no_mismatch_probe": no_mismatch_probe,
-                "no_mismatch_neural": no_mismatch_neural,
-                "original_probe": original_probe,
-                "original_neural": original_neural,
-                "sim_accuracy_probe": sim_probe,
-                "sim_accuracy_neural": pct(sim_neural),
+            },
+            sim=sim,
+            tail={
                 "lr_tx": lr_tx,
                 "lr_rx": lr_rx,
                 "beta_T": None,
@@ -306,8 +328,15 @@ class JointSIM(SIMRunner):
                 "channel_dim": ch_dim,
                 "n_clusters": n_clusters,
                 "dataset": dataset,
-                "sim_accuracy_probe_curve": curve_probe if save_curve else None,
-                "sim_accuracy_neural_curve": curve_neural if save_curve else None,
+                **task.curve_columns(curve if save_curve else None),
+            },
+            params={
+                "phases": {"sim": phase_state(model)},
+                "G_T": G_T,
+                "G_R": G_R,
+                "H": torch.as_tensor(H_mimo),
+                "beta": beta,
+                "A_target": torch.as_tensor(A_target),
             },
         )
         del model

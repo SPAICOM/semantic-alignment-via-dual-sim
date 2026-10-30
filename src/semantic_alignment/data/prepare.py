@@ -66,6 +66,34 @@ class PreparedData:
     F_R_H: torch.Tensor | None
 
 
+def ppfe_cluster_data(
+    train: SplitData,
+    L_in: torch.Tensor,
+    mu_in: torch.Tensor,
+    L_out: torch.Tensor,
+    mu_out: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """PPFE inputs over the whole training latent space, clustered on the TX side.
+
+    The TX clusters its full training latent space and shares the
+    sample → cluster map; the RX builds its own prototypes from its embeddings
+    of the same samples with that map, so the rows of ``F_T`` and the columns
+    of ``F_R_H`` correspond. Both sides are whitened with the pilot statistics.
+
+    Returns
+    -------
+    tuple
+        ``(X_w, Y_w, z_tx)``: whitened TX/RX training embeddings ``(D/2, N)``,
+        complex64, and the real TX embeddings ``(N, D_tx)`` that KMeans clusters.
+    """
+    X_w = pack_complex(train.z_tx.T, device=device)
+    X_w = torch.linalg.solve_triangular(L_in, X_w - mu_in, upper=False)
+    Y_w = pack_complex(train.z_rx.T, device=device)
+    Y_w = torch.linalg.solve_triangular(L_out, Y_w - mu_out, upper=False)
+    return X_w, Y_w, train.z_tx
+
+
 def prepare_semasia(
     hf_name: str,
     tx_enc: str,
@@ -77,6 +105,7 @@ def prepare_semasia(
     n_clusters: int | None = None,
     n_proto: int | None = None,
     keep_csi_frames: bool = False,
+    cluster_on: str = "pilots",
     method: str = "centroid",
     grouping: str = "label",
     label_col: str = "label",
@@ -111,6 +140,11 @@ def prepare_semasia(
     keep_csi_frames : bool, optional
         When ``True``, ``F_T`` and ``F_R_H`` are returned in the result
         even for non-CSI setups (PPFE only, default ``False``).
+    cluster_on : {"pilots", "train_tx"}, optional
+        Where PPFE's KMeans runs: ``"pilots"`` clusters the RX pilots and builds
+        the prototypes from them (default); ``"train_tx"`` clusters the whole TX
+        training latent space and builds both sides' prototypes from all
+        training samples with that map (see :func:`ppfe_cluster_data`).
     method : str, optional
         Pilot selection strategy forwarded to :func:`select_pilots`
         (default ``"centroid"``).
@@ -186,12 +220,18 @@ def prepare_semasia(
     elif alignment_type == "PPFE":
         if n_clusters is None:
             raise ValueError("PPFE alignment requires n_clusters.")
-        # Prototype Frame Expansion: cluster TX pilots, build frame matrices
-        # F_T and F_R_H, then A_target = F_R_H @ F_T.
+        # Prototype Frame Expansion: cluster (RX pilots | TX training set), build
+        # frame matrices F_T and F_R_H, then A_target = F_R_H @ F_T.
+        if cluster_on == "pilots":
+            X, Y, feats = input_w, output_w, pilots.z_rx
+        elif cluster_on == "train_tx":
+            X, Y, feats = ppfe_cluster_data(data.train, L_in, mu_in, L_out, mu_out, device)
+        else:
+            raise ValueError(f"Unknown cluster_on: {cluster_on!r}. Use 'pilots' or 'train_tx'.")
         F_T, F_R_H = ppfe(
-            input_w,
-            output_w,
-            output_real=pilots.z_rx,
+            X,
+            Y,
+            output_real=feats,
             n_clusters=n_clusters,
             n_proto=n_proto,
             seed=seed,

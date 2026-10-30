@@ -1,0 +1,20 @@
+defaults:
+  - sim: mono
+  - alignment/reconstruction: ppfe
+  - datasets/reconstruction: cifar10
+  - reconstruction: default
+  - training: mono
+  - _self_
+
+sim:
+  name: mono_layers
+  result_subdir: mono_layers
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.M_int: 32
+      alignment/reconstruction: linear,ppfe
+      sim.L: 1,2,3,4,5,6,7,8,9,10,15,20,25
+      training.seed: 27,42,100,123,144,200

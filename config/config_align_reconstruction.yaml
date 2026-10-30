@@ -1,0 +1,8 @@
+# Linear alignment between two trained autoencoders — no SIM, no channel (logged to W&B).
+defaults:
+  - datasets/reconstruction: cifar10
+  - reconstruction: default
+  - _self_
+
+seed: 42
+lmb: 0.0          # ridge regularization for A (overrides reconstruction.lmb for this baseline)

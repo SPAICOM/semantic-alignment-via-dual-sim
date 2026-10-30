@@ -1,6 +1,6 @@
 defaults:
   - sim: joint
-  - alignment: ppfe
+  - alignment/classification: ppfe
   - datasets/classification: cifar10
   - datasets/channel: default
   - data: default

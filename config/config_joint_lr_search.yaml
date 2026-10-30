@@ -1,6 +1,6 @@
 defaults:
   - sim: joint
-  - alignment: ppfe
+  - alignment/classification: ppfe
   - datasets/classification: cifar10
   - data: default
   - training: joint
@@ -26,7 +26,7 @@ hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      alignment: linear,ppfe
+      alignment/classification: linear,ppfe
       training.seed: 27,42,100,123,144,200
       training.lr_tx: 0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09
       training.lr_rx: 0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09

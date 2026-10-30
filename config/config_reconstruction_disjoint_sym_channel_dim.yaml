@@ -1,0 +1,40 @@
+# Disjoint symmetric (constructive) reconstruction: sweep over the channel dimension.
+# Same setup as config_reconstruction_disjoint_sym_constructive.yaml (MNIST,
+# base_mmd1 → small_mmd1, L=25, 64x64 meta-atoms, noiseless, seed 42).
+# The channel caps the rank of the end-to-end link: at channel_dim=k the best
+# achievable PSNR is that of A truncated to rank k (Linear, MNIST: 13.0 dB at 20,
+# 14.2 at 32, 16.6 at 64, 19.5 at 128 = full rank). PPFE uses n_clusters = channel_dim.
+# channel_dim must be <= min(K_tx, K_rx) = 128 (complex) for this AE pair.
+# Results: results/reconstruction/disjoint_sym_channel_dim/constructive/
+defaults:
+  - sim: disjoint_sym
+  - alignment/reconstruction: ppfe
+  - datasets/reconstruction: mnist
+  - reconstruction: default
+  - training: disjoint
+  - _self_
+
+sim:
+  constructive: true
+  L: 25
+  M_int: 64
+  snr: null
+  name: channel_dim_disjoint_sym
+  result_subdir: disjoint_sym_channel_dim
+
+reconstruction:
+  tx_variant: base_mmd1
+  tx_seed: 42
+  rx_variant: small_mmd1
+  rx_seed: 42
+
+training:
+  seed: 42
+  max_iters: 3000
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      sim.channel_dim: 20,32,64,128
+      alignment/reconstruction: linear,ppfe

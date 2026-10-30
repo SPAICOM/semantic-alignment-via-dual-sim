@@ -1,4 +1,5 @@
-# Supervised Ridge Regression alignment strategy
+# @package _global_.alignment
+# Supervised Ridge Regression alignment strategy for classification.
 
 type: Linear
 lmb: 0.001       # L2 regularisation weight

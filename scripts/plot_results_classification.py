@@ -5,14 +5,16 @@ Follows the plotting conventions of the semantic-alignment-via-sim reference rep
   - No explicit ``plt.figure()`` calls — figure size comes from the mplstyle
   - Save both PDF and PNG
   - ``plt.clf(); plt.cla()`` after every plot
-  - LaTeX strings for axis labels (requires a working TeX installation)
+  - LaTeX strings for axis labels — rendered by TeX when ``latex`` is on PATH,
+    otherwise by matplotlib's mathtext with STIX (Times-like) fonts
 
 Usage
 -----
     just plot
-    uv run python scripts/plot_results.py
+    uv run python scripts/plot_results_classification.py
 """
 
+import shutil
 from pathlib import Path
 
 import matplotlib.cm as cm
@@ -23,7 +25,7 @@ import polars as pl
 import seaborn as sns
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-RESULTS = BASE_DIR / "results"
+RESULTS = BASE_DIR / "results" / "classification"
 
 
 _STYLE = BASE_DIR / "config" / "plotting" / "plt.mplstyle"
@@ -187,6 +189,11 @@ def _apply_style() -> None:
     sns.set_style("whitegrid")
     if _STYLE.exists():
         plt.style.use(str(_STYLE))
+    if plt.rcParams["text.usetex"] and shutil.which("latex") is None:
+        # No TeX installation: render the same $...$ labels with mathtext instead.
+        plt.rcParams["text.usetex"] = False
+        plt.rcParams["mathtext.fontset"] = "stix"
+        plt.rcParams["font.serif"] = ["STIXGeneral", *plt.rcParams["font.serif"]]
 
 
 _cache: pl.DataFrame | None = None
@@ -2309,8 +2316,8 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     Linestyle: solid = Unrolled (colored), dashed black = Classic Adam (no marker).
     Classic baseline replicated across all warm_start columns (it has no warm_start).
 
-    Unrolled parquets: results/unrolled/**/*.parquet (excluding baseline/).
-    Baseline parquets: results/unrolled/baseline/**/*.parquet
+    Unrolled parquets: results/classification/unrolled/**/*.parquet (excluding baseline/).
+    Baseline parquets: results/classification/unrolled/baseline/**/*.parquet
     """
     from matplotlib.lines import Line2D
     from matplotlib.ticker import FuncFormatter
@@ -2340,7 +2347,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         baseline_root / "h0_transfer", baseline_root / "h0_transfer_wa", _WS_SHOW
     )
 
-    # warm-start init accuracy (written by _ensure_ws_accuracy in unrolled.py)
+    # warm-start init accuracy (written by _ensure_ws_accuracy, warm_start_cache.py)
     _ws_acc_path = unrolled_root / "joint" / "warmstart" / "ws_accuracy.parquet"
     df_ws_acc: pl.DataFrame | None = (
         pl.read_parquet(_ws_acc_path) if _ws_acc_path.exists() else None
@@ -2460,6 +2467,12 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         k_mins.append(int(df_bt["K"].min()))
         k_maxs.append(int(df_bt["K"].max()))
     x_min, x_max = min(k_mins), max(k_maxs)
+    if df_u is not None:
+        x_max = int(df_u["K"].max())
+        if df_b is not None:
+            df_b = df_b.filter(pl.col("K") <= x_max)
+        if df_bt is not None:
+            df_bt = df_bt.filter(pl.col("K") <= x_max)
     # warm-start point sits slightly left of K_min in linear scale
     ws_x = -3
 
@@ -2908,7 +2921,7 @@ def main() -> None:
     """Generate all publication plots for every dataset found in the results.
 
     Iterates over all distinct ``dataset`` values in the Parquet files and
-    saves plots to ``results/plots/{dataset}/`` for each one.
+    saves plots to ``results/classification/plots/{dataset}/`` for each one.
     Falls back to a single run with ``_DATASET="unknown"`` when the column is absent.
     """
     global _DATASET, IMG_PATH, _cache

@@ -23,6 +23,7 @@ from tqdm.auto import tqdm  # noqa: F401  (kept for any downstream importers)
 
 from ..._cascade import xi_to_phasor
 from ...core import optimize_mono
+from ._tied import TiedBuffersModule
 
 
 class MonoSIMoptimizer:
@@ -152,8 +153,9 @@ class MonoSIMoptimizer:
         if L == 1:
             return [self._calculate_W("input", "output")]
         W_list = [self._calculate_W("input", "intermediate")]
-        for _ in range(L - 2):
-            W_list.append(self._calculate_W("intermediate", "intermediate"))
+        if L > 2:
+            # All interior matrices are identical: compute once, share the array.
+            W_list.extend([self._calculate_W("intermediate", "intermediate")] * (L - 2))
         W_list.append(self._calculate_W("intermediate", "output"))
         return W_list
 
@@ -216,7 +218,7 @@ class MonoSIMoptimizer:
         return W
 
 
-class MonoSIMoptimizerTorch(nn.Module):
+class MonoSIMoptimizerTorch(TiedBuffersModule):
     """PyTorch Mono-SIM with trainable phase shifts and gradient-based optimization.
 
     Parameters
@@ -244,8 +246,7 @@ class MonoSIMoptimizerTorch(nn.Module):
         self.side = sim_cpu.side
 
         # Register propagation matrices as buffers (not trainable)
-        for i, W in enumerate(sim_cpu.W):
-            self.register_buffer(f"W_{i}", torch.tensor(W, dtype=torch.complex64))
+        self.register_W_buffers("W", sim_cpu.W)
 
         # Phase logits as trainable parameters
         self.xi = nn.ParameterList(

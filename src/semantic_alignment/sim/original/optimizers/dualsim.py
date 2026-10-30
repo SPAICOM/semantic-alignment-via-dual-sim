@@ -29,6 +29,7 @@ from tqdm.auto import tqdm  # noqa: F401  (kept for any downstream importers)
 
 from ..._cascade import xi_to_phasor
 from ...core import optimize_joint
+from ._tied import TiedBuffersModule
 
 
 class DualSIMoptimizer:
@@ -152,8 +153,9 @@ class DualSIMoptimizer:
             W_list.append(self._calculate_W(type_in, type_out))
         else:
             W_list.append(self._calculate_W(type_in, type_int))
-            for _ in range(L - 2):
-                W_list.append(self._calculate_W(type_int, type_int))
+            if L > 2:
+                # All interior matrices are identical: compute once, share the array.
+                W_list.extend([self._calculate_W(type_int, type_int)] * (L - 2))
             W_list.append(self._calculate_W(type_int, type_out))
         return W_list
 
@@ -252,7 +254,7 @@ class DualSIMoptimizer:
         return np.vdot(z_vec, a_vec) / np.vdot(z_vec, z_vec)
 
 
-class DualSIMoptimizerTorch(nn.Module):
+class DualSIMoptimizerTorch(TiedBuffersModule):
     """PyTorch Dual-SIM with trainable phase shifts and gradient-based optimization.
 
     Wraps a :class:`DualSIMoptimizer` by registering its propagation matrices as
@@ -283,11 +285,9 @@ class DualSIMoptimizerTorch(nn.Module):
         self.L_R = sim_cpu.L_R
 
         # Register TX propagation matrices as buffers
-        for i, W in enumerate(sim_cpu.W_TX):
-            self.register_buffer(f"W_T_{i}", torch.tensor(W, dtype=torch.complex64))
+        self.register_W_buffers("W_T", sim_cpu.W_TX)
         # Register RX propagation matrices as buffers
-        for i, W in enumerate(sim_cpu.W_RX):
-            self.register_buffer(f"W_R_{i}", torch.tensor(W, dtype=torch.complex64))
+        self.register_W_buffers("W_R", sim_cpu.W_RX)
 
         # TX phase logits (trainable)
         self.xi_T = nn.ParameterList(

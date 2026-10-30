@@ -1,0 +1,11 @@
+# Single reconstruction-alignment run (no multirun). Uses the same sim/ and training/
+# configs as classification — swap the architecture with e.g.
+#   sim=mono training=mono  |  sim=disjoint_sym training=disjoint
+# and the strategy with alignment/reconstruction=linear.
+defaults:
+  - sim: joint
+  - alignment/reconstruction: ppfe
+  - datasets/reconstruction: cifar10
+  - reconstruction: default
+  - training: joint
+  - _self_

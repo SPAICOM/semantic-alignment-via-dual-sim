@@ -19,7 +19,7 @@ Examples
     just run-joint
     just run-mono
     just run-disjoint-asym
-    just run-joint datasets=cifar100 alignment=linear
+    just run-joint datasets=cifar100 alignment/classification=linear
 """
 
 import os
@@ -39,11 +39,10 @@ from semantic_alignment.data.prepare import prepare_semasia
 from semantic_alignment.evaluation.linear_probe import clf_accuracy, train_linear_probe
 from semantic_alignment.evaluation.neural_classifier import load_neural_clf
 from semantic_alignment.evaluation.original_accuracy import run_original_accuracy
-from semantic_alignment.sim.original._utils import make_fname, tipology_tag
+from semantic_alignment.evaluation.tasks import ClassificationTask
+from semantic_alignment.sim.original._utils import RESULTS_DIR, make_fname, tipology_tag
 from semantic_alignment.utils import channel as _channel_fn
 from semantic_alignment.utils import standardize_channel
-
-_RESULTS = Path("results")
 
 
 def _snr_tag(snr) -> str:
@@ -86,9 +85,6 @@ def _out_path(cfg: DictConfig) -> Path | None:
         if "lr_search" in result_subdir and lr_tx is not None and lr_rx is not None
         else ""
     )
-    ch_type = sim.get("channel_type", "rayleigh")
-    kdb = sim.get("rice_factor_db", None)
-    ch_tag = f"_rician{kdb}dB" if ch_type == "rician" else ""
     fname = make_fname(
         strategy,
         seed,
@@ -102,9 +98,14 @@ def _out_path(cfg: DictConfig) -> Path | None:
         s_rx,
         n_clusters,
         dataset=dataset,
-        extra_tag=lr_tag + ch_tag,
+        extra_tag=lr_tag,
+        channel_type=sim.get("channel_type", "rayleigh"),
+        rice_factor_db=sim.get("rice_factor_db", None),
+        cluster_on=cfg.alignment.get("cluster_on", "pilots"),
     )
-    return _RESULTS / result_subdir / topo / fname if topo else _RESULTS / result_subdir / fname
+    return (
+        RESULTS_DIR / result_subdir / topo / fname if topo else RESULTS_DIR / result_subdir / fname
+    )
 
 
 def _setup(cfg: DictConfig) -> dict:
@@ -205,6 +206,7 @@ def _setup(cfg: DictConfig) -> dict:
         n_clusters=n_k,
         n_proto=cfg.alignment.get("n_proto", None),
         keep_csi_frames=is_csi,
+        cluster_on=cfg.alignment.get("cluster_on", "pilots"),
         method=cfg.data.method,
         grouping=cfg.data.grouping,
         label_col=cfg.datasets.label_col,
@@ -334,7 +336,8 @@ def _setup(cfg: DictConfig) -> dict:
 def main(cfg: DictConfig) -> None:
     """Hydra entry point — load data, build the alignment, run the experiment.
 
-    Dispatches to the correct experiment runner via ``hydra.utils.instantiate``
+    Wraps the classifiers and baselines in a :class:`ClassificationTask` and
+    dispatches to the (task-agnostic) SIM runner via ``hydra.utils.instantiate``
     using the ``_target_`` field in the experiment YAML.  Skips the job when
     the output Parquet file already exists.
 
@@ -359,6 +362,25 @@ def main(cfg: DictConfig) -> None:
     )
 
     ctx = _setup(cfg)
+    task = ClassificationTask(
+        **{
+            k: ctx.pop(k)
+            for k in (
+                "test_loader",
+                "L_in",
+                "mu_in",
+                "L_out",
+                "mu_out",
+                "clf",
+                "no_mismatch_probe",
+                "original_probe",
+                "clf_neural",
+                "no_mismatch_neural",
+                "original_neural",
+            )
+        },
+        device=ctx["device"],
+    )
     F_T = ctx.pop("F_T")
     F_R_H = ctx.pop("F_R_H")
     # joint-specific params — absent in mono/disjoint training configs
@@ -370,6 +392,7 @@ def main(cfg: DictConfig) -> None:
     instantiate(
         cfg.sim,
         _recursive_=False,
+        task=task,
         slayer=cfg.sim.wavelength * cfg.sim.slayer_multiplier,
         dx=cfg.sim.wavelength / cfg.sim.spacing_divisor,
         clip_value=clip_value,
@@ -378,6 +401,7 @@ def main(cfg: DictConfig) -> None:
         F_T=F_T,
         F_R_H=F_R_H,
         n_clusters=n_clusters,
+        cluster_on=cfg.alignment.get("cluster_on", "pilots"),
         dataset=cfg.datasets.hf_name,
         **ctx,
     )

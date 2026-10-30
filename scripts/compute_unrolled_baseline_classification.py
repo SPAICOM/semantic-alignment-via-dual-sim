@@ -5,7 +5,7 @@ and records probe/neural accuracy at every step.  Saves one parquet per test
 channel so the job is resumable: existing files are skipped.
 
 Output directory:
-  results/unrolled/baseline/{ws_type}/{config_tag}/
+  results/classification/unrolled/baseline/{ws_type}/{config_tag}/
     0000.parquet  ← test channel 0
     0001.parquet
     ...
@@ -15,7 +15,7 @@ Each parquet has one row with columns:
   warm_start_type, + metadata.
 
 Usage:
-  uv run python scripts/compute_unrolled_baseline.py \\
+  uv run python scripts/compute_unrolled_baseline_classification.py \\
     datasets/channel=default training.gpu=0
     [training.warm_start_type=none|only_semantic|average]
 """
@@ -35,20 +35,21 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 
 sys.path.insert(0, str(Path(__file__).parent))
+from unrolled_classification import _setup
+from unrolled_pipeline import _strategy_tag
 from warm_start_cache import _run_warm_start_cached
 
 from semantic_alignment.data import HChannelDataModule
+from semantic_alignment.evaluation.inference import cascade_accuracies as _eval_accuracies
 from semantic_alignment.sim._cascade import build_cascade_RX, build_cascade_TX
 from semantic_alignment.sim.core import _compute_beta
-from semantic_alignment.sim.original._utils import ch_dims
+from semantic_alignment.sim.original._utils import RESULTS_DIR, ch_dims
 from semantic_alignment.sim.original.joint import JointSIM
-from semantic_alignment.sim.unrolled.runner import _eval_accuracies
 from semantic_alignment.utils import standardize_channel
-from unrolled import _setup
 
 torch.set_float32_matmul_precision("high")
 
-_RESULTS = Path("results")
+_RESULTS = RESULTS_DIR
 _BASELINE_ROOT = _RESULTS / "unrolled" / "baseline"
 
 
@@ -151,6 +152,8 @@ def main(cfg: DictConfig) -> None:
             rx_enc=ctx["rx_enc"],
             L=L,
             M_int=M_int,
+            dataset=ctx["dataset"],
+            strategy=_strategy_tag(cfg),
         )
     else:
         ws_phT, ws_phR, ws_opt_state = [], [], {}

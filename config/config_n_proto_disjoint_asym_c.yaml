@@ -1,6 +1,6 @@
 defaults:
   - sim: disjoint_asym
-  - alignment: ppfe
+  - alignment/classification: ppfe
   - datasets/classification: cifar10
   - data: default
   - training: disjoint

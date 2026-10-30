@@ -1,0 +1,9 @@
+# @package _global_.alignment
+# Supervised Ridge Regression alignment for image reconstruction.
+# Same fields as alignment/classification/linear.yaml, including the classification-tuned
+# joint LRs (they take precedence over training/* lr_tx/lr_rx).
+
+type: Linear
+lmb: 0.001       # L2 regularisation weight (no-channel sweep: no effect over 0..1.0)
+lr_tx: 0.03      # optimal joint LR, same as classification (tuned via joint_lr_search)
+lr_rx: 0.04      # optimal joint LR, same as classification (tuned via joint_lr_search)
