@@ -2560,6 +2560,28 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     )
                     if sub_bt_pd.empty:
                         continue
+                    # WS → K=1 dotted connection for H0-transfer baseline
+                    if _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list():
+                        _acc_col_name = (
+                            "ws_acc_probe" if "ws_acc_probe" in df_ws_acc.columns else "ws_acc"
+                        )
+                        _h0v_expr_ws = (
+                            pl.col("h0_var").is_null() if h0v is None else (pl.col("h0_var") == h0v)
+                        )
+                        _row_ws = df_ws_acc.filter((pl.col("warm_start_type") == ws) & _h0v_expr_ws)
+                        _k1_bt = sub_bt_pd[sub_bt_pd["K"] == 1]
+                        if not _row_ws.is_empty() and not _k1_bt.empty:
+                            ax.plot(
+                                [ws_x, 1],
+                                [
+                                    float(_row_ws[_acc_col_name].mean()),
+                                    float(_k1_bt["acc"].iloc[0]),
+                                ],
+                                color=color,
+                                linestyle=":",
+                                linewidth=1.5,
+                                zorder=2,
+                            )
                     ax.plot(
                         sub_bt_pd["K"],
                         sub_bt_pd["acc"],
@@ -2590,7 +2612,35 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
             sub_b = df_b.filter(pl.col("warm_start_type") == ws).sort("K")
             if not sub_b.is_empty():
                 agg_b = sub_b.filter(pl.col("K").is_in(list(_SHOW_KS))).sort("K").to_pandas()
-                ax.plot(agg_b["K"], agg_b["mean"], color="black", linestyle="-.", linewidth=1.5)
+                # WS → K=1 dotted connection for oracle (black)
+                if _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list():
+                    _acc_col_name = (
+                        "ws_acc_probe" if "ws_acc_probe" in df_ws_acc.columns else "ws_acc"
+                    )
+                    _row_ws_or = df_ws_acc.filter(
+                        (pl.col("warm_start_type") == ws) & pl.col("h0_var").is_null()
+                    )
+                    _k1_or = agg_b[agg_b["K"] == 1]
+                    if not _row_ws_or.is_empty() and not _k1_or.empty:
+                        ax.plot(
+                            [ws_x, 1],
+                            [
+                                float(_row_ws_or[_acc_col_name].mean()),
+                                float(_k1_or["mean"].iloc[0]),
+                            ],
+                            color="black",
+                            linestyle=":",
+                            linewidth=1.5,
+                            zorder=2,
+                        )
+                ax.plot(
+                    agg_b["K"],
+                    agg_b["mean"],
+                    color="black",
+                    linestyle="-.",
+                    linewidth=1.5,
+                    zorder=3,
+                )
                 ax.fill_between(agg_b["K"], agg_b["lo"], agg_b["hi"], color="black", alpha=0.15)
 
         # Warm-start init: marker + dotted line to K=x_min, same marker as h_var line
@@ -2618,7 +2668,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                             color=color_map[h0v],
                             linestyle=":",
                             linewidth=1.5,
-                            zorder=4,
+                            zorder=2,
                         )
                 ax.plot(
                     [ws_x],

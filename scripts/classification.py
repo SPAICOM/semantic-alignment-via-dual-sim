@@ -63,7 +63,7 @@ def _out_path(cfg: DictConfig) -> Path | None:
     rx = cfg.data.rx_enc
     M = sim.M_int
     ch_dim = sim.get("channel_dim", None)
-    if ch_dim is None:
+    if ch_dim is None or sim.get("sim_type", "") == "mono":
         # ch_dim is computed from A_target at runtime — can't determine path statically
         return None
     snr_raw = sim.get("snr", None)

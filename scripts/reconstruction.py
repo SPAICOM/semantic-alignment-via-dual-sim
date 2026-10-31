@@ -91,7 +91,7 @@ def _n_clusters(cfg: DictConfig) -> int | None:
 def _ch_dim(cfg: DictConfig, A_shape: tuple[int, int]) -> int:
     """Channel dimension the runner will use (``disjoint_asym`` follows the aligned side)."""
     sim = cfg.sim
-    if sim.get("sim_type", "") == "disjoint_asym":
+    if sim.get("sim_type", "") in ("disjoint_asym", "mono"):
         return A_shape[1] if sim.get("alignment_side", "tx") == "rx" else A_shape[0]
     ch_dim = sim.get("channel_dim", None)
     return int(ch_dim) if ch_dim is not None else int(max(A_shape))

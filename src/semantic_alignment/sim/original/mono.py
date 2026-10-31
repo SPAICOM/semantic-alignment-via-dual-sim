@@ -200,7 +200,8 @@ class MonoSIM(SIMRunner):
         subdir = (
             result_subdir if result_subdir else ("mono_snr" if snr is not None else "mono_layers")
         )
-        ch_dim = channel_dim if channel_dim is not None else int(max(A_target.shape))
+        # Actual channel size (see draw_channel); ``channel_dim`` is ignored by the Mono-SIM.
+        ch_dim = int(A_target.shape[1]) if alignment_side == "rx" else int(A_target.shape[0])
 
         fname = make_fname(
             strategy_name,
