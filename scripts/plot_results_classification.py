@@ -2683,6 +2683,31 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
                     clip_on=False,
                 )
 
+        # Bring all markers to the front: strip them from their original Line2D
+        # objects (which share zorder with the line) and re-draw them as pure
+        # marker artists at zorder=20, so they always sit above every line/band.
+        for _ln in list(ax.get_lines()):
+            _mk = _ln.get_marker()
+            if not _mk or _mk in ("", "None", "none"):
+                continue
+            _xd, _yd = _ln.get_xdata(), _ln.get_ydata()
+            if not len(_xd):
+                continue
+            ax.plot(
+                _xd,
+                _yd,
+                marker=_mk,
+                markersize=_ln.get_markersize(),
+                color=_ln.get_color(),
+                markerfacecolor=_ln.get_markerfacecolor(),
+                markeredgecolor=_ln.get_markeredgecolor(),
+                markeredgewidth=_ln.get_markeredgewidth(),
+                linestyle="none",
+                zorder=20,
+                clip_on=_ln.get_clip_on(),
+            )
+            _ln.set_marker("none")
+
         _ws_col = _has_ws_acc and ws in df_ws_acc["warm_start_type"].unique().to_list()
         ax.set_xlim(ws_x if _ws_col else x_min, x_max)
         from matplotlib.ticker import FixedLocator
