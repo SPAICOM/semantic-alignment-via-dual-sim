@@ -59,11 +59,20 @@ class PixelShuffleUpsample(nn.Module):
     """
 
     def __init__(self, in_channels: int, out_channels: int):
+        """
+        Parameters
+        ----------
+        in_channels : int
+            Channels of the input feature map.
+        out_channels : int
+            Channels of the (2x larger) output feature map.
+        """
         super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels * 4, kernel_size=3, padding=1)
         self.shuffle = nn.PixelShuffle(2)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Upsample ``(N, C_in, H, W)`` to ``(N, C_out, 2H, 2W)``."""
         return self.shuffle(self.conv(x))
 
 
@@ -79,6 +88,12 @@ class ResidualBlock(nn.Module):
     """
 
     def __init__(self, channels: int):
+        """
+        Parameters
+        ----------
+        channels : int
+            Number of input and output channels (the block preserves shape).
+        """
         super().__init__()
         self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(channels)
@@ -92,6 +107,7 @@ class ResidualBlock(nn.Module):
         nn.init.zeros_(self.bn2.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return ``act(x + F(x))`` with the same shape as ``x``."""
         h = self.act(self.bn1(self.conv1(x)))
         h = self.bn2(self.conv2(h))
         return self.act(h + x)
@@ -269,6 +285,7 @@ def _mmd(z: torch.Tensor, prior_samples: torch.Tensor) -> torch.Tensor:
     """
 
     def _kernel(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        """Pairwise RBF kernel matrix ``(len(a), len(b))`` with bandwidth ``σ² = D``."""
         dim = a.size(1)
         dist_sq = ((a.unsqueeze(1) - b.unsqueeze(0)) ** 2).sum(-1)
         return torch.exp(-dist_sq / (2.0 * dim))
@@ -289,6 +306,7 @@ class VGGPerceptualLoss(nn.Module):
     """
 
     def __init__(self):
+        """Load the frozen, ImageNet-pretrained VGG16 trunk (through ``relu2_2``)."""
         super().__init__()
         # Imported lazily: torchvision is only needed when perceptual_weight > 0.
         import torchvision.models as tv_models
@@ -302,9 +320,25 @@ class VGGPerceptualLoss(nn.Module):
         self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
 
     def forward(self, x_hat: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+        """MSE between VGG features of ``x_hat`` and ``x`` (images in ``[0, 1]``).
+
+        Parameters
+        ----------
+        x_hat : torch.Tensor
+            Reconstruction, shape ``(N, C, H, W)`` with ``C`` in ``{1, 3}``.
+        x : torch.Tensor
+            Target image, same shape as ``x_hat``.
+
+        Returns
+        -------
+        torch.Tensor
+            Scalar perceptual loss.
+        """
+        # VGG expects RGB: replicate grayscale across the three channels.
         if x_hat.shape[1] == 1:
             x_hat = x_hat.repeat(1, 3, 1, 1)
             x = x.repeat(1, 3, 1, 1)
+        # ImageNet normalisation, matching the pretrained weights.
         x_hat_n = (x_hat - self.mean) / self.std
         x_n = (x - self.mean) / self.std
         return F.mse_loss(self.vgg(x_hat_n), self.vgg(x_n))
@@ -399,6 +433,35 @@ class ConvVAEModule(L.LightningModule):
         max_epochs: int = 100,
         lr: float = 1e-3,
     ):
+        """
+        Parameters
+        ----------
+        in_channels, image_size, latent_dim, channel_widths, use_residual
+            Architecture arguments forwarded to :class:`ConvVAE`.
+        beta : float, optional
+            Target KL weight, reached after ``beta_warmup_epochs``.
+        beta_warmup_epochs : int, optional
+            Epochs of the linear KL-weight ramp.
+        l1_weight : float, optional
+            Weight of the L1 reconstruction term.
+        ssim_weight, ssim_warmup_epochs : float, int, optional
+            Target weight and ramp length of the ``1 - SSIM`` term.
+        free_bits : float, optional
+            Per-dimension KL floor in nats (0 disables).
+        sigma_vae : bool, optional
+            Use the calibrated-decoder ``log(MSE)`` loss instead of raw MSE.
+        mmd_weight, mmd_warmup_epochs : float, int, optional
+            Target weight and ramp length of the InfoVAE MMD² regulariser.
+        perceptual_weight, perceptual_warmup_epochs, perceptual_start_epoch : float, int, int
+            Target weight, ramp length and first active epoch of the VGG
+            perceptual loss.
+        use_cosine_schedule : bool, optional
+            Cosine-anneal the learning rate over ``max_epochs``.
+        max_epochs : int, optional
+            Schedule horizon for the cosine annealing.
+        lr : float, optional
+            Initial Adam learning rate.
+        """
         super().__init__()
         self.save_hyperparameters()
         self.model = ConvVAE(
@@ -410,6 +473,7 @@ class ConvVAEModule(L.LightningModule):
         self.perceptual_loss = VGGPerceptualLoss() if perceptual_weight > 0 else None
 
     def forward(self, x):
+        """Run the VAE; returns ``(x_hat, mu, logvar)`` (see :meth:`ConvVAE.forward`)."""
         return self.model(x)
 
     @staticmethod
@@ -426,21 +490,25 @@ class ConvVAEModule(L.LightningModule):
         return target * frac
 
     def _current_beta(self) -> float:
+        """Warm-up-scheduled KL weight (``beta``) for the current epoch."""
         return self._linear_warmup(
             self.hparams.beta, self.hparams.beta_warmup_epochs, self.current_epoch
         )
 
     def _current_ssim_weight(self) -> float:
+        """Warm-up-scheduled SSIM-term weight for the current epoch."""
         return self._linear_warmup(
             self.hparams.ssim_weight, self.hparams.ssim_warmup_epochs, self.current_epoch
         )
 
     def _current_mmd_weight(self) -> float:
+        """Warm-up-scheduled MMD-term weight for the current epoch."""
         return self._linear_warmup(
             self.hparams.mmd_weight, self.hparams.mmd_warmup_epochs, self.current_epoch
         )
 
     def _current_perceptual_weight(self) -> float:
+        """Warm-up-scheduled perceptual-loss weight for the current epoch."""
         return self._linear_warmup(
             self.hparams.perceptual_weight,
             self.hparams.perceptual_warmup_epochs,
@@ -449,6 +517,20 @@ class ConvVAEModule(L.LightningModule):
         )
 
     def _loss(self, batch):
+        """Compute the full training objective and all logged components.
+
+        Parameters
+        ----------
+        batch : tuple of torch.Tensor
+            Single-element tuple ``(x,)`` with images ``(N, C, H, W)`` in ``[0, 1]``.
+
+        Returns
+        -------
+        tuple
+            ``(loss, recon, mse, kl, beta, ssim_val, mmd, mmd_w, perceptual,
+            perceptual_w)``: total loss, reconstruction part, raw pixel MSE,
+            KL, then each regulariser's value and its current weight.
+        """
         (x,) = batch
         x_hat, mu, logvar = self.model(x)
         mse = F.mse_loss(x_hat, x, reduction="mean")
@@ -494,6 +576,7 @@ class ConvVAEModule(L.LightningModule):
         return loss, recon, mse, kl, beta, ssim_val, mmd, mmd_w, perceptual, perceptual_w
 
     def training_step(self, batch, _):
+        """Optimise the total loss and log all components per epoch."""
         loss, recon, mse, kl, beta, ssim_val, mmd, mmd_w, perceptual, perceptual_w = self._loss(
             batch
         )
@@ -518,6 +601,7 @@ class ConvVAEModule(L.LightningModule):
         return loss
 
     def validation_step(self, batch, _):
+        """Log validation losses; ``val_mse`` drives early stopping / checkpointing."""
         loss, recon, mse, kl, beta, ssim_val, mmd, mmd_w, perceptual, perceptual_w = self._loss(
             batch
         )
@@ -537,6 +621,7 @@ class ConvVAEModule(L.LightningModule):
         )
 
     def configure_optimizers(self):
+        """Adam, optionally with per-epoch cosine annealing down to ``0.01 * lr``."""
         opt = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
         if not self.hparams.use_cosine_schedule:
             return opt
@@ -554,6 +639,7 @@ def _to_wandb_pair(original: torch.Tensor, reconstruction: torch.Tensor, caption
     reconstruction quality. One combined image removes the ambiguity.
     """
     import numpy as np
+
     import wandb
 
     orig = original.detach().clamp(0, 1).cpu().numpy()
@@ -572,10 +658,19 @@ class ReconstructionImageLogger(L.pytorch.callbacks.Callback):
     """
 
     def __init__(self, val_images: torch.Tensor, num_images: int = 5):
+        """
+        Parameters
+        ----------
+        val_images : torch.Tensor
+            Validation images ``(N, C, H, W)``; the first ``num_images`` are logged.
+        num_images : int, optional
+            Number of fixed images to track across epochs.
+        """
         super().__init__()
         self.val_images = val_images[:num_images]
 
     def on_validation_epoch_end(self, trainer: L.Trainer, pl_module: ConvVAEModule) -> None:
+        """Reconstruct the tracked images and log ``original | reconstruction`` pairs."""
         if trainer.sanity_checking or not isinstance(trainer.logger, WandbLogger):
             return
 

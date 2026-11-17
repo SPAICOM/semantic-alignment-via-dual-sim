@@ -77,6 +77,7 @@ def _run_warm_start(
     opt_R = torch.optim.Adam(phases_R, lr=lr_rx)
 
     def _fwd():
+        """Effective cascade ``G_R H_ws G_T`` for the current warm-start phases."""
         G_T = build_cascade_TX(W_T, [p.unsqueeze(0) for p in phases_T]).squeeze(0)
         G_R = build_cascade_RX(W_R, [p.unsqueeze(0) for p in phases_R]).squeeze(0)
         return G_R @ H_ws @ G_T
@@ -140,6 +141,36 @@ def _ws_cache_path(
     root: Path = _WS_CACHE_ROOT,
     prefix: str = "",
 ) -> Path:
+    """Path of the warm-start cache file for one configuration.
+
+    Parameters
+    ----------
+    ws_type : str
+        Warm-start type (``only_semantic`` or ``average``).
+    L, M_int : int
+        SIM layer count and intermediate meta-atoms.
+    tx_enc, rx_enc : str
+        Encoder names (``/`` is replaced by ``-``).
+    ws_t : int
+        Warm-start iterations.
+    seed : int
+        Training seed.
+    h0v : float or None
+        Channel variance of the ``H_0`` used for ``average`` warm starts.
+    ch_type : str
+        Channel type.
+    dataset, strategy : str
+        Dataset name and alignment strategy.
+    root : Path, optional
+        Cache root directory.
+    prefix : str, optional
+        Optional filename prefix.
+
+    Returns
+    -------
+    Path
+        Location of the ``.pt`` cache file.
+    """
     enc_tag = f"{tx_enc.replace('/', '-')}_{rx_enc.replace('/', '-')}"
     arch = f"{dataset}_{strategy}_L{L}_M{M_int}_{enc_tag}_t{ws_t}"
     match ws_type:

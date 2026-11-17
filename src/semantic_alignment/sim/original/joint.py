@@ -267,6 +267,7 @@ class JointSIM(SIMRunner):
         curve: list[dict] = []
 
         def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
+            """Per-iteration callback: record the task metric for the current cascade."""
             curve.append(task.evaluate_step(cascade_transmit(Z_eff, beta, snr)))
 
         model, _, beta, loss_history = self.solve(

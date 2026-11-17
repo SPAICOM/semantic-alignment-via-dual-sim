@@ -277,6 +277,7 @@ class Disjoint2SIM(SIMRunner):
         def _link(
             tx: MonoSIMoptimizerTorch, rx: MonoSIMoptimizerTorch, beta_g: torch.Tensor
         ) -> Transmit:
+            """Freeze both SIMs and build the end-to-end transmit function."""
             tx.eval()
             rx.eval()
             with torch.no_grad():
@@ -292,9 +293,17 @@ class Disjoint2SIM(SIMRunner):
             beta_R_last = torch.tensor(1.0, dtype=torch.complex64, device=device)
 
             def _beta(Z: torch.Tensor, A: torch.Tensor) -> torch.Tensor:
+                """Closed-form complex MMSE scale ``β = <Z, A> / <Z, Z>`` (least-squares fit of ``βZ`` to ``A``)."""
                 return torch.sum(torch.conj(Z) * A) / (torch.sum(torch.conj(Z) * Z) + 1e-12)
 
             def _step(model, opt_m, tgt, left, right):
+                """One Adam step on a single SIM; the other side is held fixed.
+
+                ``left`` / ``right`` are the fixed matrices flanking this SIM's
+                cascade in the end-to-end product (``None`` if absent). β is
+                recomputed in closed form and treated as a constant (detached).
+                Returns the scalar loss and the β used.
+                """
                 model.train()
                 with torch.no_grad():
                     G = model.get_cascade()

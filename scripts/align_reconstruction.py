@@ -24,9 +24,9 @@ import random
 import hydra
 import numpy as np
 import torch
-import wandb
 from omegaconf import DictConfig, OmegaConf
 
+import wandb
 from semantic_alignment.data.reconstruction import compute_alignment, prepare_reconstruction
 from semantic_alignment.evaluation.reconstruction import (
     psnr,

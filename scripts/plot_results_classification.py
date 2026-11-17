@@ -382,6 +382,7 @@ def accuracy_vs_simlayers() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -449,6 +450,7 @@ def accuracy_vs_snr() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -516,6 +518,7 @@ def accuracy_vs_disjoint_asym_layers() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -579,6 +582,7 @@ def accuracy_vs_thickness() -> None:
     srx_labels = sorted(df[r"$s_{\rm layer}^{\rm RX}$"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -783,7 +787,10 @@ def _accuracy_vs_thickness_grid_one(acc_col: str, kind: str, suffix: str) -> Non
 
     # s_RX legend — centered above last subplot
     class _HandlerEmpty(HandlerBase):
+        """Legend handler that draws nothing (used for text-only spacer entries)."""
+
         def legend_artist(self, legend, orig_handle, fontsize, handlebox):
+            """Add an invisible zero-size patch so the entry keeps its row but shows no marker."""
             patch = _Rect((0, 0), 0, 0, fill=False, edgecolor="none", linewidth=0)
             handlebox.add_artist(patch)
             return patch
@@ -890,6 +897,7 @@ def accuracy_vs_mono_layers() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -955,6 +963,7 @@ def accuracy_vs_mono_snr() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -1021,6 +1030,7 @@ def accuracy_vs_disjoint_asym_snr() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -1082,6 +1092,7 @@ def accuracy_vs_disjoint_sym_layers() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -1142,6 +1153,7 @@ def accuracy_vs_disjoint_sym_snr() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -1203,6 +1215,7 @@ def accuracy_vs_disjoint_4sim_layers() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -1263,6 +1276,7 @@ def accuracy_vs_disjoint_4sim_snr() -> None:
     strat_labels = sorted(df["strategy"].unique().to_list())
 
     def _make_legend(lbl_list, title, **kwargs):
+        """Draw a legend on ``ax`` holding only the handles whose label is in ``lbl_list``."""
         hdls = [handles[labels.index(lbl)] for lbl in lbl_list if lbl in labels]
         return ax.legend(hdls, lbl_list, title=title, frameon=True, framealpha=1, **kwargs)
 
@@ -2335,6 +2349,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
     _WS_SHOW = {"none", "only_semantic"}
 
     def _pick_files(cold_root, wa_root, ws_types):
+        """Collect parquet files per warm-start type, preferring the ``_wa`` variant if it exists."""
         files = []
         for ws in ws_types:
             src = wa_root / ws if (wa_root / ws).exists() else cold_root / ws
@@ -2718,6 +2733,7 @@ def _unrolled_accuracy_grid_one(acc_col: str, curve_col: str, suffix: str) -> No
         ax.xaxis.set_major_locator(FixedLocator(_k_ticks))
 
         def _ws_fmt(x, pos, _wx=ws_x, _wc=_ws_col):
+            """Tick formatter: label the warm-start position ``"WS"``, others as integers."""
             if _wc and x == _wx:
                 return "WS"
             return str(int(x))

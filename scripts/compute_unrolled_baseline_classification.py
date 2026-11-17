@@ -54,6 +54,24 @@ _BASELINE_ROOT = _RESULTS / "unrolled" / "baseline"
 
 
 def _config_tag(cfg: DictConfig, ch_dim: int, K_max: int) -> str:
+    """Build the directory name that identifies one baseline configuration.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra config (dataset, alignment, SIM sizes, seed, channel, encoders).
+    ch_dim : int
+        Channel dimension ``n_R = n_T``.
+    K_max : int
+        Number of baseline Adam iterations.
+
+    Returns
+    -------
+    str
+        Tag of the form ``{dataset}_{alignment}_L{L}_M{M}_ch{d}_K{K}_seed{s}_{channel}_{encoders}``.
+    """
+    # ``h0_var`` selects the channel model: 0 → deterministic, finite → Rician-like
+    # (Rayleigh + fixed LoS of that variance), None/inf → pure Rayleigh.
     dm = cfg.channel_dm
     h0v = dm.get("h0_var", None)
     match h0v:
@@ -73,6 +91,13 @@ def _config_tag(cfg: DictConfig, ch_dim: int, K_max: int) -> str:
 
 @hydra.main(version_base=None, config_path="../config", config_name="config_unrolled_baseline")
 def main(cfg: DictConfig) -> None:
+    """Run the alternating-Adam baseline on every test channel (resumable).
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra config (``config_unrolled_baseline``).
+    """
     gpu = cfg.training.get("gpu", None)
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
@@ -242,6 +267,7 @@ def main(cfg: DictConfig) -> None:
                 opt_R_o.load_state_dict(ws_opt_state["R"])
 
             def _fwd_o(_pT=phases_T_o, _pR=phases_R_o, _H=H):
+                """Effective cascade ``G_R H G_T`` of the oracle (per-channel) phases."""
                 G_T = build_cascade_TX(W_T_o, [p.unsqueeze(0) for p in _pT]).squeeze(0)
                 G_R = build_cascade_RX(W_R_o, [p.unsqueeze(0) for p in _pR]).squeeze(0)
                 return G_R @ _H @ G_T
@@ -352,6 +378,7 @@ def main(cfg: DictConfig) -> None:
         H_test_stack = torch.stack(test_channels_dev)  # (N_test, n_R, n_T)
 
         def _fwd():
+            """Effective cascade ``G_R H_0 G_T`` for the phases optimised on ``H_0``."""
             G_T = build_cascade_TX(W_T, [p.unsqueeze(0) for p in phases_T]).squeeze(0)
             G_R = build_cascade_RX(W_R, [p.unsqueeze(0) for p in phases_R]).squeeze(0)
             return G_R @ H0 @ G_T

@@ -230,6 +230,7 @@ class MonoSIM(SIMRunner):
         H_torch = self.draw_channel(A_target, alignment_side, device, channel_type, rice_factor_db)
 
         def _link(G: torch.Tensor, Z_eff: torch.Tensor, beta: torch.Tensor) -> Transmit:
+            """Build the transmit function for the trained mono-SIM (see ``constructive``)."""
             # Constructive: Z_eff = H·G_T (tx) or G_R·H (rx) already includes the channel.
             if constructive:
                 return cascade_transmit(Z_eff, beta, snr)
@@ -238,6 +239,7 @@ class MonoSIM(SIMRunner):
         curve: list[dict] = []
 
         def _eval_fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
+            """Per-iteration callback: record the task metric for the current cascade."""
             curve.append(task.evaluate_step(_link(Z_eff, Z_eff, beta)))
 
         sim_model, G_f, Z_eff, beta, loss_history = self.solve(

@@ -405,9 +405,14 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
 
         for k in range(k_run):
             if use_ckpt:
-
+                # Gradient checkpointing: each unrolled step is wrapped in a function of
+                # flat tensors only (phases then momenta), so activations are recomputed
+                # in the backward pass instead of stored. ``k_`` binds the iteration index.
                 def _make_step(k_):
+                    """Bind iteration index ``k_`` and return the checkpointable step function."""
+
                     def _step(*flat):
+                        """One TX+RX unrolled update; unpacks/repacks ``flat`` = (phT, phR, vT, vR)."""
                         _phT = list(flat[:n_T])
                         _phR = list(flat[n_T : n_T + n_R])
                         _vT = list(flat[n_T + n_R : 2 * n_T + n_R]) if has_mom else None
@@ -441,6 +446,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
                 phT, vT = self.step_T.apply(phT, gT, vT, k)
                 phR, vR = self.step_R.apply(phR, gR, vR, k)
 
+            # Truncated BPTT: cut the graph after the first ``detach_before`` steps.
             if self.detach_before > 0 and k == self.detach_before - 1:
                 phT = [p.detach() for p in phT]
                 phR = [p.detach() for p in phR]
@@ -455,6 +461,7 @@ class JointSIMUnrolledSCA(DualUnrolledSCA):
                     _phR_cat = torch.cat(phR, dim=1)
 
                     def _nmse_fn(_phT_cat_, _phR_cat_):
+                        """NMSE of the cascade built from concatenated TX/RX phases (checkpointable)."""
                         _phT_ = list(_phT_cat_.split(self.sizes_T, dim=1))
                         _phR_ = list(_phR_cat_.split(self.sizes_R, dim=1))
                         return _nmse(self._cascade(H, _phT_, _phR_), A, A2, self.eps)

@@ -45,6 +45,7 @@ def cascade_transmit(Z: torch.Tensor, beta: torch.Tensor, snr_db: float | None) 
     sigma = awgn_sigma(snr_db)
 
     def transmit(x: torch.Tensor) -> torch.Tensor:
+        """Apply the cascade to ``x`` ``(D_tx/2, B)`` and add AWGN (if any)."""
         y = beta * (Z @ x.to(Z.dtype))
         if sigma is not None:
             y = y + awgn(sigma, y.shape, device=y.device)
@@ -68,6 +69,7 @@ def dual_transmit(
     sigma = awgn_sigma(snr_db)
 
     def transmit(x: torch.Tensor) -> torch.Tensor:
+        """Apply TX SIM → channel → RX SIM to ``x`` ``(D_tx/2, B)`` and add AWGN (if any)."""
         y = beta * (G_R @ (H_mimo @ (G_T @ x.to(G_T.dtype))))
         if sigma is not None:
             y = y + awgn(sigma, y.shape, device=y.device)
@@ -93,6 +95,7 @@ def equalized_transmit(
     sigma = awgn_sigma(snr_db)
 
     def transmit(x: torch.Tensor) -> torch.Tensor:
+        """Apply TX SIM → channel, add AWGN (if any), then the digital equalizer (if any)."""
         y = H_mimo @ (beta * G_T @ x.to(G_T.dtype))
         if sigma is not None:
             y = y + awgn(sigma, y.shape, device=y.device)

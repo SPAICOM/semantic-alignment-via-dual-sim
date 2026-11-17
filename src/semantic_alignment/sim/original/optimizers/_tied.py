@@ -30,6 +30,7 @@ class TiedBuffersModule(nn.Module):
             self.register_buffer(f"{prefix}_{i}", tensors[id(W)])
 
     def _apply(self, fn, recurse=True):
+        """Convert each distinct buffer once, re-tie aliases, then defer to ``nn.Module``."""
         converted: dict[int, torch.Tensor] = {}
         for name, buf in self._buffers.items():
             if buf is not None:

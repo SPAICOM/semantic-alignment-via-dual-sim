@@ -117,6 +117,13 @@ def _setup(cfg: DictConfig) -> dict:
 
 @hydra.main(version_base=None, config_path="../config", config_name="config_unrolled_joint")
 def main(cfg: DictConfig) -> None:
+    """Train and evaluate the unrolled joint Dual-SIM on classification.
+
+    Parameters
+    ----------
+    cfg : DictConfig
+        Hydra config (``config_unrolled_joint``).
+    """
     gpu = cfg.training.get("gpu", None)
     if gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)

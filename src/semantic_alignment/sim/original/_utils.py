@@ -154,6 +154,7 @@ def save_params(path: Path, params: dict) -> None:
     """
 
     def _cpu(v):
+        """Recursively detach tensors and move them to CPU (dicts are traversed)."""
         if isinstance(v, torch.Tensor):
             return v.detach().cpu()
         if isinstance(v, dict):

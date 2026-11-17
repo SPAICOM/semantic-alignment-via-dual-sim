@@ -18,7 +18,6 @@ from pathlib import Path
 
 import polars as pl
 import torch
-import wandb
 from lightning import Trainer
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import WandbLogger
@@ -26,6 +25,7 @@ from omegaconf import DictConfig
 from warm_start_cache import _ensure_ws_accuracy
 from warm_start_cache import _run_warm_start_cached as _ws_cached
 
+import wandb
 from semantic_alignment.data import HChannelDataModule
 from semantic_alignment.evaluation.tasks import Task
 from semantic_alignment.sim.original._utils import ch_dims, tipology_tag

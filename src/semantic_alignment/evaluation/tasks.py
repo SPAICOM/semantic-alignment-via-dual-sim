@@ -162,6 +162,8 @@ class ClassificationTask(Task):
         no_mismatch_neural: float | None = None,
         original_neural: float | None = None,
     ) -> None:
+        # Pilot whitening statistics are kept as one tuple so they can be splatted
+        # into the shared inference helpers.
         self.test_loader = test_loader
         self.whitening = (L_in, mu_in, L_out, mu_out)
         self.clf = clf
@@ -174,6 +176,7 @@ class ClassificationTask(Task):
         self._cascade_inputs: tuple[torch.Tensor, torch.Tensor] | None = None
 
     def _accuracy(self, transmit: Transmit, clf: torch.Tensor | nn.Module) -> float:
+        """Test-set accuracy of ``clf`` on the output of ``transmit``."""
         return transmit_accuracy(transmit, self.test_loader, *self.whitening, clf, self.device)
 
     def evaluate(self, transmit: Transmit) -> dict:
@@ -183,6 +186,7 @@ class ClassificationTask(Task):
         return {"probe": probe, "neural": neural}
 
     def columns(self, sim: dict) -> dict:
+        """Result-row columns: baselines plus the SIM accuracies (neural reported in %)."""
         return {
             "no_mismatch_probe": self.no_mismatch_probe,
             "no_mismatch_neural": self.no_mismatch_neural,
@@ -193,6 +197,7 @@ class ClassificationTask(Task):
         }
 
     def curve_columns(self, curve: list[dict] | None) -> dict:
+        """Per-step accuracy curves (``None`` columns if no curve was recorded)."""
         if curve is None:
             return {"sim_accuracy_probe_curve": None, "sim_accuracy_neural_curve": None}
         return {
@@ -225,10 +230,13 @@ class ClassificationTask(Task):
         Z_test, labels = self.precompute_cascade_inputs()
         _, _, L_out, mu_out = self.whitening
         B = Z_eff.shape[0]
+        # Batched link: (B, D_rx/2, D_tx/2) @ (D_tx/2, N) -> (B, D_rx/2, N), scaled by β.
         z_aw = beta[:, None, None] * (Z_eff @ Z_test)
+        # De-whiten back to the RX embedding space, then unpack complex -> real, (B, N, D_rx).
         z_a = L_out @ z_aw + mu_out
         z_real = unpack_complex(z_a, z_a.device).transpose(-1, -2).float()
 
+        # Linear probe: argmax over class logits, accuracy per cascade.
         W = self.clf.to(z_real.device)
         labels = labels.to(z_real.device)
         preds = (z_real @ W).argmax(dim=-1)
@@ -237,6 +245,7 @@ class ClassificationTask(Task):
             "neural": None,
         }
         if self.clf_neural is not None:
+            # The neural classifier may live on another device; fold the cascade axis into the batch.
             dev = next(self.clf_neural.parameters()).device
             N_test = z_real.shape[1]
             z_flat = z_real.reshape(B * N_test, -1).to(dev)
@@ -245,6 +254,7 @@ class ClassificationTask(Task):
         return out
 
     def evaluate_cascade(self, Z_eff: torch.Tensor, beta: torch.Tensor) -> dict:
+        """Probe / neural accuracy of a single noiseless link ``β Z_eff``."""
         Z_test, labels = self.precompute_cascade_inputs()
         _, _, L_out, mu_out = self.whitening
         probe, neural = cascade_accuracies(
@@ -253,6 +263,7 @@ class ClassificationTask(Task):
         return {"probe": probe, "neural": neural}
 
     def summary(self, sim: dict) -> str:
+        """One-line console summary of baselines and SIM accuracy."""
         return (
             f"nm_linear={self.no_mismatch_probe * 100:.2f}%"
             f"{neural_str('nm_neural', self.no_mismatch_neural)}"
@@ -346,6 +357,7 @@ class ReconstructionTask(Task):
         self._cascade_inputs: tuple[torch.Tensor, torch.Tensor] | None = None
 
     def _score(self, transmit: Transmit, num_preview: int) -> dict:
+        """MSE / PSNR of ``transmit`` on the test split, with ``num_preview`` sample images."""
         mse, psnr_db, preview = evaluate_reconstruction(
             transmit,
             self.z_tx_test,
@@ -359,12 +371,15 @@ class ReconstructionTask(Task):
         return {"mse": mse, "psnr": psnr_db, "preview": preview}
 
     def evaluate(self, transmit: Transmit) -> dict:
+        """Final evaluation: metrics plus preview reconstructions for the PNG grid."""
         return self._score(transmit, self.num_preview)
 
     def evaluate_step(self, transmit: Transmit) -> dict:
+        """Per-step evaluation for training curves: metrics only, no previews."""
         return self._score(transmit, 0)
 
     def columns(self, sim: dict) -> dict:
+        """Result-row columns: baselines (MSE / PSNR) plus the SIM metrics."""
         return {
             "reg_tag": self.reg_tag,
             "no_mismatch_mse": self.no_mismatch_mse,
@@ -376,6 +391,7 @@ class ReconstructionTask(Task):
         }
 
     def curve_columns(self, curve: list[dict] | None) -> dict:
+        """Per-step PSNR / MSE curves (``None`` columns if no curve was recorded)."""
         if curve is None:
             return {"sim_psnr_curve": None, "sim_mse_curve": None}
         return {
@@ -384,6 +400,7 @@ class ReconstructionTask(Task):
         }
 
     def summary(self, sim: dict) -> str:
+        """One-line console summary of baselines and SIM PSNR."""
         return (
             f"no_mismatch={self.no_mismatch_psnr:.2f}dB"
             f" | original={self.original_psnr:.2f}dB"
@@ -415,6 +432,7 @@ class ReconstructionTask(Task):
             B, n, _ = z_real.shape
             flat = z_real.reshape(B * n, -1)
             se = torch.empty(B * n, device=dev)
+            # Chunked decode bounds peak memory; ``idx % n`` maps a flat index back to its image.
             for i in range(0, B * n, self.batch_size):
                 idx = torch.arange(i, min(i + self.batch_size, B * n), device=dev)
                 recon = self.rx_model.decode(flat[idx]).float()
@@ -423,6 +441,7 @@ class ReconstructionTask(Task):
         return {"psnr": [psnr_from_mse(m) for m in mse], "mse": mse}
 
     def cascade_meta(self) -> dict:
+        """Add ``reg_tag`` and the number of images actually scored per cascade."""
         n = self.cascade_images or len(self.z_tx_test)
         return {"reg_tag": self.reg_tag, "n_eval_images": min(n, len(self.z_tx_test))}
 

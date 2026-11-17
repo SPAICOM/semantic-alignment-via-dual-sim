@@ -77,6 +77,7 @@ def _make_eval_fn(task: "Task", store: dict[str, list]) -> Callable:
     """Return a callable ``fn(Z_eff, beta)`` that appends ``task``'s metrics to *store*."""
 
     def fn(Z_eff: torch.Tensor, beta: torch.Tensor) -> None:
+        """Score ``β Z_eff`` and append each metric to its list in ``store``."""
         for key, val in task.evaluate_cascade(Z_eff, beta).items():
             store.setdefault(key, []).append(val)
 
@@ -405,6 +406,7 @@ def _unrolled_eval_curve_joint(
     n_T = len(unrolled.sizes_T)
 
     def step_cb(k: int, phases: list[torch.Tensor]) -> None:
+        """Rebuild ``G_R H G_T`` from the step-``k`` phases and score it with the optimal β."""
         with torch.no_grad():
             dev = phases[0].device
             phases_T = phases[:n_T]
@@ -459,6 +461,7 @@ def _unrolled_eval_curve_mono(
     W_list = unrolled._get_W()
 
     def step_cb(k: int, phases: list[torch.Tensor]) -> None:
+        """Rebuild the mono-SIM cascade (with ``H`` if constructive) at step ``k`` and score it."""
         with torch.no_grad():
             dev = phases[0].device
             G = _build_cascade_TX(W_list, phases).squeeze(0)
@@ -578,6 +581,7 @@ def _unrolled_eval_curve_disjoint_sym(
     sim_rx = model.sim_rx
 
     def _step_cb(k: int, tx_phases: list[torch.Tensor], rx_phases: list[torch.Tensor]) -> None:
+        """Rebuild ``G_R H G_T`` from the step-``k`` TX/RX phases and score it with the optimal β."""
         with torch.no_grad():
             G_T = sim_tx._cascade(tx_phases).squeeze(0)
             G_R = sim_rx._cascade(rx_phases).squeeze(0)
@@ -608,6 +612,7 @@ def _unrolled_eval_curve_disjoint_asym(
     sim_rx = model.sim_rx
 
     def _step_cb(k: int, tx_phases: list[torch.Tensor], rx_phases: list[torch.Tensor]) -> None:
+        """Rebuild ``G_R H G_T`` from the step-``k`` TX/RX phases and score it with the optimal β."""
         with torch.no_grad():
             G_T = sim_tx._cascade(tx_phases).squeeze(0)
             G_R = sim_rx._cascade(rx_phases).squeeze(0)
@@ -944,6 +949,7 @@ class UnrolledLightning(lg.LightningModule):
         B = H_batch.shape[0]
 
         def _eval_batch(k: int, phases: list[torch.Tensor]) -> None:
+            """Step callback: rebuild the effective cascades from ``phases`` and record metrics."""
             if self.mode == "joint":
                 n_T = len(self.unrolled_model.sizes_T)
                 Z_eff = self.unrolled_model._cascade(H_batch, phases[:n_T], phases[n_T:])
@@ -987,6 +993,7 @@ class UnrolledLightning(lg.LightningModule):
         sim_rx = self.unrolled_model.sim_rx
 
         def _step_cb(k: int, tx_phases: list[torch.Tensor], rx_phases: list[torch.Tensor]) -> None:
+            """Step callback: record metrics of ``G_R H G_T`` for the whole batch."""
             with torch.no_grad():
                 G_T = sim_tx._cascade(tx_phases)
                 G_R = sim_rx._cascade(rx_phases)
@@ -1016,6 +1023,7 @@ class UnrolledLightning(lg.LightningModule):
         sim_rx = self.unrolled_model.sim_rx
 
         def _step_cb(k: int, tx_phases: list[torch.Tensor], rx_phases: list[torch.Tensor]) -> None:
+            """Step callback: record metrics of ``G_R H G_T`` for the whole batch."""
             with torch.no_grad():
                 G_T = sim_tx._cascade(tx_phases)
                 G_R = sim_rx._cascade(rx_phases)
@@ -1091,6 +1099,7 @@ class CompareUnrolledCallback(lg.Callback):
                 B = H_batch.shape[0]
 
                 def _step_cb(k: int, phases: list[torch.Tensor], _H=H_batch) -> None:
+                    """Collect final-step metrics only; ``_H`` pins this batch's channels."""
                     if k != K_last:
                         return
                     Z_eff = pl_module.unrolled_model._cascade(_H, phases[:n_T], phases[n_T:])
